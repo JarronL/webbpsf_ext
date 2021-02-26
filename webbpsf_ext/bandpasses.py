@@ -1,8 +1,36 @@
-from .utils import *
+# Import libraries
+import numpy as np
+import matplotlib
+import matplotlib.pyplot as plt
+
 from astropy.io import fits, ascii
+from astropy.table import Table
+import astropy.units as u
+
+from .utils import conf, webbpsf, poppy, S
 
 import logging
 _log = logging.getLogger('webbpsf_ext')
+
+
+def read_filter(self, *args, **kwargs):
+    if self.inst_name=='MIRI':
+        return miri_filter(*args, **kwargs)
+    elif self.inst_name=='NIRCam':
+        return nircam_filter(*args, **kwargs)
+
+    print(self.inst_name)
+
+class Alpha(object):
+    def __init__(self):
+        self.inst_name = "MIRI"
+    get_bandpass = read_filter
+
+class Bravo(object):
+    def __init__(self):
+        self.inst_name = "NIRCam"
+    get_bandpass = read_filter
+
 
 def bp_igood(bp, min_trans=0.001, fext=0.05):
     """
@@ -26,7 +54,7 @@ def bp_igood(bp, min_trans=0.001, fext=0.05):
     ind = ((bp.wave >= w1) & (bp.wave <= w2))
     return ind
 
-def miri_filter(filter):
+def miri_filter(filter, **kwargs):
     
     """
     No need to include pupil for the 
@@ -431,7 +459,7 @@ def nircam_filter(filter, pupil=None, mask=None, module=None, ND_acq=False,
     return bp
 
 def nircam_grism_res(pupil='GRISM', module='A', m=1):
-    """Grism resolution
+    """NIRCam Grism resolution
 
     Based on the pupil input and module, return the spectral
     dispersion and resolution as a tuple (res, dw).
@@ -472,3 +500,53 @@ def nircam_grism_res(pupil='GRISM', module='A', m=1):
     dw = 1. / res
 
     return (res, dw)
+
+def nircam_grism_wref(pupil='GRISM', module='A'):
+    """NIRCam Grism undeviated wavelength"""
+
+    # Option for GRISMR/GRISMC
+    if 'GRISMR' in pupil:
+        pupil = 'GRISM0'
+    elif 'GRISMC' in pupil:
+        pupil = 'GRISM90'
+
+    # Mean spectral dispersion in number of pixels per um
+    if ('GRISM90' in pupil) and (module == 'A'):
+        wref = 3.978
+    elif ('GRISM0' in pupil)  and (module == 'A'):
+        wref = 3.937
+    elif ('GRISM90' in pupil) and (module == 'B'):
+        wref = 3.923
+    elif ('GRISM0' in pupil)  and (module == 'B'):
+        wref = 3.960
+    else:
+        wref = 3.95
+
+    return wref
+
+
+def niriss_grism_res(m=1):
+    """Grism resolution
+
+    Based on the pupil input and module, return the spectral
+    dispersion and resolution as a tuple (res, dw).
+
+    Parameters
+    ----------
+    m : int
+        Spectral order (1 or 2).
+    """
+
+    # Spectral resolution in um/pixel
+    dw = 0.00478
+    res = 1. / dw
+
+    if m==2:
+        res *= 2
+        dw *= 0.5
+
+    return (res, dw)
+
+def niriss_grism_wref():
+    """NIRISS Grism undeviated wavelength (um)"""
+    return 1.0

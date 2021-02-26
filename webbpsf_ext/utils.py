@@ -4,6 +4,9 @@ import matplotlib
 import matplotlib.pyplot as plt
 
 import os, sys
+import six
+
+import webbpsf, poppy, pysiaf
 
 on_rtd = os.environ.get('READTHEDOCS') == 'True'
 # Preferred matplotlib settings
@@ -26,18 +29,14 @@ from .logging_utils import setup_logging
 import logging
 _log = logging.getLogger('webbpsf_ext')
 
-try:
-    import webbpsf
-except ImportError:
-    raise ImportError('WebbPSF is not installed. pyNRC depends on its inclusion.')
-import poppy
-
 import pysynphot as S
 # Extend default wavelength range to 5.6 um
 S.refs.set_default_waveset(minwave=500, maxwave=56000, num=10000.0, delta=None, log=False)
 # JWST 25m^2 collecting area
 # Flux loss from masks and occulters are taken into account in WebbPSF
-S.refs.setref(area = 25.4e4) # cm^2
+# S.refs.setref(area = 25.4e4) # cm^2
+S.refs.setref(area = 25.78e4) # cm^2 according to jwst_pupil_RevW_npix1024.fits.gz
+
 
 # The following won't work on readthedocs compilation
 if not on_rtd:
@@ -51,14 +50,14 @@ if not on_rtd:
     pixscale_LW = nc_temp._pixelscale_long
     del nc_temp
 
-    _jbt_exists = True
-    try:
-        from jwst_backgrounds import jbt
-    except ImportError:
-        _log.info("  jwst_backgrounds is not installed and will not be used for bg estimates.")
-        _jbt_exists = False
+    # _jbt_exists = True
+    # try:
+    #     from jwst_backgrounds import jbt
+    # except ImportError:
+    #     _log.info("  jwst_backgrounds is not installed and will not be used for bg estimates.")
+    #     _jbt_exists = False
 
 # Progress bar
 from tqdm.auto import trange, tqdm
 
-__epsilon = np.finfo(float).eps
+
