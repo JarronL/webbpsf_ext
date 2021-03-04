@@ -454,7 +454,7 @@ def make_coeff_resid_grid(xin, yin, cf_resid, xgrid, ygrid):
     for i in range(sh[1]):
         cf_resid_grid[:,:,i,:,:] = griddata((xin, yin), cf_resid[:,i,:,:], (xnew, ynew), method='cubic')
 
-    return (cf_resid_grid, xgrid, ygrid)
+    return cf_resid_grid
 
 
 def field_coeff_func(v2grid, v3grid, cf_fields, v2_new, v3_new):
