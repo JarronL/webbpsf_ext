@@ -37,6 +37,8 @@ S.refs.set_default_waveset(minwave=500, maxwave=56000, num=10000.0, delta=None, 
 # S.refs.setref(area = 25.4e4) # cm^2
 S.refs.setref(area = 25.78e4) # cm^2 according to jwst_pupil_RevW_npix1024.fits.gz
 
+# Progress bar
+from tqdm.auto import trange, tqdm
 
 # The following won't work on readthedocs compilation
 if not on_rtd:
@@ -56,8 +58,4 @@ if not on_rtd:
     # except ImportError:
     #     _log.info("  jwst_backgrounds is not installed and will not be used for bg estimates.")
     #     _jbt_exists = False
-
-# Progress bar
-from tqdm.auto import trange, tqdm
-
 
