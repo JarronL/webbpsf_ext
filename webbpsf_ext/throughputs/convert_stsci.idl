@@ -1,0 +1,13 @@
+compile_opt idl2
+
+files = file_search('*.txt', count=nfiles)
+for i=0, nfiles-1 do begin &$
+	readcol, files[i], w, t, format='(D,D)', /silent &$
+	; Convert w to Angstrom
+	w *= 1d4 &$
+	
+	openw, lun, files[i], /get_lun &$
+	printf, lun, '###   Wavelength (A)        Transmission' &$
+	printf, lun, transpose([[w], [t]]), format = '(2E20.10)' &$
+	free_lun, lun &$
+endfor

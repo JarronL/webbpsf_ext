@@ -1,0 +1,131 @@
+Notes on filter transmission throughput curves created 5 Feb 2016,
+by Bryan Hilbert. 
+
+Note that all of the actual calculations were done in
+/grp/jwst/wit/nircam/hilbert/filter_throughputs/nircam_system_throughputs/final_version/no_nans/ and then the outputs were moved into the appropriate directories
+under /grp/jwst/wit/nircam/reference_files/SpectralResponse_2015-Final/Filters_ASCII-Tables/nircam_throughputs/
+
+
+Information sources:
+
+filter throughputs - excel spreadsheets from Marcia, (i.e. F356W_FM.xlsx)
+QE - polynomial coefficients contained within the filter spreadsheets
+DBS - initial curves contained within excel spreadsheets. Modifications described below.
+NIRCam optics - from file NIRCam_optics_transmission_29Oct2015.csv received from Marcia via Brian Brooks on Dec 1 2015.
+           The NIRCam optics file includes the effects of:  collimator, triplet, mirrors, particulates, and non-volatile residue (NVR).
+Scatter - band-averaged values obtained from Christopher Wilmer ia John Stansberry, in file nircam_optics_filter_average.dat, which is in the optics subdirectory.
+OTE - official OTE throughput curve delivered to the project, referenced by Remi and Marshall
+
+
+
+
+
+Data for the filter transmissions were received from Marcia in the form
+of an excel file for each filter. Wrapped up in the excel file were
+values for the filter-only throughputs, as well as filter x DBS x QE.
+
+To produce the throughput curves, the following recipe was used:
+
+1. Extract the filter-only throughput data from the excel spreadsheets.
+This was done using filters_excel2ascii.py. To run on all the filters
+at once, use create_txt_files.csh.
+
+This creates the files located in:
+/grp/jwst/wit/nircam/reference_files/SpectralResponse_2015-Final/Filters_ASCII-Tables/filter_only_original_unsorted/
+
+
+2. DBS adjustment. In the SW and LW narrow band spreadsheets, the DBS 
+throughput curve for modA had a large error, where transmission+reflection
+at wavelengths greater than 2.30 microns summed to >1. Marcia says this was
+most likely a transcription error made by the filter manufacturer. In order
+to fix this, we used the following process:
+
+Calculate 1-reflection-transmission for modB, whose curves are all correct. 
+This value is the amount of absorption in the DBS. We assume that absorption 
+is the same in modA and modB. Then in modA, for wavelengths from 2.27 microns 
+onward, we calculate 1-transmission-absorption, which is the reflection values
+we are looking for. These calculated values are then inserted into the modA
+DBS curve.
+
+DBS data are in /grp/jwst/wit/nircam/reference_files/SpectralResponse_2015-Final/DBS_QE_Optics/
+
+
+Smoothed, low resolution versions of the DBS curves. These are NOT used for
+calculating filter throughput curves.
+DBS_LW_ModA_LowResSmoothed.txt
+DBS_LW_ModB_LowResSmoothed.txt
+DBS_SW_ModA_LowResSmoothed.txt
+DBS_SW_ModB_LowResSmoothed.txt
+
+The high-resolution versions which are used for the filter calculations are:
+DBS_LW_ModA_highres.txt
+DBS_LW_ModB_highres.txt
+DBS_SW_modA_highres_1_minus_trans_plus_absorb.txt
+DBS_SW_ModB_highres.txt
+
+Note that DBS_SW_modA_highres.txt is present in the directory, and contains
+the transcription error.
+
+3. Optics curves - in /grp/jwst/wit/nircam/reference_files/SpectralResponse_2015-Final/DBS_QE_Optics/
+nircam_optics.dat - filter-averaged throughput values for the optics. The
+                    only values in here which are used in the filter throughput
+                    calculations are those for 'scatter', because we don't 
+                    have a high-resolution curve for these.
+
+NIRCam_optics_transmission_29Oct2015.csv - contains the high-resolution 
+ optics transmission information used to calculate filter transmissions.
+
+
+4. QE - Coefficients used to derive a QE vs wavelength curve are given in
+Marcia's filter throughput excel spreadsheets. These coefficiets were copied
+into the python script used to calculate filter throughputs. In addition,
+Marcia says that her coefficients are good only out to 2.38 microns. At this
+point the QE of the detector goes to zero. To avoid a step function, we 
+(John Stansberry's idea) inserted an exponential into the QE curve beginning
+at 2.38 microns. Again, these coefficients are present in the python script.
+
+
+Steps 5 - 7 are wrapped up in make_all.csh, which shows the calling sequence 
+for the three python scripts
+
+5. Using the data created in steps 1-4, create the system throughput for each 
+ filter in each of modA and modB. This is done using 
+ nircam_full_system_throughput.py. The outputs from this script include 
+ tabulated (and sorted into increasing wavelength) throughput tables, for:
+
+ filters only - stored in: /grp/jwst/wit/nircam/reference_files/SpectralResponse_2015-Final/Filters_ASCII-Tables/nircam_throughputs/mod*/filters_only/
+   as *modA_sorted.txt and *modB_sorted.txt
+
+ filters + nircam optics + QE + DBS, stored in:
+ /grp/jwst/wit/nircam/reference_files/SpectralResponse_2015-Final/Filters_ASCII-Tables/nircam_throughputs/mod*/nrc_instrument_only/
+
+  *moda_sorted.txt
+  *modb_sorted.txt
+
+ filters + nircam optics + QE + DBS + OTE, stored in:
+  /grp/jwst/wit/nircam/reference_files/SpectralResponse_2015-Final/Filters_ASCII-Tables/nircam_throughputs/mod*/nrc_plus_ote/
+
+  *moda_sorted.txt
+  *modb_sorted.txt
+
+6. For the ETC, we want throughput tables that are the mean of the mod A and
+   mod B curves. Create those means using mod_ab_means.py (which is just a 
+   wrapper for mean_across_modules.py).
+
+   This creates module-mean versions of the text files described in step 5.
+   *filteronly_ModAB_mean.txt
+   *NRConly_ModAB_mean.txt
+   *NRC_and_OTE_ModAB_mean.txt
+   which are all stored in the directories given in step 5.
+
+7. Produce the colorful, multi-filter plot of throughputs for use on webpages,
+   fliers, etc.
+   This is done with nircam_full_system_throughput.py
+   We have created a version of this plot using the module-mean files for all 
+   three types of throughput files (filter only, filter+optics, 
+   filter+optics+OTE). These files are stored in the appropriate subdirectory under
+   /grp//jwst/wit/nircam/reference_files/SpectralResponse_2015-Final/Filters_ASCII-Tables/nircam_throughputs/modAB_mean/
+   
+   filter_only_throughput_plot_for_filter_only_meanmod.list.pdf
+   filter_and_nircam_optics_throughput_plot_for_nrc_only_meanmod.list.pdf
+   nircam_plus_ote_system_throughput_plot_for_nrc_and_ote_meanmod.list.pdf

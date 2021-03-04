@@ -158,8 +158,9 @@ def nircam_filter(filter, pupil=None, mask=None, module=None, ND_acq=False,
     :mod:`pysynphot.obsbandpass`
         A Pysynphot bandpass object.
     """
-
-    indir = conf.WEBBPSF_EXT_PATH + 'NIRCam/'
+    # indir = conf.WEBBPSF_EXT_PATH + 'NIRCam/'
+    from . import __path__
+    indir = __path__[0] + '/'
 
     if module is None: 
         module = 'A'
