@@ -290,6 +290,7 @@ def fshift(image, delx=0, dely=0, pad=False, cval=0.0):
     else:
         ndim = len(image.shape)
         raise ValueError(f'Input image can only have 1 or 2 dimensions. Found {ndim} dimensions.')
+
                           
 def fourier_imshift(image, xshift, yshift, pad=False, cval=0.0):
     """Fourier shift image
@@ -390,6 +391,10 @@ def rotate_offset(data, angle, cen=None, cval=0.0, order=1,
 
     """
 
+    # Return input data if angle is set to None 0
+    if (angle is None) or (angle==0):
+        return data
+
     ndim = len(data.shape)
     if ndim==2:
         ny, nx = data.shape
@@ -453,3 +458,168 @@ def rotate_offset(data, angle, cen=None, cval=0.0, order=1,
         images_fin = np.array(images_fin)
     
         return images_fin.squeeze()
+
+def frebin(image, dimensions=None, scale=None, total=True):
+    """Fractional rebin
+    
+    Python port from the IDL frebin.pro
+    Shrink or expand the size of a 1D or 2D array by an arbitary amount 
+    using bilinear interpolation. Conserves flux by ensuring that each 
+    input pixel is equally represented in the output array.
+
+    Parameters
+    ----------
+    image : ndarray
+        Input image, 1-d or 2-d ndarray.
+    dimensions : tuple or None
+        Desired size of output array (take priority over scale).
+    scale : tuple or None
+        Factor to scale output array size. A scale of 2 will increase
+        the number of pixels by 2 (ie., finer pixel scale).
+    total : bool
+        Conserves the surface flux. If True, the output pixels 
+        will be the sum of pixels within the appropriate box of 
+        the input image. Otherwise, they will be the average.
+    
+    Returns
+    -------
+    ndarray
+        The binned ndarray
+    """
+
+    if dimensions is not None:
+        if isinstance(dimensions, float):
+            dimensions = [int(dimensions)] * len(image.shape)
+        elif isinstance(dimensions, int):
+            dimensions = [dimensions] * len(image.shape)
+        elif len(dimensions) != len(image.shape):
+            raise RuntimeError("The number of input dimensions don't match the image shape.")
+    elif scale is not None:
+        if isinstance(scale, float) or isinstance(scale, int):
+            dimensions = list(map(int, map(lambda x: x+0.5, map(lambda x: x*scale, image.shape))))
+        elif len(scale) != len(image.shape):
+            raise RuntimeError("The number of input dimensions don't match the image shape.")
+        else:
+            dimensions = [scale[i]*image.shape[i] for i in range(len(scale))]
+    else:
+        raise RuntimeError('Incorrect parameters to rebin.\n\frebin(image, dimensions=(x,y))\n\frebin(image, scale=a')
+    #print(dimensions)
+
+
+    shape = image.shape
+    if len(shape)==1:
+        nlout = 1
+        nsout = dimensions[0]
+        nsout = int(nsout+0.5)
+        dimensions = [nsout]
+    elif len(shape)==2:
+        nlout, nsout = dimensions
+        nlout = int(nlout+0.5)
+        nsout = int(nsout+0.5)
+        dimensions = [nlout, nsout]
+    if len(shape) > 2:
+        raise ValueError('Input image can only have 1 or 2 dimensions. Found {} dimensions.'.format(len(shape)))
+    
+
+    if nlout != 1:
+        nl = shape[0]
+        ns = shape[1]
+    else:
+        nl = nlout
+        ns = shape[0]
+
+    sbox = ns / float(nsout)
+    lbox = nl / float(nlout)
+    #print(sbox,lbox)
+
+    # Contract by integer amount
+    if (sbox.is_integer()) and (lbox.is_integer()):
+        image = image.reshape((nl,ns))
+        result = krebin(image, (nlout,nsout))
+        if not total: result /= (sbox*lbox)
+        if nl == 1:
+            return result[0,:]
+        else:
+            return result
+
+    ns1 = ns - 1
+    nl1 = nl - 1
+
+    if nl == 1:
+        #1D case
+        _log.debug("Rebinning to Dimension: %s" % nsout)
+        result = np.zeros(nsout)
+        for i in range(nsout):
+            rstart = i * sbox
+            istart = int(rstart)
+            rstop = rstart + sbox
+
+            if int(rstop) < ns1:
+                istop = int(rstop)
+            else:
+                istop = ns1
+
+            frac1 = float(rstart) - istart
+            frac2 = 1.0 - (rstop - istop)
+
+            #add pixel values from istart to istop and subtract fraction pixel
+            #from istart to rstart and fraction pixel from rstop to istop
+            result[i] = np.sum(image[istart:istop + 1]) - frac1 * image[istart] - frac2 * image[istop]
+
+        if total:
+            return result
+        else:
+            return result / (float(sbox) * lbox)
+    else:
+        _log.debug("Rebinning to Dimensions: %s, %s" % tuple(dimensions))
+        #2D case, first bin in second dimension
+        temp = np.zeros((nlout, ns))
+        result = np.zeros((nsout, nlout))
+
+        #first lines
+        for i in range(nlout):
+            rstart = i * lbox
+            istart = int(rstart)
+            rstop = rstart + lbox
+
+            if int(rstop) < nl1:
+                istop = int(rstop)
+            else:
+                istop = nl1
+
+            frac1 = float(rstart) - istart
+            frac2 = 1.0 - (rstop - istop)
+
+            if istart == istop:
+                temp[i, :] = (1.0 - frac1 - frac2) * image[istart, :]
+            else:
+                temp[i, :] = np.sum(image[istart:istop + 1, :], axis=0) -\
+                             frac1 * image[istart, :] - frac2 * image[istop, :]
+
+        temp = np.transpose(temp)
+
+        #then samples
+        for i in range(nsout):
+            rstart = i * sbox
+            istart = int(rstart)
+            rstop = rstart + sbox
+
+            if int(rstop) < ns1:
+                istop = int(rstop)
+            else:
+                istop = ns1
+
+            frac1 = float(rstart) - istart
+            frac2 = 1.0 - (rstop - istop)
+
+            if istart == istop:
+                result[i, :] = (1. - frac1 - frac2) * temp[istart, :]
+            else:
+                result[i, :] = np.sum(temp[istart:istop + 1, :], axis=0) -\
+                               frac1 * temp[istart, :] - frac2 * temp[istop, :]
+
+        if total:
+            return np.transpose(result)
+        else:
+            return np.transpose(result) / (sbox * lbox)
+

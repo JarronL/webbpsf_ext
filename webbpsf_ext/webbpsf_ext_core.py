@@ -14,22 +14,32 @@ import astropy.units as u
 
 from copy import deepcopy
 
-from .utils import conf, webbpsf, poppy, setup_logging
+# Bandpasses, PSFs, and OPDs
 from .bandpasses import miri_filter, nircam_filter
-from .opds import OPDFile_to_HDUList
 from .psfs import nproc_use, _wrap_coeff_for_mp, gen_image_from_coeff
 from .psfs import make_coeff_resid_grid, field_coeff_func
-from .maths import jl_poly, jl_poly_fit
-from .image_manip import pad_or_cut_to_size
-from .coords import NIRCam_V2V3_limits
-from .version import __version__
+from .opds import OPDFile_to_HDUList
 
+# Coordinates and image manipulation
+from .coords import NIRCam_V2V3_limits, xy_rot, gen_sgd_offsets
+from .image_manip import pad_or_cut_to_size, rotate_offset
+
+# Polynomial fitting routines
+from .maths import jl_poly, jl_poly_fit
+from numpy.polynomial import legendre
+# from scipy.interpolate import griddata, RegularGridInterpolator, interp1d
+
+# Logging info
+from .utils import conf, setup_logging
 import logging
 _log = logging.getLogger('webbpsf_ext')
 
-# from scipy.interpolate import griddata, RegularGridInterpolator, interp1d
-from numpy.polynomial import legendre
+from .version import __version__
 
+
+
+# WebbPSF and Poppy stuff
+from .utils import webbpsf, poppy
 from webbpsf import MIRI as webbpsf_MIRI
 from webbpsf import NIRCam as webbpsf_NIRCam
 from webbpsf.opds import OTE_Linear_Model_WSS
@@ -65,8 +75,8 @@ class NIRCam_ext(webbpsf_NIRCam):
     autogen : bool
         Option to automatically generate all PSF coefficients upon
         initialization. Otherwise, these need to be generated manually
-        with `gen_psf_coeff`, gen_wfedrift_coeff`, and `gen_wfefield_coeff`.
-        Default: False.
+        with `gen_psf_coeff`, gen_wfedrift_coeff`, `gen_wfefield_coeff`,
+        and `gen_wfemask_coeff`. Default: False.
     """
 
     def __init__(self, filter=None, pupil_mask=None, image_mask=None, 
@@ -104,17 +114,7 @@ class NIRCam_ext(webbpsf_NIRCam):
     @property
     def save_dir(self):
         """Coefficient save directory"""
-        # Default name
-        if self._save_dir is None:
-            # Name to save array of oversampled coefficients
-            inst_name = self.name
-            save_dir = conf.WEBBPSF_EXT_PATH + f'{inst_name}/psf_coeffs/'
-            # Create directory if it doesn't already exist
-            if not os.path.isdir(save_dir):
-               os.makedirs(save_dir)
-        else:
-            save_dir = self._save_dir
-        return save_dir
+        return _gen_save_dir(self)
     @save_dir.setter
     def save_dir(self, value):
         self._save_dir = value
@@ -276,6 +276,9 @@ class NIRCam_ext(webbpsf_NIRCam):
     def _addAdditionalOptics(self, optsys, oversample=2):
         """
         Add coronagraphic optics for NIRCam
+
+        Note that self.options['bar_offset'] moves the mask in the opposite
+        direction as self.options['mask_shift_x']
         """
         # Allow arbitrary offsets of the focal plane masks with respect to the pixel grid origin;
         # In most use cases it's better to offset the star away from the mask instead, using
@@ -294,10 +297,40 @@ class NIRCam_ext(webbpsf_NIRCam):
 
         return super(NIRCam_ext, self)._addAdditionalOptics(optsys, oversample=oversample)
 
+    def get_bar_offset(self):
+        """
+        Obtain the value of the bar offset that would be passed through to
+        PSF calculations for bar/wedge coronagraphic masks.
+        """
+
+        from webbpsf.optics import NIRCam_BandLimitedCoron
+
+        if (self.image_mask is not None) and (self.image_mask[-1:]=='B'):
+            # Determine bar offset for Wedge masks either based on filter 
+            # or explicit specification
+            bar_offset = self.options.get('bar_offset', None)
+            if bar_offset is None:
+                auto_offset = self.filter
+            else:
+                try:
+                    _ = float(bar_offset)
+                    auto_offset = None
+                except ValueError:
+                    # If the "bar_offset" isn't a float, pass it to auto_offset instead
+                    auto_offset = bar_offset
+                    bar_offset = None
+
+            mask = NIRCam_BandLimitedCoron(name=self.image_mask, module=self.module, 
+                                           bar_offset=bar_offset, auto_offset=auto_offset)
+            return mask.bar_offset
+        else:
+            return None
+
     def gen_mask_image(self, npix=None, pixelscale=None):
         """
         Return an image representation of the focal plane mask.
-        Output is in 'sci' coords orientation.
+        Output is in 'sci' coords orientation. If no image mask
+        is present, then returns an array of all 1s.
         
         Parameters
         ==========
@@ -307,7 +340,7 @@ class NIRCam_ext(webbpsf_NIRCam):
             `pixelscale`
         pixelscale : float
             Size of output pixels in units of arcsec. If not specified,
-            then selects nominal detector pixel scale.
+            then selects oversample pixel scale.
         """
         
         from webbpsf.optics import NIRCam_BandLimitedCoron
@@ -327,29 +360,19 @@ class NIRCam_ext(webbpsf_NIRCam):
 
         if pixelscale is None:
             pixelscale = self.pixelscale / self.oversample
-        npix = int(20 / pixelscale + 0.5) if npix is None else npix
+        if npix is None:
+            os = self.pixelscale / pixelscale
+            npix = 320 if 'long' in self.channel else 640
+            npix = int(npix * os + 0.5)
 
         if self.is_coron:
-            if ('MASK' in self.image_mask) and (self.image_mask[-1] == 'R'):
-                bar_offset = None
-                auto_offset = None
-            else:
-                bar_offset = self.options.get('bar_offset', None)
-                if bar_offset is None:
-                    auto_offset = self.filter
-                else:
-                    try:
-                        _ = float(bar_offset)
-                        auto_offset = None
-                    except ValueError:
-                        # If the "bar_offset" isn't a float, pass it to auto_offset instead
-                        auto_offset = bar_offset
-                        bar_offset = None
+            bar_offset = self.get_bar_offset()
+            auto_offset = None
             mask = NIRCam_BandLimitedCoron(name=self.image_mask, module=self.module, 
                                            bar_offset=bar_offset, auto_offset=auto_offset, **shifts)
 
+            # Create wavefront to pass through mask and obtain transmission image
             wavelength = self.bandpass.avgwave() / 1e10
-
             wave = poppy.Wavefront(wavelength=wavelength, npix=npix, pixelscale=pixelscale)
             im = mask.get_transmission(wave)
         else:
@@ -380,9 +403,9 @@ class NIRCam_ext(webbpsf_NIRCam):
         passed directly to create unique PSFs.
         
         This outputs an OTE Linear Model. In order to update instrument class:
-            >>> opd_new = inst.drift_opd()
-            >>> inst.pupilopd = opd_new
-            >>> inst.pupil = opd_new
+            >>> opd_dict = inst.drift_opd()
+            >>> inst.pupilopd = opd_dict['opd']
+            >>> inst.pupil = opd_dict['opd']
         """
         return _drift_opd(self, wfe_drift, opd=opd)
 
@@ -392,82 +415,183 @@ class NIRCam_ext(webbpsf_NIRCam):
         """
         return _gen_save_name(self, wfe_drift=wfe_drift)
 
-    def gen_psf_coeff(self, wfe_drift=0, nproc=None, force=False, 
-                      save=True, return_results=False, return_extras=False):
+    def gen_psf_coeff(self, bar_offset=0, **kwargs):
         """Generate PSF coefficients
 
-        Creates a set of coefficients that will generate a simulated PSF at any
-        arbitrary wavelength. This function first uses simulates a number of
-        evenly spaced PSFs throughout some specified bandpass. An nth-degree 
-        polynomial is then fit to each oversampled pixel using a linear-least 
-        squares fitting routine. The final set of coefficients for each pixel 
-        is returned as an image cube. The returned set of coefficient can be 
-        used to produce a set of PSFs by:
+        Creates a set of coefficients that will generate simulated PSFs for any
+        arbitrary wavelength. This function first simulates a number of evenly-
+        spaced PSFs throughout the specified bandpass (or the full channel). 
+        An nth-degree polynomial is then fit to each oversampled pixel using 
+        a linear-least squares fitting routine. The final set of coefficients 
+        for each pixel is returned as an image cube. The returned set of 
+        coefficient are then used to produce PSF via `calc_psf_from_coeff`.
 
-        >>> psfs = jl_poly(waves, coeffs)
-
-        where 'waves' can be a scalar, nparray, list, or tuple. All wavelengths
-        are in microns.
+        Useful for quickly generated imaging and dispersed PSFs for multiple
+        spectral types. 
 
         Parameters
         ----------
+        bar_offset : float
+            For wedge masks, option to set the PSF position across the bar.
+            In this framework, we generally set the default to 0, then use
+            the `gen_wfemask_coeff` function to determine how the PSF changes 
+            along the wedge axis as well as perpendicular to the wedge. This
+            allows for more arbitrary PSFs within the mask, including small
+            grid dithers as well as variable PSFs for extended objects.
+            Default: 0. 
+
+        Keyword Args
+        ------------
         wfe_drift : float
             Wavefront error drift amplitude in nm.
         force : bool
             Forces a recalculation of PSF even if saved PSF exists. (default: False)
         save : bool
             Save the resulting PSF coefficients to a file? (default: True)
+        nproc : bool or None
+            Manual setting of number of processor cores to break up PSF calculation.
+            If set to None, this is determined based on the requested PSF size,
+            number of available memory, and hardware processor cores. The automatic
+            calculation endeavors to leave a number of resources available to the
+            user so as to not crash the user's machine. 
         return_results : bool
             By default, results are saved as object the attributes `psf_coeff` and
             `psf_coeff_header`. If return_results=True, results are instead returned
             as function outputs and will not be saved to the attributes. This is mostly
-            used for successive to determine varying WFE drift or focal plane dependencies.
+            used for successive coeff simulations to determine varying WFE drift or 
+            focal plane dependencies.
         return_extras : bool
             Additionally returns a dictionary of monochromatic PSFs images and their 
             corresponding wavelengths for debugging purposes. Can be used with or without
-            `return_results`. 
+            `return_results`. If `return_results=False`, then only this dictionary is
+            returned, otherwise if `return_results=False` then returns everything as a
+            3-element tuple (psf_coeff, psf_coeff_header, extras_dict).
         """
         
-        return _gen_psf_coeff(self, nproc=nproc, wfe_drift=wfe_drift, force=force, save=save, 
-                              return_results=return_results, return_extras=return_extras)
+        # Set to input bar offset value. No effect if not a wedge mask.
+        bar_offset_orig = self.options.get('bar_offset', None)
+        self.options['bar_offset'] = bar_offset
+        res =  _gen_psf_coeff(self, **kwargs)
+        self.options['bar_offset'] = bar_offset_orig
+
+        return res
 
     def gen_wfedrift_coeff(self, force=False, save=True, **kwargs):
         """ Fit WFE drift coefficients
 
-        This function finds a relationship between PSF coefficients in the presence of WFE drift. 
-        For a series of WFE drift values, we generate corresponding PSF coefficients and fit a 
-        polynomial relationship to the residual values. This allows us to quickly modify a nominal 
-        set of PSF image coefficients to generate a new PSF where the WFE has drifted by some amplitude.
+        This function finds a relationship between PSF coefficients in the 
+        presence of WFE drift. For a series of WFE drift values, we generate 
+        corresponding PSF coefficients and fit a  polynomial relationship to 
+        the residual values. This allows us to quickly modify a nominal set of 
+        PSF image coefficients to generate a new PSF where the WFE has drifted 
+        by some amplitude.
         
         It's Legendre's all the way down...
 
-        Example
-        -------
-        Generate PSF coefficient, WFE drift modifications, then
-        create an undrifted and drifted PSF. (pseudo-code)
+        Parameters
+        ----------
+        force : bool
+            Forces a recalculation of coefficients even if saved file exists. 
+            (default: False)
+        save : bool
+            Save the resulting PSF coefficients to a file? (default: True)
 
-        >>> fpix, osamp = (128, 4)
-        >>> coeff0 = gen_psf_coeff()
-        >>> wfe_cf = gen_wfedrift_coeff()
-        >>> psf0   = gen_image_from_coeff(coeff=coeff0)
-
-        >>> # Drift the coefficients
-        >>> wfe_drift = 5   # nm
-        >>> cf_fit = wfe_cf.reshape([wfe_cf.shape[0], -1])
-        >>> cf_mod = jl_poly(np.array([wfe_drift]), cf_fit).reshape(coeff0.shape)
-        >>> coeff5nm = coeff + cf_mod
-        >>> psf5nm = gen_image_from_coeff(coeff=coeff5nm)
+        Keyword Args
+        ------------
+        wfe_list : array-like
+            A list of wavefront error drift values (nm) to calculate and fit.
+            Default is [0,1,2,5,10,20,40], which covers the most-likely
+            scenarios (1-5nm) while also covering a range of extreme drift
+            values (10-40nm).
+        return_results : bool
+            By default, results are saved in `self._psf_coeff_mod` dictionary. 
+            If return_results=True, results are instead returned as function outputs 
+            and will not be saved to the dictionary attributes. 
+        return_raw : bool
+            Normally, we return the relation between PSF coefficients as a function
+            of position. Instead this returns (as function outputs) the raw values
+            prior to fitting. Final results will not be saved to the dictionary attributes.
         """
-        return _gen_wfedrift_coeff(self, force=force, save=save, **kwargs)
+
+        # Set to input bar offset value. No effect if not a wedge mask.
+        bar_offset_orig = self.options.get('bar_offset', None)
+        try:
+            self.options['bar_offset'] = self.psf_coeff_header.get('BAROFF', None)
+        except AttributeError:
+            # Throws error if psf_coeff_header doesn't exist
+            _log.error("psf_coeff_header does not appear to exist. Run gen_psf_coeff().")
+            res = 0
+        else:
+            res = _gen_wfedrift_coeff(self, force=force, save=save, **kwargs)
+        finally:
+            self.options['bar_offset'] = bar_offset_orig
+
+        return res
+
+    def gen_wfemask_coeff(self, force=False, save=True, **kwargs):
+        """ Fit WFE changes in mask position
+
+        For coronagraphic masks, slight changes in the PSF location
+        relative to the image plane mask can substantially alter the 
+        PSF speckle pattern. This function generates a number of PSF
+        coefficients at a variety of positions, then fits polynomials
+        to the residuals to track how the PSF changes across the mask's
+        field of view. Special care is taken near the 10-20mas region
+        in order to provide accurate sampling of the SGD offsets. 
+
+        Parameters
+        ----------
+        force : bool
+            Forces a recalculation of coefficients even if saved file exists. 
+            (default: False)
+        save : bool
+            Save the resulting PSF coefficients to a file? (default: True)
+
+        Keyword Args
+        ------------
+        return_results : bool
+            By default, results are saved in `self._psf_coeff_mod` dictionary. 
+            If return_results=True, results are instead returned as function outputs 
+            and will not be saved to the dictionary attributes. 
+        return_raw : bool
+            Normally, we return the relation between PSF coefficients as a function
+            of position. Instead this returns (as function outputs) the raw values
+            prior to fitting. Final results will not be saved to the dictionary attributes.
+
+        """
+        return _gen_wfemask_coeff(self, force=force, save=save, **kwargs)
 
     def gen_wfefield_coeff(self, force=False, save=True, **kwargs):
-        return _gen_wfefield_coeff(self, force=force, save=save, **kwargs)
         """ Fit WFE field-dependent coefficients
-        """
 
-    def calc_psf_from_coeff(self, sp=None, return_oversample=False, 
+        Find a relationship between field position and PSF coefficients for
+        non-coronagraphic observations and when `include_si_wfe` is enabled.
+
+        Parameters
+        ----------
+        force : bool
+            Forces a recalculation of coefficients even if saved file exists. 
+            (default: False)
+        save : bool
+            Save the resulting PSF coefficients to a file? (default: True)
+
+        Keyword Args
+        ------------
+        return_results : bool
+            By default, results are saved in `self._psf_coeff_mod` dictionary. 
+            If return_results=True, results are instead returned as function outputs 
+            and will not be saved to the dictionary attributes. 
+        return_raw : bool
+            Normally, we return the relation between PSF coefficients as a function
+            of position. Instead this returns (as function outputs) the raw values
+            prior to fitting. Final results will not be saved to the dictionary attributes.
+        """
+        return _gen_wfefield_coeff(self, force=force, save=save, **kwargs)
+
+
+    def calc_psf_from_coeff(self, sp=None, return_oversample=True, 
         wfe_drift=None, coord_vals=None, coord_frame='tel', **kwargs):
-        """ Create PSF image from coefficients
+        """ Create PSF image from polynomial coefficients
         
         Create a PSF image from instrument settings. The image is noiseless and
         doesn't take into account any non-linearity or saturation effects, but is
@@ -477,7 +601,7 @@ class NIRCam_ext(webbpsf_NIRCam):
         Returns a single image or list of images if sp is a list of spectra. 
         By default, it returns only the detector-sampled PSF, but setting 
         return_oversample=True will also return a set of oversampled images
-         as a second output.
+        as a second output.
 
         Parameters
         ----------
@@ -489,13 +613,13 @@ class NIRCam_ext(webbpsf_NIRCam):
             Coronagraphic PSFs will further decrease this due to the smaller pupil
             size and coronagraphic spot. 
         return_oversample : bool
-            If True, then also returns the oversampled version of the PSF
-        use_bg_psf : bool
-            If a coronagraphic observation, off-center PSF is different.
+            Returns the oversampled version of the PSF instead of detector-sampled PSF.
+            Default: True.
         wfe_drift : float or None
             Wavefront error drift amplitude in nm.
         coord_vals : tuple or None
             Coordinates (in arcsec or pixels) to calculate field-dependent PSF.
+            If multiple values, then this should be an array ([xvals], [yvals]).
         coord_frame : str
             Type of input coordinates. 
 
@@ -505,13 +629,20 @@ class NIRCam_ext(webbpsf_NIRCam):
                 * 'idl': arcsecs relative to aperture reference location.
 
         return_hdul : bool
-            TODO: Return PSFs in an HDUList rather than set of arrays
+            Return PSFs in an HDUList rather than set of arrays (default: True).
         """        
 
         return _calc_psf_from_coeff(self, sp=sp, return_oversample=return_oversample, 
                                     wfe_drift=wfe_drift, coord_vals=coord_vals, 
                                     coord_frame=coord_frame, **kwargs)
 
+    # def calc_sgd(self, xoff_asec, yoff_asec, use_coeff=True, 
+    #     return_oversample=True, **kwargs):
+    #     """ Calculate small grid dither PSF
+    #     """
+
+    #     res = _calc_sgd(self, xoff_asec, yoff_asec, return_oversample=return_oversample, **kwargs)
+    #     return res
 
 # MIRI Subclass
 class MIRI_ext(webbpsf_MIRI):
@@ -531,17 +662,7 @@ class MIRI_ext(webbpsf_MIRI):
     @property
     def save_dir(self):
         """Coefficient save directory"""
-        # Default name
-        if self._save_dir is None:
-            # Name to save array of oversampled coefficients
-            inst_name = self.name
-            save_dir = conf.WEBBPSF_EXT_PATH + f'{inst_name}/psf_coeffs/'
-            # Create directory if it doesn't already exist
-            if not os.path.isdir(save_dir):
-               os.makedirs(save_dir)
-        else:
-            save_dir = self._save_dir
-        return save_dir
+        return _gen_save_dir(self)
     @save_dir.setter
     def save_dir(self, value):
         self._save_dir = value
@@ -883,11 +1004,10 @@ class MIRI_ext(webbpsf_MIRI):
         in dev_utils/WebbPSF_OTE_LM.ipynb to create a time series of OPD
         maps, which can then be passed directly to create unique PSFs.
         
-        This outputs an OTE Linear Model. 
-        In order to update instrument class:
-            >>> opd_new = inst.drift_opd()
-            >>> inst.pupilopd = opd_new
-            >>> inst.pupil = opd_new
+        This outputs an OTE Linear Model. In order to update instrument class:
+            >>> opd_dict = inst.drift_opd()
+            >>> inst.pupilopd = opd_dict['opd']
+            >>> inst.pupil = opd_dict['opd']
         """
         return _drift_opd(self, wfe_drift, opd=opd)
 
@@ -897,69 +1017,149 @@ class MIRI_ext(webbpsf_MIRI):
         """
         return _gen_save_name(self, wfe_drift=wfe_drift)
 
-    def gen_psf_coeff(self, wfe_drift=0, nproc=None, force=False, 
-                      save=True, return_results=False, return_extras=False):
+    def gen_psf_coeff(self, **kwargs):
         """Generate PSF coefficients
 
-        Creates a set of coefficients that will generate a simulated PSF at any
-        arbitrary wavelength. This function first uses simulates a number of
-        evenly spaced PSFs throughout some specified bandpass. An nth-degree 
-        polynomial is then fit to each oversampled pixel using a linear-least 
-        squares fitting routine. The final set of coefficients for each pixel 
-        is returned as an image cube. The returned set of coefficient can be 
-        used to produce a set of PSFs by:
+        Creates a set of coefficients that will generate simulated PSFs for any
+        arbitrary wavelength. This function first simulates a number of evenly-
+        spaced PSFs throughout the specified bandpass (or the full channel). 
+        An nth-degree polynomial is then fit to each oversampled pixel using 
+        a linear-least squares fitting routine. The final set of coefficients 
+        for each pixel is returned as an image cube. The returned set of 
+        coefficient are then used to produce PSF via `calc_psf_from_coeff`.
 
-        >>> psfs = jl_poly(waves, coeffs)
+        Useful for quickly generated imaging and dispersed PSFs for multiple
+        spectral types. 
 
-        where 'waves' can be a scalar, nparray, list, or tuple. All wavelengths
-        are in microns.
-
-        Parameters
-        ----------
+        Keyword Args
+        ------------
         wfe_drift : float
             Wavefront error drift amplitude in nm.
         force : bool
             Forces a recalculation of PSF even if saved PSF exists. (default: False)
         save : bool
             Save the resulting PSF coefficients to a file? (default: True)
+        nproc : bool or None
+            Manual setting of number of processor cores to break up PSF calculation.
+            If set to None, this is determined based on the requested PSF size,
+            number of available memory, and hardware processor cores. The automatic
+            calculation endeavors to leave a number of resources available to the
+            user so as to not crash the user's machine. 
+        return_results : bool
+            By default, results are saved as object the attributes `psf_coeff` and
+            `psf_coeff_header`. If return_results=True, results are instead returned
+            as function outputs and will not be saved to the attributes. This is mostly
+            used for successive coeff simulations to determine varying WFE drift or 
+            focal plane dependencies.
+        return_extras : bool
+            Additionally returns a dictionary of monochromatic PSFs images and their 
+            corresponding wavelengths for debugging purposes. Can be used with or without
+            `return_results`. If `return_results=False`, then only this dictionary is
+            returned, otherwise if `return_results=False` then returns everything as a
+            3-element tuple (psf_coeff, psf_coeff_header, extras_dict).
         """
         
-        return _gen_psf_coeff(self, nproc=nproc, wfe_drift=wfe_drift, force=force, save=save, 
-                              return_results=return_results, return_extras=return_extras)
+        return _gen_psf_coeff(self, **kwargs)
 
     def gen_wfedrift_coeff(self, force=False, save=True, **kwargs):
         """ Fit WFE drift coefficients
 
-        This function finds a relationship between PSF coefficients in the presence of WFE drift. 
-        For a series of WFE drift values, we generate corresponding PSF coefficients and fit a 
-        polynomial relationship to the residual values. This allows us to quickly modify a nominal 
-        set of PSF image coefficients to generate a new PSF where the WFE has drifted by some amplitude.
+        This function finds a relationship between PSF coefficients in the 
+        presence of WFE drift. For a series of WFE drift values, we generate 
+        corresponding PSF coefficients and fit a  polynomial relationship to 
+        the residual values. This allows us to quickly modify a nominal set of 
+        PSF image coefficients to generate a new PSF where the WFE has drifted 
+        by some amplitude.
         
         It's Legendre's all the way down...
 
-        Example
-        -------
-        Generate PSF coefficient, WFE drift modifications, then
-        create an undrifted and drifted PSF. (pseudo-code)
+        Parameters
+        ----------
+        force : bool
+            Forces a recalculation of coefficients even if saved file exists. 
+            (default: False)
+        save : bool
+            Save the resulting PSF coefficients to a file? (default: True)
 
-        >>> fpix, osamp = (128, 4)
-        >>> coeff0 = gen_psf_coeff()
-        >>> wfe_cf = gen_wfedrift_coeff()
-        >>> psf0   = gen_image_from_coeff(coeff=coeff0)
-
-        >>> # Drift the coefficients
-        >>> wfe_drift = 5   # nm
-        >>> cf_fit = wfe_cf.reshape([wfe_cf.shape[0], -1])
-        >>> cf_mod = jl_poly(np.array([wfe_drift]), cf_fit).reshape(coeff0.shape)
-        >>> coeff5nm = coeff + cf_mod
-        >>> psf5nm = gen_image_from_coeff(coeff=coeff5nm)
+        Keyword Args
+        ------------
+        wfe_list : array-like
+            A list of wavefront error drift values (nm) to calculate and fit.
+            Default is [0,1,2,5,10,20,40], which covers the most-likely
+            scenarios (1-5nm) while also covering a range of extreme drift
+            values (10-40nm).
+        return_results : bool
+            By default, results are saved in `self._psf_coeff_mod` dictionary. 
+            If return_results=True, results are instead returned as function outputs 
+            and will not be saved to the dictionary attributes. 
+        return_raw : bool
+            Normally, we return the relation between PSF coefficients as a function
+            of position. Instead this returns (as function outputs) the raw values
+            prior to fitting. Final results will not be saved to the dictionary attributes.
         """
         return _gen_wfedrift_coeff(self, force=force, save=save, **kwargs)
 
     def gen_wfefield_coeff(self, force=False, save=True, **kwargs):
+        """ Fit WFE field-dependent coefficients
+
+        Find a relationship between field position and PSF coefficients for
+        non-coronagraphic observations and when `include_si_wfe` is enabled.
+
+        Parameters
+        ----------
+        force : bool
+            Forces a recalculation of coefficients even if saved file exists. 
+            (default: False)
+        save : bool
+            Save the resulting PSF coefficients to a file? (default: True)
+
+        Keyword Args
+        ------------
+        return_results : bool
+            By default, results are saved in `self._psf_coeff_mod` dictionary. 
+            If return_results=True, results are instead returned as function outputs 
+            and will not be saved to the dictionary attributes. 
+        return_raw : bool
+            Normally, we return the relation between PSF coefficients as a function
+            of position. Instead this returns (as function outputs) the raw values
+            prior to fitting. Final results will not be saved to the dictionary attributes.
+        """
         return _gen_wfefield_coeff(self, force=force, save=save, **kwargs)
 
-    def calc_psf_from_coeff(self, sp=None, return_oversample=False, 
+    def gen_wfemask_coeff(self, force=False, save=True, **kwargs):
+        """ Fit WFE changes in mask position
+
+        For coronagraphic masks, slight changes in the PSF location
+        relative to the image plane mask can substantially alter the 
+        PSF speckle pattern. This function generates a number of PSF
+        coefficients at a variety of positions, then fits polynomials
+        to the residuals to track how the PSF changes across the mask's
+        field of view. Special care is taken near the 10-20mas region
+        in order to provide accurate sampling of the SGD offsets. 
+
+        Parameters
+        ----------
+        force : bool
+            Forces a recalculation of coefficients even if saved file exists. 
+            (default: False)
+        save : bool
+            Save the resulting PSF coefficients to a file? (default: True)
+
+        Keyword Args
+        ------------
+        return_results : bool
+            By default, results are saved in `self._psf_coeff_mod` dictionary. 
+            If return_results=True, results are instead returned as function outputs 
+            and will not be saved to the dictionary attributes. 
+        return_raw : bool
+            Normally, we return the relation between PSF coefficients as a function
+            of position. Instead this returns (as function outputs) the raw values
+            prior to fitting. Final results will not be saved to the dictionary attributes.
+
+        """
+        return _gen_wfemask_coeff(self, force=force, save=save, **kwargs)
+
+    def calc_psf_from_coeff(self, sp=None, return_oversample=True, 
         wfe_drift=None, coord_vals=None, coord_frame='tel', **kwargs):
         """ Create PSF image from coefficients
         
@@ -984,8 +1184,6 @@ class MIRI_ext(webbpsf_MIRI):
             size and coronagraphic spot. 
         return_oversample : bool
             If True, then also returns the oversampled version of the PSF
-        use_bg_psf : bool
-            If a coronagraphic observation, off-center PSF is different.
         wfe_drift : float or None
             Wavefront error drift amplitude in nm.
         coord_vals : tuple or None
@@ -1001,7 +1199,6 @@ class MIRI_ext(webbpsf_MIRI):
         return_hdul : bool
             TODO: Return PSFs in an HDUList rather than set of arrays
         """        
-
         return _calc_psf_from_coeff(self, sp=sp, return_oversample=return_oversample, 
                                     wfe_drift=wfe_drift, coord_vals=coord_vals, 
                                     coord_frame=coord_frame, **kwargs)
@@ -1119,9 +1316,34 @@ def _init_inst(self, filter=None, pupil_mask=None, image_mask=None,
     self.psf_coeff = None
     self.psf_coeff_header = None
     self._psf_coeff_mod = {
-        'wfe_drift': None, 'wfe_drift_lxmap': None,
-        'si_field': None, 'si_field_v2grid': None, 'si_field_v3grid': None,
-    } 
+        'wfe_drift': None, 'wfe_drift_off': None, 'wfe_drift_lxmap': None,
+        'si_field': None, 'si_field_v2grid': None, 'si_field_v3grid': None, 'si_field_apname': None,
+        'si_mask': None, 'si_mask_xgrid': None, 'si_mask_ygrid': None, 'si_mask_apname': None
+    }
+    if self.image_mask is not None:
+        self.options['mask_shift_x'] = 0
+        self.options['mask_shift_y'] = 0
+
+def _gen_save_dir(self):
+    """
+    Generate a default save directory to store PSF coefficients.
+    If the directory doesn't exist, try to create it.
+    """
+    if self._save_dir is None:
+        base_dir = conf.WEBBPSF_EXT_PATH + f'psf_coeffs/'
+        # Name to save array of oversampled coefficients
+        inst_name = self.name
+        save_dir = base_dir + f'{inst_name}/'
+    else:
+        save_dir = self._save_dir
+
+    # Create directory (and all intermediates) if it doesn't already exist
+    if not os.path.isdir(save_dir):
+        _log.info("Creating directory: " + save_dir)
+        os.makedirs(save_dir, exist_ok=True)
+
+    return save_dir
+
 
 def _gen_save_name(self, wfe_drift=0):
     """
@@ -1145,8 +1367,9 @@ def _gen_save_name(self, wfe_drift=0):
         chan_str = 'LW' if 'long' in self.channel else 'SW'
         fmp_str = f'{chan_str}{module}_{fmp_str}'
         # Set bar offset if specified
-        bar_offset = self.options.get('bar_offset', None)
-        bar_str = '' if bar_offset is None else '_bar{:.1f}'.format(bar_offset)
+        # bar_offset = self.options.get('bar_offset', None)
+        bar_offset = self.get_bar_offset()
+        bar_str = '' if bar_offset is None else '_bar{:.2f}'.format(bar_offset)
     else:
         bar_str = ''
 
@@ -1278,11 +1501,10 @@ def _drift_opd(self, wfe_drift, opd=None):
     in dev_utils/WebbPSF_OTE_LM.ipynb to create a time series of OPD
     maps, which can then be passed directly to create unique PSFs.
     
-    This outputs an OTE Linear Model. 
-    In order to update instrument class:
-        >>> opd_new = inst.drift_opd()
-        >>> inst.pupilopd = opd_new
-        >>> inst.pupil = opd_new
+    This outputs an OTE Linear Model. In order to update instrument class:
+        >>> opd_dict = inst.drift_opd()
+        >>> inst.pupilopd = opd_dict['opd']
+        >>> inst.pupil = opd_dict['opd']
     """
     
     # Get Pupil OPD info and convert to OTE LM
@@ -1340,8 +1562,49 @@ def _drift_opd(self, wfe_drift, opd=None):
 
 
 def _gen_psf_coeff(self, nproc=None, wfe_drift=0, force=False, save=True, 
-                   return_results=False, return_extras=False):
-    
+                   return_results=False, return_extras=False, **kwargs):
+
+    """Generate PSF coefficients
+
+    Creates a set of coefficients that will generate simulated PSFs for any
+    arbitrary wavelength. This function first simulates a number of evenly-
+    spaced PSFs throughout the specified bandpass (or the full channel). 
+    An nth-degree polynomial is then fit to each oversampled pixel using 
+    a linear-least squares fitting routine. The final set of coefficients 
+    for each pixel is returned as an image cube. The returned set of 
+    coefficient are then used to produce PSF via `calc_psf_from_coeff`.
+
+    Useful for quickly generated imaging and dispersed PSFs for multiple
+    spectral types. 
+
+    Parameters
+    ----------
+    nproc : bool or None
+        Manual setting of number of processor cores to break up PSF calculation.
+        If set to None, this is determined based on the requested PSF size,
+        number of available memory, and hardware processor cores. The automatic
+        calculation endeavors to leave a number of resources available to the
+        user so as to not crash the user's machine. 
+    wfe_drift : float
+        Wavefront error drift amplitude in nm.
+    force : bool
+        Forces a recalculation of PSF even if saved PSF exists. (default: False)
+    save : bool
+        Save the resulting PSF coefficients to a file? (default: True)
+    return_results : bool
+        By default, results are saved as object the attributes `psf_coeff` and
+        `psf_coeff_header`. If return_results=True, results are instead returned
+        as function outputs and will not be saved to the attributes. This is mostly
+        used for successive coeff simulations to determine varying WFE drift or 
+        focal plane dependencies.
+    return_extras : bool
+        Additionally returns a dictionary of monochromatic PSFs images and their 
+        corresponding wavelengths for debugging purposes. Can be used with or without
+        `return_results`. If `return_results=False`, then only this dictionary is
+        returned, otherwise if `return_results=False` then returns everything as a
+        3-element tuple (psf_coeff, psf_coeff_header, extras_dict).
+    """
+
     save_name = self.save_name
     outfile = self.save_dir + save_name
     # Load data from already saved FITS file
@@ -1349,6 +1612,7 @@ def _gen_psf_coeff(self, nproc=None, wfe_drift=0, force=False, save=True,
         if return_extras:
             _log.warn("return_extras only valid if coefficient files does not exist or force=True")
 
+        _log.info(f'Loading {outfile}')
         hdul = fits.open(outfile)
         data = hdul[0].data.astype(np.float)
         hdr  = hdul[0].header
@@ -1401,29 +1665,37 @@ def _gen_psf_coeff(self, nproc=None, wfe_drift=0, force=False, save=True,
         nproc = nproc_use(fov_pix, oversample, npsf)
     _log.debug('nprocessors: {}; npsf: {}'.format(nproc, npsf))
 
+    # Make a paired down copy of self with limited data for 
+    # copying to multiprocessor theads. This reduces memory
+    # swapping overheads.
+    inst_copy = deepcopy(self)
+    del inst_copy._psf_coeff_mod
+    inst_copy.psf_coeff = None
+    inst_copy.psf_coeff_header = None
+    inst_copy._psf_coeff_mod = {}
+
     setup_logging('WARN', verbose=False)
     t0 = time.time()
     # Setup the multiprocessing pool and arguments to pass to each pool
-    worker_arguments = [(self, wlen, fov_pix, oversample) for wlen in waves]
+    worker_arguments = [(inst_copy, wlen, fov_pix, oversample) for wlen in waves]
     if nproc > 1:
-        pool = mp.Pool(nproc)
-        # Pass arguments to the helper function
-
+        hdu_arr = []
         try:
-            hdu_arr = pool.map(_wrap_coeff_for_mp, worker_arguments)
+            with mp.Pool(nproc) as pool:
+                for res in tqdm(pool.imap_unordered(_wrap_coeff_for_mp, worker_arguments), total=npsf, desc='PSFs', leave=False):
+                    hdu_arr.append(res)
+                pool.close()
             if hdu_arr[0] is None:
                 raise RuntimeError('Returned None values. Issue with multiprocess or WebbPSF??')
-
         except Exception as e:
             _log.error('Caught an exception during multiprocess.')
-            _log.error('Closing multiprocess pool.')
+            _log.info('Closing multiprocess pool.')
             pool.terminate()
             pool.close()
             raise e
-
         else:
-            _log.debug('Closing multiprocess pool.')
-            pool.close()
+            _log.info('Closing multiprocess pool.')
+
     else:
         # Pass arguments to the helper function
         hdu_arr = []
@@ -1433,6 +1705,8 @@ def _gen_psf_coeff(self, nproc=None, wfe_drift=0, force=False, save=True,
                 raise RuntimeError('Returned None values. Issue with WebbPSF??')
             hdu_arr.append(hdu)
     t1 = time.time()
+
+    del inst_copy, worker_arguments
     
     # Reset pupils
     self.pupilopd = pupilopd_orig
@@ -1511,6 +1785,8 @@ def _gen_psf_coeff(self, nproc=None, wfe_drift=0, force=False, save=True,
     hdr['LEGNDR'] = (use_legendre, 'Legendre polynomial fit?')
     hdr['OFFR']  = (offset_r, 'Radial offset')
     hdr['OFFTH'] = (offset_theta, 'Position angle OFFR (CCW)')
+    if (self.image_mask is not None) and ('WB' in self.image_mask):
+        hdr['BAROFF'] = (bar_offset, 'Image mask shift along wedge (arcsec)')
     hdr['MASKOFFX'] = (coron_offset_x, 'Image mask shift in x (arcsec)')
     hdr['MASKOFFY'] = (coron_offset_y, 'Image mask shift in y (arcsec)')
     if jitter is None:
@@ -1548,8 +1824,10 @@ def _gen_psf_coeff(self, nproc=None, wfe_drift=0, force=False, save=True,
     hdr.add_history(time_string)
 
     if save:
+        # Catch warnings in case header comments too long
         from astropy.utils.exceptions import AstropyWarning
         import warnings
+        _log.info(f'Saving to {outfile}')
         with warnings.catch_warnings():
             warnings.simplefilter('ignore', AstropyWarning)
             hdu.writeto(outfile, overwrite=True)
@@ -1570,9 +1848,60 @@ def _gen_psf_coeff(self, nproc=None, wfe_drift=0, force=False, save=True,
     else:
         return
 
-def _gen_wfedrift_coeff(self, force=False, save=True, return_results=False,
-                        wfe_list=[0,1,2,5,10,20,40], **kwargs):
+def _gen_wfedrift_coeff(self, force=False, save=True, wfe_list=[0,1,2,5,10,20,40], 
+                        return_results=False, return_raw=False, **kwargs):
+    """ Fit WFE drift coefficients
 
+    This function finds a relationship between PSF coefficients in the 
+    presence of WFE drift. For a series of WFE drift values, we generate 
+    corresponding PSF coefficients and fit a  polynomial relationship to 
+    the residual values. This allows us to quickly modify a nominal set of 
+    PSF image coefficients to generate a new PSF where the WFE has drifted 
+    by some amplitude.
+    
+    It's Legendre's all the way down...
+
+    Parameters
+    ----------
+    force : bool
+        Forces a recalculation of coefficients even if saved file exists. 
+        (default: False)
+    save : bool
+        Save the resulting PSF coefficients to a file? (default: True)
+
+    Keyword Args
+    ------------
+    wfe_list : array-like
+        A list of wavefront error drift values (nm) to calculate and fit.
+        Default is [0,1,2,5,10,20,40], which covers the most-likely
+        scenarios (1-5nm) while also covering a range of extreme drift
+        values (10-40nm).
+    return_results : bool
+        By default, results are saved in `self._psf_coeff_mod` dictionary. 
+        If return_results=True, results are instead returned as function outputs 
+        and will not be saved to the dictionary attributes. 
+    return_raw : bool
+        Normally, we return the relation between PSF coefficients as a function
+        of position. Instead this returns (as function outputs) the raw values
+        prior to fitting. Final results will not be saved to the dictionary attributes.
+
+    Example
+    -------
+    Generate PSF coefficient, WFE drift modifications, then
+    create an undrifted and drifted PSF. (pseudo-code)
+
+    >>> fpix, osamp = (128, 4)
+    >>> coeff0 = gen_psf_coeff()
+    >>> wfe_cf = gen_wfedrift_coeff()
+    >>> psf0   = gen_image_from_coeff(coeff=coeff0)
+
+    >>> # Drift the coefficients
+    >>> wfe_drift = 5   # nm
+    >>> cf_fit = wfe_cf.reshape([wfe_cf.shape[0], -1])
+    >>> cf_mod = jl_poly(np.array([wfe_drift]), cf_fit).reshape(coeff0.shape)
+    >>> coeff5nm = coeff + cf_mod
+    >>> psf5nm = gen_image_from_coeff(coeff=coeff5nm)
+    """
     # fov_pix should not be more than some size to preserve memory
     fov_max = self._fovmax_wfedrift if self.oversample<=4 else self._fovmax_wfedrift / 2 
     fov_pix_orig = self.fov_pix
@@ -1586,12 +1915,16 @@ def _gen_wfedrift_coeff(self, force=False, save=True, return_results=False,
 
     # Load file if it already exists
     if (not force) and os.path.exists(outname):
+        # Return fov_pix to original size
+        self.fov_pix = fov_pix_orig
+        _log.info(f"Loading {outname}")
         out = np.load(outname)
         if return_results:
-            return out['arr_0'], out['arr_1']
+            return out['arr_0'], out['arr_1'], out['arr_2']
         else:
             self._psf_coeff_mod['wfe_drift'] = out['arr_0']
-            self._psf_coeff_mod['wfe_drift_lxmap'] = out['arr_1']
+            self._psf_coeff_mod['wfe_drift_off'] = out['arr_1']
+            self._psf_coeff_mod['wfe_drift_lxmap'] = out['arr_2']
             return
 
     _log.warn('Generating WFE Drift coefficients. This may take some time...')
@@ -1600,15 +1933,62 @@ def _gen_wfedrift_coeff(self, force=False, save=True, return_results=False,
     wfe_list = np.array(wfe_list)
     npos = len(wfe_list)
 
+    # Warn if mask shifting is currently enabled (only when an image mask is present)
+    for off_pos in ['mask_shift_x','mask_shift_y']:
+        val = self.options[off_pos]
+        if (self.image_mask is not None) and (val is not None) and (val != 0):
+            _log.warn(f'{off_pos} is set to {val:.3f} arcsec. Should this be 0?')
+
     log_prev = conf.logging_level
     setup_logging('WARN', verbose=False)
     # Calculate residuals
     cf_wfe = []
-    for wfe_drift in tqdm(wfe_list, leave=False):
-        cf, _ = self.gen_psf_coeff(wfe_drift=wfe_drift, force=True, save=False, return_results=True)
+    for wfe_drift in tqdm(wfe_list, leave=False, desc='WFE Drift'):
+        cf, _ = self.gen_psf_coeff(wfe_drift=wfe_drift, force=True, save=False, return_results=True, **kwargs)
         cf_wfe.append(cf)
-    cf_wfe = np.array(cf_wfe) - cf_wfe[0]
-    setup_logging(log_prev, verbose=False)
+    cf_wfe = np.array(cf_wfe)
+
+    # For coronagraphic observations, produce an offset PSF by turning off mask
+    cf_fit_off = cf_wfe_off = None
+    if self.is_coron:
+        image_mask_orig = self.image_mask
+        self.image_mask = None
+        
+        cf_wfe_off = []
+        for wfe_drift in tqdm(wfe_list, leave=False, desc="WFE Drift (Off-Axis)"):
+            cf, _ = self.gen_psf_coeff(wfe_drift=wfe_drift, force=True, save=False, return_results=True, **kwargs)
+            cf_wfe_off.append(cf)
+        cf_wfe_off = np.array(cf_wfe_off)
+        self.image_mask = image_mask_orig
+
+        # Return fov_pix to original size
+        self.fov_pix = fov_pix_orig
+        setup_logging(log_prev, verbose=False)
+        if return_raw:
+            return cf_wfe, cf_wfe_off, wfe_list
+
+        # Get residuals
+        cf_wfe_off = cf_wfe_off - cf_wfe_off[0]
+
+        # Fit each pixel with a polynomial and save the coefficient
+        cf_shape = cf_wfe_off.shape[1:]
+        cf_wfe_off = cf_wfe_off.reshape([npos, -1])
+        lxmap = np.array([np.min(wfe_list), np.max(wfe_list)])
+        cf_fit_off = jl_poly_fit(wfe_list, cf_wfe_off, deg=4, use_legendre=True, lxmap=lxmap)
+        cf_fit_off = cf_fit_off.reshape([-1, cf_shape[0], cf_shape[1], cf_shape[2]])
+
+        del cf_wfe_off
+        cf_wfe_off = None
+
+    else:
+        # Return fov_pix to original size
+        self.fov_pix = fov_pix_orig
+        setup_logging(log_prev, verbose=False)
+        if return_raw:
+            return cf_wfe, cf_wfe_off, wfe_list
+
+    # Get residuals
+    cf_wfe = cf_wfe - cf_wfe[0]
 
     # Fit each pixel with a polynomial and save the coefficient
     cf_shape = cf_wfe.shape[1:]
@@ -1618,28 +1998,51 @@ def _gen_wfedrift_coeff(self, force=False, save=True, return_results=False,
     cf_fit = cf_fit.reshape([-1, cf_shape[0], cf_shape[1], cf_shape[2]])
 
     if save:
-        np.savez(outname, cf_fit, lxmap)
+        _log.info(f"Saving to {outname}")
+        np.savez(outname, cf_fit, cf_fit_off, lxmap)
     _log.info('Done.')
-
-    # Return fov_pix to original size
-    self.fov_pix = fov_pix_orig
 
     # Options to return results from function
     if return_results:
-        return cf_fit, lxmap
+        return cf_fit, cf_fit_off, lxmap
     else:
         self._psf_coeff_mod['wfe_drift'] = cf_fit
+        self._psf_coeff_mod['wfe_drift_off'] = cf_fit_off
         self._psf_coeff_mod['wfe_drift_lxmap'] = lxmap
 
 
 def _gen_wfefield_coeff(self, force=False, save=True, return_results=False, return_raw=False, **kwargs):
+    """ Fit WFE field-dependent coefficients
+
+    Find a relationship between field position and PSF coefficients for
+    non-coronagraphic observations and when `include_si_wfe` is enabled.
+
+    Parameters
+    ----------
+    force : bool
+        Forces a recalculation of coefficients even if saved file exists. 
+        (default: False)
+    save : bool
+        Save the resulting PSF coefficients to a file? (default: True)
+
+    Keyword Args
+    ------------
+    return_results : bool
+        By default, results are saved in `self._psf_coeff_mod` dictionary. 
+        If return_results=True, results are instead returned as function outputs 
+        and will not be saved to the dictionary attributes. 
+    return_raw : bool
+        Normally, we return the relation between PSF coefficients as a function
+        of position. Instead this returns (as function outputs) the raw values
+        prior to fitting. Final results will not be saved to the dictionary attributes.
+    """
 
     if (self.include_si_wfe==False) or (self.is_coron):
-        _log.warn("Skipping WFE field dependence...")
+        _log.info("Skipping WFE field dependence...")
         if self.include_si_wfe==False:
-            _log.warn("   `include_si_wfe` attribute is set to False")
+            _log.info("   `include_si_wfe` attribute is set to False.")
         if self.is_coron:
-            _log.warn("   Coronagraphic image mask in place")
+            _log.info(f"   {self.name} coronagraphic image mask is in place.")
         return
 
     # fov_pix should not be more than some size to preserve memory
@@ -1655,13 +2058,17 @@ def _gen_wfefield_coeff(self, force=False, save=True, return_results=False, retu
 
     # Load file if it already exists
     if (not force) and os.path.exists(outname):
+        # Return fov_pix to original size
+        self.fov_pix = fov_pix_orig
+        _log.info(f"Loading {outname}")
         out = np.load(outname)
         if return_results:
-            return out['arr_0'], out['arr_1'], out['arr_2']
+            return out['arr_0'], out['arr_1'], out['arr_2'], out['arr_3']
         else:
             self._psf_coeff_mod['si_field'] = out['arr_0']
             self._psf_coeff_mod['si_field_v2grid'] = out['arr_1']
             self._psf_coeff_mod['si_field_v3grid'] = out['arr_2']
+            self._psf_coeff_mod['si_field_apname'] = out['arr_3'].flatten()[0]
             return
 
     _log.warn('Generating field-dependent coefficients. This may take some time...')
@@ -1705,13 +2112,13 @@ def _gen_wfefield_coeff(self, force=False, save=True, return_results=False, retu
         v2_all = np.append(v2_all[igood], [v2_min, v2_max, v2_min, v2_max])
         v3_all = np.append(v3_all[igood], [v3_min, v3_min, v3_max, v3_max])
         npos = len(v2_all)
-    else: 
+    else: # Other instrument detector fields are perhaps a little simpler
+        # Specify the full frame apertures for grabbing corners of FoV
         if self.name=='MIRI':
-            apname = 'MIRIM_FULL'
+            ap = self.siaf['MIRIM_FULL']
         else:
             raise NotImplementedError("Field Variations not implemented for {}".format(self.name))
-
-        ap = self.siaf[apname]
+        
         v2_ref, v3_ref = ap.corners('tel', False)
         # Add border margin of 1"
         v2_avg = np.mean(v2_ref)
@@ -1728,7 +2135,8 @@ def _gen_wfefield_coeff(self, force=False, save=True, return_results=False, retu
         npos = len(v2_all)
 
     # Convert V2/V3 positions to sci coords for specified aperture
-    ap = self.siaf[self.aperturename]
+    apname = self.aperturename
+    ap = self.siaf[apname]
     xsci_all, ysci_all = ap.convert(v2_all*60, v3_all*60, 'tel', 'sci')
 
     log_prev = conf.logging_level
@@ -1743,18 +2151,21 @@ def _gen_wfefield_coeff(self, force=False, save=True, return_results=False, retu
     for xsci, ysci in tqdm(zip(xsci_all, ysci_all), total=npos):
         # Update saved detector position and calculate PSF coeff
         self.detector_position = (xsci, ysci)
-        cf, _ = self.gen_psf_coeff(force=True, save=False, return_results=True)
+        cf, _ = self.gen_psf_coeff(force=True, save=False, return_results=True, **kwargs)
         cf_fields.append(cf)
 
     # Reset to initial values
     self.detector_position = (x0,y0)
+    self.fov_pix = fov_pix_orig
     setup_logging(log_prev, verbose=False)
+
+    # Return raw results for further analysis
+    if return_raw:
+        return np.array(cf_fields), v2_all, v3_all
 
     # Get residuals
     cf_fields_resid = np.array(cf_fields) - coeff0
-
-    if return_raw:
-        return cf_fields_resid, v2_all, v3_all
+    del cf_fields
 
     # Create an evenly spaced grid of V2/V3 coordinates
     nv23 = 8
@@ -1764,18 +2175,301 @@ def _gen_wfefield_coeff(self, force=False, save=True, return_results=False, retu
     # Interpolate onto an evenly space grid
     res = make_coeff_resid_grid(v2_all, v3_all, cf_fields_resid, v2grid, v3grid)
     if save: 
-        np.savez(outname, *res)
+        _log.info(f"Saving to {outname}")
+        np.savez(outname, res, v2grid, v3grid, apname)
 
     if return_results:
-        return res
+        return res, v2grid, v3grid, apname
     else:
-        self._psf_coeff_mod['si_field'] = res[0]
-        self._psf_coeff_mod['si_field_v2grid'] = res[1]
-        self._psf_coeff_mod['si_field_v3grid'] = res[2]
+        self._psf_coeff_mod['si_field'] = res
+        self._psf_coeff_mod['si_field_v2grid'] = v2grid
+        self._psf_coeff_mod['si_field_v3grid'] = v3grid
+        self._psf_coeff_mod['si_field_apname'] = apname
+
+
+def _gen_wfemask_coeff(self, force=False, save=True, return_results=False, return_raw=False, **kwargs):
+
+    if (not self.is_coron):
+        _log.info("Skipping WFE mask dependence...")
+        if not self.is_coron:
+            _log.info("   Coronagraphic image mask not in place")
+        return
+
+    # fov_pix should not be more than some size to preserve memory
+    fov_max = self._fovmax_wfefield if self.oversample<=4 else self._fovmax_wfefield / 2 
+    fov_pix_orig = self.fov_pix
+    if self.fov_pix>fov_max:
+        self.fov_pix = fov_max if (self.fov_pix % 2 == 0) else fov_max + 1
+
+    # Modify bar_offset to always be 0 (center of wedge FOV)
+    # Do this here so that it is captured in the save name
+    bar_offset_orig = self.options.get('bar_offset', None)
+    if (self.name=='NIRCam'):
+        self.options['bar_offset'] = 0
+
+    # Name to save array of oversampled coefficients
+    save_dir = self.save_dir
+    save_name = os.path.splitext(self.save_name)[0] + '_wfemask.npz'
+    outname = save_dir + save_name
+
+    # Load file if it already exists
+    if (not force) and os.path.exists(outname):
+        # Return parameter to original
+        self.fov_pix = fov_pix_orig
+        if self.name=='NIRCam':
+            self.options['bar_offset'] = bar_offset_orig
+
+        _log.info(f"Loading {outname}")
+        out = np.load(outname)
+        if return_results:
+            return out['arr_0'], out['arr_1'], out['arr_2'], out['arr_3']
+        else:
+            self._psf_coeff_mod['si_mask'] = out['arr_0']
+            self._psf_coeff_mod['si_mask_xgrid'] = out['arr_1']
+            self._psf_coeff_mod['si_mask_ygrid'] = out['arr_2']
+            self._psf_coeff_mod['si_mask_apname'] = out['arr_3'].flatten()[0]
+            return
+
+    _log.warn('Generating mask position-dependent coefficients. This may take some time...')
+
+    # Current mask positions to return to at end
+    mask_shift_x_orig = self.options.get('mask_shift_x', 0)
+    mask_shift_y_orig = self.options.get('mask_shift_y', 0)
+    apname = self.aperturename
+
+    # Cycle through a list of field points
+    if self.name=='MIRI':
+        # Series of x and y mask shifts (in mask coordinates)
+        # Negative shifts will place source in upper right quadrant
+        # Depend on PSF symmetries for other three quadrants
+        if 'FQPM' in self.image_mask:
+            xy_offsets = -1 * np.array([0, 0.005, 0.01, 0.08, 0.10, 0.2, 0.5, 1, 10, 12])
+        elif 'LYOT' in self.image_mask:
+            # TODO: Update offsets to optimize for Lyot mask
+            xy_offsets = -1 * np.array([0, 0.01, 0.1, 0.36, 0.5, 1, 2.1, 10, 15])
+        else:
+            raise NotImplementedError(f'{self.name} with {self.image_mask} not implemented.')
+
+        xy_offsets[0] = 0
+        xy_offsets = xy_offsets[::-1] # Ascending order
+        x_offsets = y_offsets = xy_offsets
+        grid_vals = np.array(np.meshgrid(y_offsets,x_offsets))
+        xy_list = [(x,y) for x,y in grid_vals.reshape([2,-1]).transpose()]
+        xoff, yoff = np.array(xy_list).transpose()
+
+        # Small grid dithers indices
+        ind_zero = (np.abs(xoff)==0) & (np.abs(yoff)==0)
+        ind_sgd = (np.abs(xoff)<=0.01) & (np.abs(yoff)<=0.01) & ~ind_zero
+    elif self.name=='NIRCam':
+        nd_squares_orig = self.options.get('nd_squares', True)
+        self.options['nd_squares'] = False
+        if self.image_mask[-1]=='R': # Round masks
+            # Include SGD points
+            xy_inner = np.array([0, 0.015, 0.02, 0.05, 0.1])
+            # M430R sampling; scale others
+            xy_mid = np.array([0.6, 1.2, 2, 2.5])
+            if '210R' in self.image_mask:
+                xy_mid *= 0.488
+            elif '335R' in self.image_mask:
+                xy_mid *= 0.779
+            xy_outer = np.array([5.0, 8.0])
+            xy_offsets = -1 * np.concatenate((xy_inner, xy_mid, xy_outer))
+
+            xy_offsets[0] = 0
+            xy_offsets = xy_offsets[::-1] # Ascending order
+            x_offsets = y_offsets = xy_offsets
+            grid_vals = np.array(np.meshgrid(x_offsets,y_offsets))
+            xy_list = [(x,y) for x,y in grid_vals.reshape([2,-1]).transpose()]
+            xoff, yoff = np.array(xy_list).transpose()
+
+            # Small grid dithers indices
+            ind_zero = (np.abs(xoff)==0) & (np.abs(yoff)==0)
+            ind_sgd = (np.abs(xoff)<=0.02) & (np.abs(yoff)<=0.02) & ~ind_zero
+        else: # Bar masks
+            # LWB sampling of wedge gradient
+            # Include SGD points
+            y_inner = np.array([0, 0.01, 0.02, 0.05, 0.1])
+            y_mid = np.array([0.6, 1.2, 2, 2.5])
+            if 'SW' in self.image_mask:
+                y_mid *= 0.488
+            y_outer = np.array([5,8])
+            y_offsets = np.concatenate([y_inner, y_mid, y_outer])
+            x_offsets = np.array([-8, -6, -4, -2, 0, 2, 4, 6, 8], dtype='float')
+
+            # Mask offset values in ascending order
+            x_offsets = -1*x_offsets[::-1]
+            y_offsets = -1*y_offsets[::-1]
+            grid_vals = np.array(np.meshgrid(x_offsets,y_offsets))
+            xy_list = [(x,y) for x,y in grid_vals.reshape([2,-1]).transpose()]
+            xoff, yoff = np.array(xy_list).transpose()
+
+            # Small grid dithers indices
+            ind_zero = np.abs(yoff)==0
+            ind_sgd = (np.abs(yoff) <= 0.02) & ~ind_zero
+
+
+    # Get PSF coefficients for each specified position
+    log_prev = conf.logging_level
+    setup_logging('WARN', verbose=False)
+    cf_all = []
+    npos = len(xy_list)
+    for i in trange(npos, leave=False, desc=""):
+        self.options['mask_shift_x'] = xy_list[i][0]
+        self.options['mask_shift_y'] = xy_list[i][1]
+        if ind_sgd[i]==True:
+            # Add just a set of 0s for SGD positions
+            cf = np.zeros(self.psf_coeff.shape)
+        else:
+            cf, _ = self.gen_psf_coeff(return_results=True, force=True, save=False, **kwargs)
+        cf_all.append(cf)
+    setup_logging(log_prev, verbose=False)
+
+    # Return raw results for further analysis
+    # Excludes concatenation of symmetric PSFs and SGD calculations
+    if return_raw:
+        # Return to previous values
+        self.options['mask_shift_x'] = mask_shift_x_orig
+        self.options['mask_shift_y'] = mask_shift_y_orig
+        self.fov_pix = fov_pix_orig
+        if self.name=='NIRCam':
+            self.options['nd_squares'] = nd_squares_orig
+            self.options['bar_offset'] = bar_offset_orig
+
+        return np.array(cf_all), xoff, yoff
+
+    # Get residuals
+    coeff0 = cf_all[-1] # (0,0) is in final position
+    cf_resid = np.array(cf_all) - coeff0
+    del cf_all
+
+    # Reshape into cf_resid into [nypos, nxpos, ncf, nypix, nxpix]
+    nxpos = len(x_offsets)
+    nypos = len(y_offsets)
+    xoff = xoff.reshape([nypos,nxpos])
+    yoff = yoff.reshape([nypos,nxpos])
+    sh = cf_resid.shape
+    cf_resid = cf_resid.reshape([nypos,nxpos,sh[1],sh[2],sh[3]])
+    ncf, nypix, nxpix = cf_resid.shape[-3:]
+
+    # MIRI quadrant symmetries 
+    # Also works for NIRCam round masks
+    if (self.name=='MIRI') or (self.name=='NIRCam' and self.image_mask[-1]=='R'):
+
+        field_rot = 0 if self._rotation is None else 2*self._rotation
+
+        # Add same x, but -1*y
+        x_negy  = xoff[:-1,:]
+        y_negy  = -1*yoff[:-1,:][::-1,:]
+        cf_negy = cf_resid[:-1,:][::-1,:]
+        sh_ret  = cf_negy.shape
+        # Flip the PSF coeff image in the y-axis and rotate
+        cf_negy = cf_negy[:,:,:,::-1,:].reshape([-1,nypix,nxpix])
+        cf_negy = rotate_offset(cf_negy, field_rot, reshape=False, order=2, mode='mirror')
+        cf_negy = cf_negy.reshape(sh_ret)
+
+        # Add same y, but -1*x
+        x_negx  = -1*xoff[:,:-1][:,::-1]
+        y_negx  = yoff[:,:-1]
+        cf_negx = cf_resid[:,:-1][:,::-1]
+        sh_ret  = cf_negx.shape
+        # Flip the PSF coeff image in the x-axis and rotate
+        cf_negx = cf_negx[:,:,:,:,::-1].reshape([-1,nypix,nxpix])
+        cf_negx = rotate_offset(cf_negx, field_rot, reshape=False, order=2, mode='mirror')
+        cf_negx = cf_negx.reshape(sh_ret)
+
+        # Add -1*y, -1*x; exclude all x=0 and y=0 coords
+        x_negxy  = -1*xoff[:-1,:-1][::-1,::-1]
+        y_negxy  = -1*yoff[:-1,:-1][::-1,::-1]
+        cf_negxy = cf_resid[:-1,:-1][::-1,::-1]
+        # Flip the PSF coeff image in both x-axis and y-axis
+        cf_negxy = cf_negxy[:,:,:,::-1,::-1]        
+
+        # Combine quadrants
+        xoff1 = np.concatenate((xoff, x_negy), axis=0)
+        xoff2 = np.concatenate((x_negx, x_negxy), axis=0)
+        xoff_all = np.concatenate((xoff1, xoff2), axis=1)
+
+        yoff1 = np.concatenate((yoff, y_negy), axis=0)
+        yoff2 = np.concatenate((y_negx, y_negxy), axis=0)
+        yoff_all = np.concatenate((yoff1, yoff2), axis=1)
+
+        cf1 = np.concatenate((cf_resid, cf_negy), axis=0)
+        cf2 = np.concatenate((cf_negx, cf_negxy), axis=0)
+        cf_resid_all = np.concatenate((cf1, cf2), axis=1)
+
+        # Get all SGD positions now that we've combined all x/y positions
+        # For SGD regions, we want to calculate actual PSFs, not take
+        # the shortcuts that were done above
+        ind_zero = (np.abs(xoff_all)==0) & (np.abs(yoff_all)==0)
+        ind_sgd = (np.abs(xoff_all)<=0.02) & (np.abs(yoff_all)<=0.02) & ~ind_zero
+
+    elif (self.name=='NIRCam') and (self.image_mask[-1]=='B'): # Bar masks
+        # Add same x, but -1*y
+        x_negy  = xoff[:-1,:]
+        y_negy  = -1*yoff[:-1,:][::-1,:]
+        cf_negy = cf_resid[:-1,:][::-1,:]
+        # Flip the PSF coeff image in the y-axis
+        cf_negy = cf_negy[:,:,:,::-1,:]
+
+        # Combine halves
+        xoff_all = np.concatenate((xoff, x_negy), axis=0)
+        yoff_all = np.concatenate((yoff, y_negy), axis=0)
+        cf_resid_all = np.concatenate((cf_resid, cf_negy), axis=0)
+
+        # Get all SGD positions now that we've combined all x/y positions
+        # For SGD regions, we want to calculate actual PSFs, not take
+        # the shortcuts that were done above
+        ind_zero = np.abs(yoff_all)==0
+        ind_sgd = (np.abs(xoff_all)<=0.02) & ~ind_zero
+    else:
+        raise NotImplementedError('Only MIRI for different WFE mask modifications')
+
+    # Get PSF coefficients for each SGD position
+    log_prev = conf.logging_level
+    setup_logging('WARN', verbose=False)
+    # Set to fov calculation size
+    xsgd, ysgd = (xoff_all[ind_sgd], yoff_all[ind_sgd])
+    nsgd = len(xsgd)
+    for xv, yv in tqdm(zip(xsgd, ysgd), total=nsgd, desc='SGD'):
+        self.options['mask_shift_x'] = xv
+        self.options['mask_shift_y'] = yv
+        cf, _ = self.gen_psf_coeff(return_results=True, force=True, save=False, **kwargs)
+        ind = (xoff_all==xv) & (yoff_all==yv)
+        cf_resid_all[ind] = cf - coeff0
+    setup_logging(log_prev, verbose=False)
+
+    # Return to previous values
+    self.options['mask_shift_x'] = mask_shift_x_orig
+    self.options['mask_shift_y'] = mask_shift_y_orig
+    self.fov_pix = fov_pix_orig
+    if self.name=='NIRCam':
+        self.options['nd_squares'] = nd_squares_orig
+        self.options['bar_offset'] = bar_offset_orig
+
+    # x and y grid values to return
+    xvals = xoff_all[0]
+    yvals = yoff_all[:,0]
+
+    # Use field_coeff_func with x and y shift values
+    #   xvals_new = np.array([-1.2, 4.0,  0.1, -3])
+    #   yvals_new = np.array([ 3.0, 2.3, -0.1,  0])
+    #   test = field_coeff_func(xvals, yvals, cf_resid_all, xvals_new, yvals_new)
+    
+    if save: 
+        _log.info(f"Saving to {outname}")
+        np.savez(outname, cf_resid_all, xvals, yvals, apname)
+
+    if return_results:
+        return cf_resid_all, xvals, yvals
+    else:
+        self._psf_coeff_mod['si_mask'] = cf_resid_all
+        self._psf_coeff_mod['si_mask_xgrid'] = xvals
+        self._psf_coeff_mod['si_mask_ygrid'] = yvals
+        self._psf_coeff_mod['si_mask_apname'] = apname
 
 
 
-def _calc_psf_from_coeff(self, sp=None, return_oversample=False, 
+def _calc_psf_from_coeff(self, sp=None, return_oversample=True, 
     wfe_drift=None, coord_vals=None, coord_frame='tel', return_hdul=True, **kwargs):
     """PSF Image from polynomial coefficients
     
@@ -1787,7 +2481,7 @@ def _calc_psf_from_coeff(self, sp=None, return_oversample=False,
     If no spectral dispersers (grisms or DHS), then this returns a single
     image or list of images if sp is a list of spectra. By default, it returns
     only the detector-sampled PSF, but setting return_oversample=True will
-    also return a set of oversampled images as a second output.
+    insted return a set of oversampled images.
 
     Parameters
     ----------
@@ -1799,13 +2493,12 @@ def _calc_psf_from_coeff(self, sp=None, return_oversample=False,
         Coronagraphic PSFs will further decrease this due to the smaller pupil
         size and coronagraphic spot. 
     return_oversample : bool
-        If True, then also returns the oversampled version of the PSF
-    use_bg_psf : bool
-        If a coronagraphic observation, off-center PSF is different.
+        If True, then also returns the oversampled version of the PSF (default: True).
     wfe_drift : float or None
         Wavefront error drift amplitude in nm.
     coord_vals : tuple or None
         Coordinates (in arcsec or pixels) to calculate field-dependent PSF.
+        If multiple values, then this should be an array ([xvals], [yvals]).
     coord_frame : str
         Type of input coordinates. 
 
@@ -1815,7 +2508,7 @@ def _calc_psf_from_coeff(self, sp=None, return_oversample=False,
             * 'idl': arcsecs relative to aperture reference location.
 
     return_hdul : bool
-        TODO: Return PSFs in an HDUList rather than set of arrays
+        Return PSFs in an HDUList rather than set of arrays (default: True).
     """        
 
     psf_coeff_hdr = self.psf_coeff_header
@@ -1837,13 +2530,41 @@ def _calc_psf_from_coeff(self, sp=None, return_oversample=False,
 
     if wfe_drift is None: 
         wfe_drift = 0
-    
-    # Modify PSF coefficients based on WFE drift
-    psf_coeff_mod += _coeff_mod_wfe_drift(self, wfe_drift)
 
     # Modify PSF coefficients based on field-dependence
-    cf_mod, nfield = _coeff_mod_wfe_field(self, coord_vals, coord_frame)
-    psf_coeff_mod += cf_mod
+    # Ignore if there is a focal plane mask
+    # No need for SI WFE field dependence if coronagraphy, but this allows us
+    # to enable `include_si_wfe` for NIRCam PSF calculation
+    nfield = None
+    if self.image_mask is None:
+        cf_mod, nfield = _coeff_mod_wfe_field(self, coord_vals, coord_frame)
+        psf_coeff_mod += cf_mod
+    nfield = 1 if nfield is None else nfield
+
+    # Modify PSF coefficients based on field-dependence with a focal plane mask
+    if self.image_mask is not None:
+        cf_mod, nfield_mask = _coeff_mod_wfe_mask(self, coord_vals, coord_frame)
+        psf_coeff_mod += cf_mod
+    nfield = nfield if nfield_mask is None else nfield_mask
+
+    # Modify PSF coefficients based on WFE drift
+    assert wfe_drift>=0, '`wfe_drift should not be negative'
+    wfe_drift_keys = _wfe_drift_key(self, coord_vals, coord_frame)
+    ukeys = np.unique(wfe_drift_keys)
+    nkeys = len(ukeys)
+    if nkeys==1:
+        psf_coeff_mod += _coeff_mod_wfe_drift(self, wfe_drift, key=ukeys[0])
+    else:
+        # Create coefficients for each unique key
+        cf_mod_list = []
+        for key in ukeys:
+            cf_mod = _coeff_mod_wfe_drift(self, wfe_drift, key=key)
+            cf_mod_list.append(cf_mod)
+        # At each field position, find the corresponding coeff modification
+        for i in range(nfield):
+            ind = np.where(ukeys==wfe_drift_keys[i])[0][0]
+            cf_mod = cf_mod_list[ind]
+            psf_coeff_mod[i] += cf_mod
 
     # Add modifications to coefficients
     psf_coeff = psf_coeff + psf_coeff_mod
@@ -1866,6 +2587,7 @@ def _calc_psf_from_coeff(self, sp=None, return_oversample=False,
             hdul = fits.HDUList()
             for ii, psf in enumerate(psf_all):
                 hdr = psf_coeff_hdr.copy()
+                hdr['EXTNAME'] = 'OVERSAMP' if return_oversample else 'DETSAMP'
                 cunits = 'pixels' if ('sci' in coord_frame) or ('det' in coord_frame) else 'arcsec'
                 hdr['XVAL']     = (xvals[ii], f'[{cunits}] Input X coordinate')
                 hdr['YVAL']     = (yvals[ii], f'[{cunits}] Input Y coordinate')
@@ -1889,9 +2611,10 @@ def _calc_psf_from_coeff(self, sp=None, return_oversample=False,
             hdr = psf_coeff_hdr.copy()
             hdr['WFEDRIFT'] = (wfe_drift, '[nm] WFE drift amplitude')
             if coord_vals is not None:
+                hdr['EXTNAME'] = 'OVERSAMP' if return_oversample else 'DETSAMP'
                 cunits = 'pixels' if ('sci' in coord_frame) or ('det' in coord_frame) else 'arcsec'
                 hdr['XVAL']   = (coord_vals[0], f'[{cunits}] Input X coordinate')
-                hdr['YVAL']   = (coord_vals[0], f'[{cunits}] Input Y coordinate')
+                hdr['YVAL']   = (coord_vals[1], f'[{cunits}] Input Y coordinate')
                 hdr['CFRAME'] = (coord_frame, 'Specified coordinate frame')
             hdul = fits.HDUList([fits.PrimaryHDU(data=psf, header=hdr)])
             # Append wavelength solution
@@ -1903,7 +2626,71 @@ def _calc_psf_from_coeff(self, sp=None, return_oversample=False,
     
     return output
 
-def _coeff_mod_wfe_drift(self, wfe_drift):
+def _wfe_drift_key(self, coord_vals, coord_frame):
+    """
+    Choose which WFE drift coefficient key to use based on coordinate position
+    """
+    xsci = ysci = None
+
+    # Modify PSF coefficients based on position
+    if coord_vals is None:
+        return 'wfe_drift'
+    else:
+        # Determine sci coordinates
+        cframe = coord_frame.lower()
+        if cframe=='sci':
+            xsci, ysci = coord_vals  # pixels
+        elif cframe in ['det', 'tel', 'idl']:
+            x = np.array(coord_vals[0])
+            y = np.array(coord_vals[1])
+            
+            try:
+                apname = self.aperturename
+                siaf_ap = self.siaf[apname]
+                xsci, ysci = siaf_ap.convert(x,y, cframe, 'sci')  
+            except: 
+                # apname = self.get_siaf_apname()
+                self._update_aperturename()
+                apname = self.aperturename
+                if apname is None:
+                    _log.warning('No suitable aperture name defined to determine (xsci,ysci) coordiantes')
+                else:
+                    _log.warning('self.siaf_ap not defined; assuming {}'.format(apname))
+                    siaf_ap = self.siaf[apname]
+                    xsci, ysci = siaf_ap.convert(x,y, cframe, 'sci')  # arcsec
+                _log.warning('Update self.siaf_ap for more specific conversions to (xsci,ysci).')
+        else:
+            # Can't figure out coordinate frames, so set to 0
+            return 'wfe_drift'
+
+    # Assume we successfully found (xsci,ysci)
+    if (xsci is not None):
+        nfield = np.size(xsci)
+        field_rot = 0 if self._rotation is None else self._rotation
+
+        apname = self.aperturename
+        siaf_ap = self.siaf[apname]
+
+        # Convert to mask shifts (arcsec)
+        xoff_asec = (xsci - siaf_ap.XSciRef) * siaf_ap.XSciScale
+        yoff_asec = (ysci - siaf_ap.YSciRef) * siaf_ap.YSciScale
+        xoff, yoff = xy_rot(-1*xoff_asec, -1*yoff_asec, field_rot)
+        roff = np.sqrt(xoff**2 + yoff**2)
+        if nfield==1:
+            roff = [roff]
+
+        # Choose either wfe_drift or wfe_drift_off for each position
+        res = []
+        for r in roff:
+            key = 'wfe_drift' if r<0.1 else 'wfe_drift_off'
+            res.append(key)
+
+        return res
+    else:
+        return 'wfe_drift'
+
+
+def _coeff_mod_wfe_drift(self, wfe_drift, key='wfe_drift'):
     """
     Modify PSF polynomial coefficients as a function of WFE drift.
     """
@@ -1911,16 +2698,15 @@ def _coeff_mod_wfe_drift(self, wfe_drift):
     # Modify PSF coefficients based on WFE drift
     if wfe_drift==0:
         cf_mod = 0 # Don't modify coefficients
-    elif (self._psf_coeff_mod['wfe_drift'] is None):
+    elif (self._psf_coeff_mod[key] is None):
         _log.warning("You must run `gen_wfedrift_coeff` first before setting the wfe_drift parameter.")
         _log.warning("Will continue assuming `wfe_drift=0`.")
         cf_mod = 0
     else:
-
         psf_coeff_hdr = self.psf_coeff_header
         psf_coeff     = self.psf_coeff
 
-        cf_fit = self._psf_coeff_mod['wfe_drift'] 
+        cf_fit = self._psf_coeff_mod[key] 
         lxmap  = self._psf_coeff_mod['wfe_drift_lxmap'] 
 
         # Fit function
@@ -1945,7 +2731,7 @@ def _coeff_mod_wfe_field(self, coord_vals, coord_frame):
 
     v2 = v3 = None
     cf_mod = 0
-    nfield = 1
+    nfield = None
 
     psf_coeff_hdr = self.psf_coeff_header
     psf_coeff     = self.psf_coeff
@@ -1953,13 +2739,17 @@ def _coeff_mod_wfe_field(self, coord_vals, coord_frame):
     cf_fit = self._psf_coeff_mod['si_field'] 
     v2grid  = self._psf_coeff_mod['si_field_v2grid'] 
     v3grid  = self._psf_coeff_mod['si_field_v3grid'] 
+    apname  = self._psf_coeff_mod['si_feild_apname']
+    siaf_ap = self.siaf[apname] if apname is not None else None
 
     # Modify PSF coefficients based on position
     if coord_vals is None:
-         pass
+        pass
     elif self._psf_coeff_mod['si_field'] is None:
-        _log.warning("You must run `gen_wfefield_coeff` first before setting the coord_vals parameter.")
-        _log.warning("`calc_psf_from_coeff` will continue with default PSF.")
+        si_wfe_str = 'True' if self.include_si_wfe else 'False'
+        _log.info(f"Skipping WFE field dependence: self._psf_coeff_mod['si_field']=None and self.include_si_wfe={si_wfe_str}")
+        # _log.warning("You must run `gen_wfefield_coeff` first before setting the coord_vals parameter.")
+        # _log.warning("`calc_psf_from_coeff` will continue with default PSF.")
         cf_mod = 0
     else:
         # Determine V2/V3 coordinates
@@ -1970,24 +2760,7 @@ def _coeff_mod_wfe_field(self, coord_vals, coord_frame):
         elif cframe in ['det', 'sci', 'idl']:
             x = np.array(coord_vals[0])
             y = np.array(coord_vals[1])
-            
-            try:
-                apname = self.aperturename
-                siaf_ap = self.siaf[apname]
-                v2, v3 = siaf_ap.convert(x,y, cframe, 'tel')
-                v2, v3 = (v2/60., v3/60.) # convert to arcmin
-            except: 
-                # apname = self.get_siaf_apname()
-                self._update_aperturename()
-                apname = self.aperturename
-                if apname is None:
-                    _log.warning('No suitable aperture name defined to determine V2/V3 coordiantes')
-                else:
-                    _log.warning('self.siaf_ap not defined; assuming {}'.format(apname))
-                    siaf_ap = self.siaf[apname]
-                    v2, v3 = siaf_ap.convert(x,y, cframe, 'tel')
-                    v2, v3 = (v2/60., v3/60.)
-                _log.warning('Update self.siaf_ap for more specific conversions to V2/V3.')
+            v2, v3 = siaf_ap.convert(x,y, cframe, 'tel')
         else:
             _log.warning("coord_frame setting '{}' not recognized.".format(coord_frame))
             _log.warning("`calc_psf_from_coeff` will continue with default PSF.")
@@ -2006,3 +2779,129 @@ def _coeff_mod_wfe_field(self, coord_vals, coord_frame):
             cf_mod = cf_mod_resize
 
     return cf_mod, nfield
+
+def _coeff_mod_wfe_mask(self, coord_vals, coord_frame):
+    """
+    Modify PSF polynomial coefficients as a function of V2/V3 position.
+
+    Parameters
+    ----------
+    coord_vals : tuple or None
+        Coordinates (in arcsec or pixels) to calculate field-dependent PSF.
+    coord_frame : str
+        Type of desired output coordinates. 
+
+            * 'tel': arcsecs V2,V3
+            * 'sci': pixels, in conventional DMS axes orientation
+            * 'det': pixels, in raw detector read out axes orientation
+            * 'idl': arcsecs relative to aperture reference location.
+    """
+
+    xsci = ysci = None
+    cf_mod = 0
+    nfield = None
+
+    psf_coeff_hdr = self.psf_coeff_header
+    psf_coeff     = self.psf_coeff
+
+    cf_fit = self._psf_coeff_mod['si_mask'] 
+    xgrid  = self._psf_coeff_mod['si_mask_xgrid'] 
+    ygrid  = self._psf_coeff_mod['si_mask_ygrid'] 
+    apname = self._psf_coeff_mod['si_mask_apname']
+    siaf_ap = self.siaf[apname] if apname is not None else None
+
+    # Coord values are set, but not coefficients supplied
+    if (coord_vals is not None) and (cf_fit is None):
+        _log.info("You must run `gen_wfemask_coeff` first before setting the coord_vals parameter for masked focal planes.")
+        _log.info("`calc_psf_from_coeff` will continue without mask field dependency.")
+    # No coord values, but NIRCam bar/wedge mask in place
+    elif (coord_vals is None) and (self.name=='NIRCam') and (self.image_mask[-1]=='B'):
+        # Determine desired location along bar
+        bar_offset = self.get_bar_offset()
+        if (bar_offset != 0) and (cf_fit is None):
+            _log.info("You must run `gen_wfemask_coeff` to obtain bar offset PSFs.")
+            _log.info("`calc_psf_from_coeff` will continue assuming bar_offset=0.")
+        else:
+            nfield = 1
+            # Get sci coords in pixels
+            bar_offset_pix = bar_offset / siaf_ap.XSciScale
+            xsci = siaf_ap.XSciRef + bar_offset_pix
+            ysci = siaf_ap.YSciRef
+    elif (coord_vals is not None):
+        # Determine sci coordinates
+        cframe = coord_frame.lower()
+        if cframe=='sci':
+            xsci, ysci = coord_vals  # pixels
+        elif cframe in ['det', 'tel', 'idl']:
+            x = np.array(coord_vals[0])
+            y = np.array(coord_vals[1])
+            xsci, ysci = siaf_ap.convert(x,y, cframe, 'sci')
+        else:
+            _log.warning("coord_frame setting '{}' not recognized.".format(coord_frame))
+            _log.warning("`calc_psf_from_coeff` will continue with default PSF.")
+
+    # PSF Modifications assuming we successfully found (xsci,ysci)
+    if (xsci is not None):
+        # print(v2,v3)
+        nfield = np.size(xsci)
+        field_rot = 0 if self._rotation is None else self._rotation
+
+        # Convert to mask shifts (arcsec)
+        xoff_asec = (xsci - siaf_ap.XSciRef) * siaf_ap.XSciScale  # asec offset from reference
+        yoff_asec = (ysci - siaf_ap.YSciRef) * siaf_ap.YSciScale  # asec offset from reference
+        xoff, yoff = xy_rot(-1*xoff_asec, -1*yoff_asec, field_rot)
+
+        cf_mod = field_coeff_func(xgrid, ygrid, cf_fit, xoff, yoff)
+
+        # Pad cf_mod array with 0s if undersized
+        psf_cf_dim = len(psf_coeff.shape)
+        if not np.allclose(psf_coeff.shape, cf_mod.shape[-psf_cf_dim:]):
+            new_shape = psf_coeff.shape[1:]
+            cf_mod_resize = np.array([pad_or_cut_to_size(im, new_shape) for im in cf_mod])
+            cf_mod = cf_mod_resize
+
+    return cf_mod, nfield
+
+def _calc_sgd(self, xoff_asec, yoff_asec, use_coeff=True, 
+              return_oversample=True, **kwargs):
+    """Calculate small grid dithers PSFs"""
+
+    if self.is_coron==False:
+        _log.warn("`calc_sgd` only valid for coronagraphic observations (set `image_mask` attribute).")
+        return
+
+    if use_coeff:
+        apname = self._psf_coeff_mod['si_mask_apname']
+        siaf_ap = self.siaf[apname]
+        xoff_pix = xoff_asec / siaf_ap.XSciScale
+        yoff_pix = yoff_asec / siaf_ap.YSciScale
+
+        xsci = siaf_ap.XSciRef + xoff_pix
+        ysci = siaf_ap.YSciRef + yoff_pix
+        hdul_sgd = self.calc_psf_from_coeff(coord_frame='sci', coord_vals=(xsci,ysci), 
+                                            return_oversample=True, **kwargs)
+    else:
+        
+        # Current shift positions to return to after calculations
+        mask_shift_x_orig = self.options.get('mask_shift_x', 0)
+        mask_shift_y_orig = self.options.get('mask_shift_y', 0)
+
+        npos = len(xoff_asec)
+        log_prev = conf.logging_level
+        setup_logging('WARN', verbose=False)
+        hdul_sgd = fits.HDUList()
+        for xoff, yoff in tqdm(zip(xoff_asec, yoff_asec), total=npos):
+            # Shift mask in opposite direction
+            self.options['mask_shift_x'] = -1*xoff
+            self.options['mask_shift_y'] = -1*yoff
+            res = self.calc_psf(fov_pixels=self.fov_pix, oversample=self.oversample, 
+                                add_distortion=False, crop_psf=False)
+            hdu = res[0] if return_oversample else res[1]
+            # hdul.append(fits.ImageHDU(data=hdu.data, header=hdu.hdr))
+            hdul_sgd.append(hdu)
+        setup_logging(log_prev, verbose=False)
+        self.options['mask_shift_x'] = mask_shift_x_orig
+        self.options['mask_shift_y'] = mask_shift_y_orig
+
+    return hdul_sgd
+

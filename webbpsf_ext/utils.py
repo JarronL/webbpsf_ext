@@ -58,4 +58,3 @@ if not on_rtd:
     # except ImportError:
     #     _log.info("  jwst_backgrounds is not installed and will not be used for bg estimates.")
     #     _jbt_exists = False
-

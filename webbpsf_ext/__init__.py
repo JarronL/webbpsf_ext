@@ -55,8 +55,9 @@ class Conf(_config.ConfigNamespace):
         path = os.getenv('WEBBPSF_EXT_PATH')
         if path is None:
             print("WARNING: Environment variable $WEBBPSF_EXT_PATH is not set!")
-            print("  Setting WEBBPSF_EXT_PATH to temporary directory.")
-            path = tempfile.gettempdir()
+            import webbpsf
+            path = webbpsf.utils.get_webbpsf_data_path()
+            print("  Setting WEBBPSF_EXT_PATH to WEBBPSF directory:")
             print("  {}".format(path))
         if not os.path.isdir(path):
             raise IOError("WEBBPSF_EXT_PATH ({}) is not a valid directory path!".format(path))
@@ -90,6 +91,7 @@ setup_logging(conf.default_logging_level, verbose=False)
 
 from .bandpasses import miri_filter, nircam_filter
 from .webbpsf_ext_core import MIRI_ext, NIRCam_ext
+# from .spectra import stellar_spectrum
 
 def _reload(name="webbpsf_ext"):
     """

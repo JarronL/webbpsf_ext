@@ -25,7 +25,7 @@ def dist_image(image, pixscale=None, center=None, return_theta=False):
         dictates the units of the output distances. If None,
         then values are in units of pixels.
     center : tuple
-        Location (x,y) in the array calculate distance. If set 
+        Pixel location (x,y) in the array calculate distance. If set 
         to None, then the default is the array center pixel.
     return_theta : bool
         Also return the angular positions as a 2nd element.
@@ -214,3 +214,64 @@ def NIRCam_V2V3_limits(module, channel='LW', pupil=None, rederive=False, return_
 
     return v2_min, v2_max, v3_min, v3_max 
 
+
+
+def gen_sgd_offsets(sgd_type, fsm_std=2, slew_std=5):
+    """
+    Create a series of x and y position offsets for a SGD 
+    
+    Parameters
+    ==========
+    sgd_type : str
+        Small grid dither pattern. Valid types are
+        '9circle', '5box', '5diamond', '3bar', '5miri', and '9miri'
+        where the first four refer to NIRCam coronagraphyic dither
+        positions and the last two are for MIRI coronagraphy.
+    fsm_std : float
+        One-sigma accuracy per axis of fine steering mirror positions.
+        This provides randomness to each position relative to the nominal 
+        central position. Ignored for central position. Values are in mas. 
+    slew_std : float
+        One-sigma accuracy per axis of the initial slew. This is applied
+        to all positions and gives a baseline offset relative to the
+        desired mask center. Values are in mas.
+    """
+    
+    if sgd_type=='9circle':
+        xoff_msec = np.array([0.0,  0,-15,-20,-15,  0,+15,+20,+15])
+        yoff_msec = np.array([0.0,+20,+15,  0,-15,-20,-15,  0,+15])
+    elif sgd_type=='5box':
+        xoff_msec = np.array([0.0,+15,-15,-15,+15])
+        yoff_msec = np.array([0.0,+15,+15,-15,-15])
+    elif sgd_type=='5diamond':
+        xoff_msec = np.array([0.0,  0,  0,  0,  0])
+        yoff_msec = np.array([0.0,+20,-20,+20,-20])
+    elif sgd_type=='5bar':
+        xoff_msec = np.array([0.0,  0,  0,  0,  0])
+        yoff_msec = np.array([0.0,+20,+10,-10,-20])
+    elif sgd_type=='3bar':
+        xoff_msec = np.array([0.0,  0,  0])
+        yoff_msec = np.array([0.0,+15,-15])
+    elif sgd_type=='5miri':
+        xoff_msec = np.array([0.0,-10,+10,+10,-10])
+        yoff_msec = np.array([0.0,+10,+10,-10,-10])
+    elif sgd_type=='9miri':
+        xoff_msec = np.array([0.0,-10,-10,  0,+10,+10,+10,  0,-10])
+        yoff_msec = np.array([0.0,  0,+10,+10,+10,  0,-10,-10,-10])
+    else:
+        raise ValueError(f"{sgd_type} not a valid SGD type")
+        
+    # Add randomized telescope offsets
+    if slew_std>0:
+        x_point, y_point = np.random.normal(scale=slew_std, size=2)
+        xoff_msec += x_point
+        yoff_msec += y_point
+
+    # Add randomized FSM offsets
+    if fsm_std>0:
+        x_fsm = np.random.normal(scale=fsm_std, size=xoff_msec.shape)
+        y_fsm = np.random.normal(scale=fsm_std, size=yoff_msec.shape)
+        xoff_msec[1:] += x_fsm[1:]
+        yoff_msec[1:] += y_fsm[1:]
+    
+    return xoff_msec / 1000, yoff_msec / 1000

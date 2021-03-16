@@ -21,7 +21,7 @@ from scipy.interpolate import griddata, RegularGridInterpolator, interp1d
 from numpy.polynomial import legendre
 
 # Program bar
-from tqdm.auto import trange, tqdm
+# from tqdm.auto import trange, tqdm
 
 __epsilon = np.finfo(float).eps
 
@@ -223,7 +223,7 @@ def gen_image_from_coeff(inst, coeff, coeff_hdr, sp_norm=None, nwaves=None,
     # Get Bandpass
     bp = inst.bandpass
 
-    # Get wavelenght range
+    # Get wavelength range
     npix = coeff.shape[-1]
     waveset = create_waveset(bp, npix, nwaves=nwaves)
     wgood = waveset / 1e4
@@ -234,7 +234,7 @@ def gen_image_from_coeff(inst, coeff, coeff_hdr, sp_norm=None, nwaves=None,
     # List of sp observation converted to count rate
     obs_list = create_obslist(bp, npix, sp_norm=sp_norm, 
                               use_sp_waveset=use_sp_waveset, nwaves=nwaves)
-    waveset = obs_list[0].wave
+    waveset = obs_list[0].binwave
     wgood = waveset / 1e4
     nspec = len(obs_list)
 
@@ -460,7 +460,7 @@ def make_coeff_resid_grid(xin, yin, cf_resid, xgrid, ygrid):
 def field_coeff_func(v2grid, v3grid, cf_fields, v2_new, v3_new):
     """Interpolation function for PSF coefficient residuals
 
-    Uses RegularGridInterpolator to quickly determine new coefficient
+    Uses `RegularGridInterpolator` to quickly determine new coefficient
     residulas at specified points.
 
     Parameters
