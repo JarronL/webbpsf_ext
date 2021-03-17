@@ -19,7 +19,7 @@ import logging
 _log = logging.getLogger('webbpsf_ext')
 
 from . import __path__
-spec_dir = __path__[0] + '/spectra/'
+_spec_dir = __path__[0] + '/spectra/'
 
 def BOSZ_filename(Teff, metallicity, log_g, res, carbon=0, alpha=0):
     """ Generate filename for BOSZ spectrum. """
@@ -54,7 +54,7 @@ def download_BOSZ_spectrum(Teff, metallicity, log_g, res, carbon=0, alpha=0):
 
     import requests
 
-    model_dir = spec_dir + 'bosz_grids/'
+    model_dir = _spec_dir + 'bosz_grids/'
     res_dir = model_dir + 'R{}/'.format(res)
 
     # Create resolution directory if it doesn't exists
@@ -132,7 +132,7 @@ def BOSZ_spectrum(Teff, metallicity, log_g, res=2000, interpolate=True,
     https://archive.stsci.edu/prepds/bosz/
     """
 
-    model_dir = spec_dir + 'bosz_grids/'
+    model_dir = _spec_dir + 'bosz_grids/'
     res_dir = model_dir + 'R{}/'.format(res)
 
     if not os.path.isdir(model_dir):
@@ -937,7 +937,7 @@ class planets_sb12(object):
             - 'cf3s' = cloud-free, 3x solar abundances
 
     mass: float
-        A number 1 to 15 Jupiter masses.
+        A number 1 to 15 Jupiter masses (increments of 1MJup).
     age: float
         Age in millions of years (1-1000)
     entropy: float
@@ -960,7 +960,7 @@ class planets_sb12(object):
     """
 
 	# Define default self.base_dir
-    _base_dir = spec_dir + 'spiegel/'
+    _base_dir = _spec_dir + 'spiegel/'
 
     def __init__(self, atmo='hy1s', mass=1, age=100, entropy=10.0, distance=10,
                  accr=False, mmdot=None, mdot=None, accr_rin=2.0, truncated=False,
@@ -971,10 +971,15 @@ class planets_sb12(object):
         self._age = age
         self._entropy = entropy
 
+        # Directory of atmospheric files
         if base_dir is not None:
             self._base_dir = base_dir
         self.sub_dir = self._base_dir  + 'SB.' + self.atmo + '/'
 
+        # Extract tar.gz file if directory does not exist
+        self._extract_dir()
+
+        # Find and read appropriate file
         self._get_file()
         self._read_file()
         self.distance = distance
@@ -992,6 +997,16 @@ class planets_sb12(object):
 
         self.rin = accr_rin
         self.truncated = truncated
+
+    def _extract_dir(self):
+        """Check if directory exists or is still .tar.gz"""
+        import tarfile
+
+        tar_file = self._base_dir  + 'SB.' + self.atmo + '.tar.gz'
+        if not os.path.isdir(self.sub_dir):
+            tar = tarfile.open(tar_file, "r:gz")
+            tar.extractall(self._base_dir)
+            tar.close()
 
     def _get_file(self):
         """Find the file closest to the input parameters"""
@@ -1018,6 +1033,10 @@ class planets_sb12(object):
         # Get the final file name
         self.file = ((files[ind_mass])[ind_age])[0]
 
+        # Update attributes
+        self._mass = masses[ind_mass][0]
+        self._age = ages[ind_mass][ind_age][0]
+
     def _read_file(self):
         """Read in the file data"""
         # Read in the file's content row-by-row (saved as a string)
@@ -1036,12 +1055,16 @@ class planets_sb12(object):
         nrow = len(content)
         arr = np.zeros([nrow,ncol])
         for i,row in enumerate(content):
-            arr[i,:] = np.array(content[i].split(), dtype='float64')
+            arr[i,:] = np.array(row.split(), dtype='float64')
 
         # Find the closest entropy and save
         entropy = arr[1:,0]
         diff = np.abs(self.entropy - entropy)
         ind = diff == np.min(diff)
+        # Update entropy attribute
+        self._entropy = entropy[ind][0]
+
+        # Get Fluxes
         self._flux = arr[1:,1:][ind,:].flatten()
         self._fluxunits = 'mJy'
 
@@ -1171,7 +1194,7 @@ def sp_accr(mmdot, rin=2, dist=10, truncated=False,
         Location of accretion model sub-directories.
     """
 
-    base_dir = spec_dir if base_dir is None else base_dir
+    base_dir = _spec_dir if base_dir is None else base_dir
     fname = base_dir + 'zhu15_accr.txt'
 
     names = ('MMdot', 'Rin', 'Tmax', 'J', 'H', 'K', 'L', 'M', 'N', 'J2', 'H2', 'K2', 'L2', 'M2', 'N2')
@@ -1236,7 +1259,7 @@ def jupiter_spec(dist=10, waveout='angstrom', fluxout='flam', base_dir=None):
         Location of tabulated file irwin_2014_ref_spectra.txt.
     """
 
-    base_dir = spec_dir + 'solar_system/' if base_dir is None else base_dir
+    base_dir = _spec_dir + 'solar_system/' if base_dir is None else base_dir
     fname = base_dir + 'irwin_2014_ref_spectra.txt'
 
     # Column 1: Wavelength (in microns)
@@ -1297,7 +1320,7 @@ def linder_table(file=None, **kwargs):
 
     # Default file to read and load
     if file is None:
-        indir = spec_dir + 'linder/isochrones/'
+        indir = _spec_dir + 'linder/isochrones/'
         file = indir + 'BEX_evol_mags_-3_MH_0.00.dat'
 
     with open(file) as f:
@@ -1383,7 +1406,7 @@ def linder_filter(table, filt, age, dist=10, cond_interp=True, cond_file=None, *
 
     #######################################################
     # Grab COND model data to fill in higher masses
-    base_dir = spec_dir + 'cond_models/'
+    base_dir = _spec_dir + 'cond_models/'
     if cond_file is None: 
         cond_file = base_dir + 'model.AMES-Cond-2000.M-0.0.JWST.Vega'
         
@@ -1522,7 +1545,7 @@ def cond_table(age=None, file=None, **kwargs):
 
     # Default file to read and load
     if file is None:
-        base_dir = spec_dir + 'cond_models/'
+        base_dir = _spec_dir + 'cond_models/'
         file = base_dir + 'model.AMES-Cond-2000.M-0.0.JWST.Vega'
 
     with open(file) as f:
