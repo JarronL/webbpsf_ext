@@ -1,0 +1,16 @@
+BOSZ stellar atmospheres (Bohlin et al 2017).
+https://archive.stsci.edu/prepds/bosz/
+
+Wavelength values range between 1000 Angstroms to 32 microns.
+Teff range from 3500K to 36000K.
+metallicty from -2.25 to 0.5 in 0.25 increments
+logg from 0 to 5 in 0.5 increments.
+
+Different spectral resolutions (instrument broadening) can also be specified.
+Valid res: [200, 500, 1000, 2000, 5000, 10000, 20000, 50000, 100000, 300000]
+Each folder has a wget script originally used for downloading the files. 
+Similar scripts can be used for different resolutions. For instance, a folder for 
+R=20000  exists with a wget script to download that data from stsci (~23GB).
+
+The `BOSZ_spectrum` and `download_BOSZ_spectrum` in spectra.py will automatically
+download and populate directories with missing files.

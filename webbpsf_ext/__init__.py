@@ -91,7 +91,7 @@ setup_logging(conf.default_logging_level, verbose=False)
 
 from .bandpasses import miri_filter, nircam_filter
 from .webbpsf_ext_core import MIRI_ext, NIRCam_ext
-# from .spectra import stellar_spectrum
+from .spectra import stellar_spectrum
 
 def _reload(name="webbpsf_ext"):
     """

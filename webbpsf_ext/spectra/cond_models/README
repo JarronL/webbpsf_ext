@@ -1,0 +1,66 @@
+In this directory you will find the precomputed grids of model atmosphere,
+synthetic spectra, colors and isochrones, as well as the papers in which these
+grids are published (http://phoenix.ens-lyon.fr/Grids/).  The BT and AMES in 
+the names of the grids refer to the source of water vapor line list used in 
+these models (BT stands for the Barber & Tennyson BT2 2006 line list, while 
+AMES stands for the Partridge & Schwenke 1997 line list). The NextGen models 
+used the preliminary water vapor line list by Schryber, Miller & Tennyson
+1995. There is four different types of models below: the NextGen appellation 
+is reserved for pure gas phase equilibrium models, the Dusty appellation
+refers to models in which dust is formed is equilibrium with the gas phase 
+(maximum dust content), the Cond appellation refers to Dusty models is which 
+the dust opacity has been neglected to simulated a minimum dust content case, 
+and finally the Settl appelation refers to models accounting for dust
+formation via a paramater-free cloud model (base on the work by Rossow 1978). 
+Relative to Dusty models, the latter models include among other microphysical 
+processes, gravitational settling, which explains the choice of the Settl
+label for these models.   
+
+These models are provided for different solar abundance values from
+different authors when available. CIFIST2011 stands for the Caffau et
+al. (2011) values. AGSS2009 stands for the values by Asplund et
+al. (2009). GAS2007 stands for the Grevesse, Asplund & Sauval (2007)
+values. And GNS1993 stands for the original Grevesse, Noels & Sauval (1993)
+values. However, the model grids do not differ by only the source of solar
+abundances, but represent the Phoenix code development status (opacities,
+cloud model) at the time of computation. The best models are therefore the
+models that are the most recent i.e. computed with the most recent solar
+abundance values. But you can of course run Phoenix with any of the offered
+compositions using the Phoenix web simulator (http://phoenix.ens-lyon.fr/simulator).
+
+ -Papers      Papers in which the different grids have been published.
+
+ -Tables      Precomputed opacity tables available for download.
+
+ -BT-Settl    With a cloud model, valid across the entire parameter range (GNS1993, AGSS2009 & CIFIST2011)
+              Allard et al. '03, Allard et al. '07, Allard et al. '09, 
+              Allard et al. '10, Allard et al. '11, Allard et al. '12a,b
+              Allard et al. '13
+
+ -BT-Dusty    Same as AMES-Dusty with updated opacities (only CIFIST2011 available) 
+              Allard et al. '09, Allard et al. '10, Allard et al. '11, 
+              Allard et al. '12
+
+ -BT-Cond     Same as AMES-Cond with updated opacities (only CIFIST2011 available)
+              Allard et al. '09, Allard et al. '10, Allard et al. '11, 
+              Allard et al. '12
+
+ -BT-NextGen  Same as NextGen with updated opacities (only CIFIST2011 available)		
+              Allard et al. '09, Allard et al. '10, Allard et al. '11, 
+              Allard et al. '12
+
+ -AMES-Dusty  Dust in equilibrium with gas phase, (only GNS1993 available)
+              "valid" for Near-IR studies with Teff > 1700 K
+     	      Allard et al. '01, Chabrier et al. '00
+
+ -AMES-Cond   Same as AMES-Dusty with dust opacities ignored, (only GNS1993 available)
+              "valid" for Teff< 1400 K         
+              Allard et al. '01, Baraffe et al. '03
+
+ -NextGen     Gas phase only, valid for Teff > 2700 K (only GNS1993 available)
+              Allard et al. '97, Baraffe et al. '97, Baraffe et al.'98, 
+              Hauschildt et al. '99
+
+
+
+ 

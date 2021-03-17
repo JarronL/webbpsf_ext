@@ -1,0 +1,114 @@
+                FORMAT OF THE SPECTRA OUTPUT FILES
+
+You can find the  pre-computed grids, also accessible via links on
+the bottom part of the simulator presentation page, or using this link:
+http://phoenix.ens-lyon.fr/Grids/
+
+The file names contain the main parameters of the models:
+lte{Teff/10}-{Logg}{[M/H]}a[alpha/H].GRIDNAME.7.spec.gz/bz2/xz
+is the synthetic spectrum for the requested effective temperature
+(Teff),surface gravity (Logg), metallicity by log10 number density with
+respect to solar values ([M/H]), and alpha element enhencement relative     
+to solar values [alpha/H]. The model grid is also mentioned in the name.
+
+Spectra are provided in an ascii format (*.7.gz):
+
+column1: wavelength in Angstroem
+column2: 10**(F_lam + DF) to convert to Ergs/sec/cm**2/A
+column3: 10**(B_lam + DF) i.e. the blackbody fluxes of same Teff in same units.
+
+Additional columns, obtained systematically when computing spectra using the
+Phoenix simulator, give the information to identify atomic and molecular
+lines. This information is used by the idl scripts lineid.pro and plotid.pro 
+which are provided in the user result package.  
+   
+With the stacked ascii format (*.spec.gz files ) we have rather:
+
+line1: Teff logg [M/H] of the model
+line2: number of wavelengths
+line3: F_lam(n) X 10**DF , n=1,number of wavelengths
+lineX: B_lam(n) X 10**DF , n=1,number of wavelengths
+
+This older file format is no longer used and no ID output is provided with those files.
+
+DF= -8.d0 for all most recent models (Ergs/sec/cm**2/cm). For older model
+series like the NextGen and AMES-Cond grids DF= -26.9007901434d0, 
+because previous Phoenix outputs were giving out the luminosity, 
+L (= R**2 * H) in erg/s/cm**2/cm.  And for NextGen spectra
+of effective temperature 5000K and above, DF'= -28.9007901434d0.
+
+***A very important point is that since models are often computed on parallel
+computers using several nodes, it is important to sort the spectra files in
+increasing wavelength order prior to using them.***
+
+Please note that a convertion of the fluxes to absolute fluxes as measured at
+the earth requires a multiplication by the dilution factor
+(radius/distance)**2. The distance cancels out when accounting 
+simultaneously for the dilution factor and distance modulus at 10 pc
+(for absolute magnitudes for instance). This is done using the following
+formula:
+            M = m' - 5 * log10 ( Stellar_radius [in pc] ) + 5, 
+
+where m' is the magnitude associated to the flux F' (= 10**(lgF + DF), 
+where F is the value directly contained in the spectrum file). 
+
+The model parameters are indicated by the name of the files.
+E.g. lte030-6.0-0.0.AMES-dusty.7.gz means a model with Teff=3000K; 
+logg=6.0 and [M/H]=0.0, and that it is computed using both the 
+TiO and H2O line lists from Nasa AMES, and that it includes full 
+dust treatment (both condensation AND opacities). In the case of the most
+recent models, the Barber & Tennison (UCL) so-called BT2 water vapor line list
+has been used explaining why all those models bear names starting with 'BT-'. 
+BT-Dusty refers to dust in equilibrium with the gas phase (sedimentation is
+neglected), while BT-Cond includes dust condensation in equilibrium with the
+gas phase while neglecting their opacities in the radiative transfer. BT-Settl
+means that gravitational settling of sedimentation is accounted for in the
+frame of a detailed cloud model (slightly adapted from Rossow '78) which also
+account for supersaturation, nucleation, sedimentation and mixing.   
+
+Note that Phoenix delivers synthetic spectra in the vaccum and that a line
+shift is necessary to adapt these synthetic spectra for comparisons to
+observations from the ground. For this, divide the vacuum wavelengths by
+(1+1.e-6*nrefrac) as returned from the function below to get the air 
+wavelengths (or use the equation for AIR from it).  
+
+
+def nrefrac(wavelength, density=1.0):
+   """Calculate refractive index of air from Cauchy formula.
+
+   Input: wavelength in Angstrom, density of air in amagat (relative to STP,
+   e.g. ~10% decrease per 1000m above sea level).
+   Returns N = (n-1) * 1.e6. 
+   """
+
+   # The IAU standard for conversion from air to vacuum wavelengths is given
+   # in Morton (1991, ApJS, 77, 119). For vacuum wavelengths (VAC) in
+   # Angstroms, convert to air wavelength (AIR) via: 
+
+   #  AIR = VAC / (1.0 + 2.735182E-4 + 131.4182 / VAC^2 + 2.76249E8 / VAC^4)
+
+   try:
+       if isinstance(wavelength, types.ObjectType):
+           wl = np.array(wavelength)
+   except TypeError:
+       return None
+
+   wl2inv = (1.e4/wl)**2
+   refracstp = 272.643 + 1.2288 * wl2inv  + 3.555e-2 * wl2inv**2
+   return density * refracstp
+
+
+
+
+DISCLAIMER
+
+The model atmopsheres and synthetic spectra ARE ONLY adressing the PHOTOSPHERE
+and do not include parts of the atmosphere which are not governed by
+hydrostatic equilibrium such as chromospheres and corona for stars or
+exospheric evaporation in the case of irradiated planets or stars. 
+
+The simulator uses the most recent code version to generate as close as
+possible spectra compatible with the published grids i.e. by adopting the
+same parameters (mixing length, geometry of the radiative transfer, opacities
+for the most important when possible). No attemps has been made to reproduce 
+those older results exactly. 
