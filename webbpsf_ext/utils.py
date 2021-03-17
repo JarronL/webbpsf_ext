@@ -30,8 +30,8 @@ import logging
 _log = logging.getLogger('webbpsf_ext')
 
 import pysynphot as S
-# Extend default wavelength range to 5.6 um
-S.refs.set_default_waveset(minwave=500, maxwave=56000, num=10000.0, delta=None, log=False)
+# Extend default wavelength range to 35 um
+S.refs.set_default_waveset(minwave=500, maxwave=350000, num=10000.0, delta=None, log=False)
 # JWST 25m^2 collecting area
 # Flux loss from masks and occulters are taken into account in WebbPSF
 # S.refs.setref(area = 25.4e4) # cm^2
