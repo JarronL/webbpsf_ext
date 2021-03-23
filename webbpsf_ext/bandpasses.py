@@ -1,17 +1,15 @@
 # Import libraries
 import numpy as np
-import matplotlib
-import matplotlib.pyplot as plt
-
 from astropy.io import fits, ascii
-from astropy.table import Table
-import astropy.units as u
 
-from .utils import conf, webbpsf, poppy, S
+from .utils import webbpsf, S
 
 import logging
 _log = logging.getLogger('webbpsf_ext')
 
+
+from . import __path__
+_bp_dir = __path__[0] + '/throughputs/'
 
 def read_filter(self, *args, **kwargs):
     if self.inst_name=='MIRI':
@@ -158,17 +156,13 @@ def nircam_filter(filter, pupil=None, mask=None, module=None, ND_acq=False,
     :mod:`pysynphot.obsbandpass`
         A Pysynphot bandpass object.
     """
-    # indir = conf.WEBBPSF_EXT_PATH + 'NIRCam/'
-    from . import __path__
-    indir = __path__[0] + '/'
-
     if module is None: 
         module = 'A'
 
     # Select filter file and read
     filter = filter.upper()
     mod = module.lower()
-    filt_dir = indir + 'throughputs/'
+    filt_dir = _bp_dir
     filt_file = filter + '_nircam_plus_ote_throughput_mod' + mod + '_sorted.txt'
 
     _log.debug('Reading file: '+filt_file)
@@ -244,7 +238,7 @@ def nircam_filter(filter, pupil=None, mask=None, module=None, ND_acq=False,
     # Substrate transmission (off-axis substrate with occulting masks)
     if ((mask  is not None) and ('MASK' in mask)) or coron_substrate or ND_acq:
         # Sapphire mask transmission values for coronagraphic substrate
-        hdulist = fits.open(indir + 'throughputs/jwst_nircam_moda_com_substrate_trans.fits')
+        hdulist = fits.open(_bp_dir + 'jwst_nircam_moda_com_substrate_trans.fits')
         wtemp = hdulist[1].data['WAVELENGTH']
         ttemp = hdulist[1].data['THROUGHPUT']
         # Estimates for w<1.5um
@@ -260,7 +254,7 @@ def nircam_filter(filter, pupil=None, mask=None, module=None, ND_acq=False,
         # this option if the user doesn't want to figure out offset positions.
         if ND_acq:
             fname = 'NDspot_ODvsWavelength.txt'
-            path_ND = indir + 'throughputs/' + fname
+            path_ND = _bp_dir + fname
             data = ascii.read(path_ND)
 
             wdata = data[data.colnames[0]].data # Wavelength (um)
@@ -292,7 +286,7 @@ def nircam_filter(filter, pupil=None, mask=None, module=None, ND_acq=False,
         # Transmission values for wedges in Lyot stop
         if 'SW' in channel:
             fname = 'jwst_nircam_sw-lyot_trans_modmean.fits'
-            hdulist = fits.open(indir + 'throughputs/' + fname)
+            hdulist = fits.open(_bp_dir + fname)
             wtemp = hdulist[1].data['WAVELENGTH']
             ttemp = hdulist[1].data['THROUGHPUT']
             # Estimates for w<1.5um
@@ -306,7 +300,7 @@ def nircam_filter(filter, pupil=None, mask=None, module=None, ND_acq=False,
 
         elif 'LW' in channel:
             fname = 'jwst_nircam_lw-lyot_trans_modmean.fits'
-            hdulist = fits.open(indir + 'throughputs/' + fname)
+            hdulist = fits.open(_bp_dir + fname)
             wtemp = hdulist[1].data['WAVELENGTH']
             ttemp = hdulist[1].data['THROUGHPUT']
             ttemp *= 100 # Factors of 100 error in saved values
@@ -345,13 +339,13 @@ def nircam_filter(filter, pupil=None, mask=None, module=None, ND_acq=False,
             wl_name = pupil
 
         # Throughput for WL+4
-        hdulist = fits.open(indir + 'throughputs/jwst_nircam_wlp4.fits')
+        hdulist = fits.open(_bp_dir + 'jwst_nircam_wlp4.fits')
         wtemp = hdulist[1].data['WAVELENGTH']
         ttemp = hdulist[1].data['THROUGHPUT']
         th_wl4 = np.interp(bp.wave/1e4, wtemp, ttemp, left=0, right=0)
 
         # Throughput for WL+/-8
-        hdulist = fits.open(indir + 'throughputs/jwst_nircam_wlp8.fits')
+        hdulist = fits.open(_bp_dir + 'jwst_nircam_wlp8.fits')
         wtemp = hdulist[1].data['WAVELENGTH']
         ttemp = hdulist[1].data['THROUGHPUT']
         th_wl8 = np.interp(bp.wave/1e4, wtemp, ttemp, left=0, right=0)
@@ -384,7 +378,7 @@ def nircam_filter(filter, pupil=None, mask=None, module=None, ND_acq=False,
         nvr_scale = 0
     # Water ice and NVR additions (for LW channel only)
     if ((ice_scale is not None) or (nvr_scale is not None)) and ('LW' in channel):
-        fname = indir + 'throughputs/ote_nc_sim_1.00.txt'
+        fname = _bp_dir + 'ote_nc_sim_1.00.txt'
         names = ['Wave', 't_ice', 't_nvr', 't_sys']
         data  = ascii.read(fname, data_start=1, names=names)
 
@@ -424,8 +418,8 @@ def nircam_filter(filter, pupil=None, mask=None, module=None, ND_acq=False,
             
         if nc_scale is not None:
             names = ['Wave', 'coeff'] # coeff is per um path length
-            data_ice  = ascii.read(indir + 'throughputs/h2o_abs.txt', names=names)
-            data_nvr  = ascii.read(indir + 'throughputs/nvr_abs.txt', names=names)
+            data_ice  = ascii.read(_bp_dir + 'h2o_abs.txt', names=names)
+            data_nvr  = ascii.read(_bp_dir + 'nvr_abs.txt', names=names)
     
             w_ice = data_ice['Wave']
             a_ice = data_ice['coeff']
@@ -551,3 +545,79 @@ def niriss_grism_res(m=1):
 def niriss_grism_wref():
     """NIRISS Grism undeviated wavelength (um)"""
     return 1.0
+
+
+def bp_2mass(filter):
+    """2MASS Bandpass
+
+    Create a 2MASS J, H, or Ks filter bandpass used to generate
+    synthetic photometry.
+
+    Parameters
+    ----------
+    filter : str
+        Filter 'j', 'h', or 'k'.
+
+    Returns
+    -------
+    :mod:`pysynphot.obsbandpass`
+        A Pysynphot bandpass object.
+
+    """
+
+    dir = _bp_dir + '2MASS/'
+    if 'j' in filter.lower():
+        file = '2mass_j.txt'
+        name = 'J-Band'
+    elif 'h' in filter.lower():
+        file = '2mass_h.txt'
+        name = 'H-Band'
+    elif 'k' in filter.lower():
+        file = '2mass_ks.txt'
+        name = 'Ks-Band'
+    else:
+        raise ValueError('{} not a valid 2MASS filter'.format(filter))
+
+    tbl = ascii.read(dir + file, names=['Wave', 'Throughput'])
+    bp = S.ArrayBandpass(tbl['Wave']*1e4, tbl['Throughput'], name=name)
+
+    return bp
+
+def bp_wise(filter):
+    """WISE Bandpass
+
+    Create a WISE W1-W4 filter bandpass used to generate
+    synthetic photometry.
+
+    Parameters
+    ----------
+    filter : str
+        Filter 'w1', 'w2', 'w3', or 'w4'.
+
+    Returns
+    -------
+    :mod:`pysynphot.obsbandpass`
+        A Pysynphot bandpass object.
+
+    """
+
+    dir = _bp_dir + 'WISE/'
+    if 'w1' in filter.lower():
+        file = 'RSR-W1.txt'
+        name = 'W1'
+    elif 'w2' in filter.lower():
+        file = 'RSR-W2.txt'
+        name = 'W2'
+    elif 'w3' in filter.lower():
+        file = 'RSR-W3.txt'
+        name = 'W3'
+    elif 'w4' in filter.lower():
+        file = 'RSR-W4.txt'
+        name = 'W4'
+    else:
+        raise ValueError('{} not a valid WISE filter'.format(filter))
+
+    tbl = ascii.read(dir + file, data_start=0)
+    bp = S.ArrayBandpass(tbl['col1']*1e4, tbl['col2'], name=name)
+
+    return bp
