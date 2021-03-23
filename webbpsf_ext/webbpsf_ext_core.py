@@ -1,14 +1,13 @@
 # Import libraries
 import numpy as np
-import matplotlib
-import matplotlib.pyplot as plt
 
-import datetime, time
-import os, sys, platform, six
+import time
+import os, six
+from numpy.lib.arraypad import pad
 import multiprocessing as mp
-import traceback
+# import traceback
 
-from astropy.io import fits, ascii
+from astropy.io import fits
 from astropy.table import Table
 import astropy.units as u
 
@@ -26,8 +25,7 @@ from .image_manip import pad_or_cut_to_size, rotate_offset
 
 # Polynomial fitting routines
 from .maths import jl_poly, jl_poly_fit
-from numpy.polynomial import legendre
-# from scipy.interpolate import griddata, RegularGridInterpolator, interp1d
+#from numpy.polynomial import legendre
 
 # Logging info
 from .utils import conf, setup_logging
@@ -244,10 +242,19 @@ class NIRCam_ext(webbpsf_NIRCam):
         # Remove limits for detector position
         # Values outside of [0,2047] will get transformed to the correct V2/V3 location
         try:
-            x, y = map(int, position)
+            x, y = map(float, position)
         except ValueError:
             raise ValueError("Detector pixel coordinates must be a pair of numbers, not {}".format(position))
-        self._detector_position = (int(position[0]), int(position[1]))
+        self._detector_position = (x,y)
+
+    def _get_fits_header(self, result, options):
+        """ populate FITS Header keywords """
+        super(NIRCam_ext, self)._get_fits_header(result, options)
+
+        # Keep detector X and Y positions as floats
+        dpos = np.asarray(self.detector_position, dtype=float)
+        result[0].header['DET_X'] = (dpos[0], "Detector X pixel position of array center")
+        result[0].header['DET_Y'] = (dpos[1], "Detector Y pixel position of array center")
 
     @property
     def fastaxis(self):
@@ -278,14 +285,14 @@ class NIRCam_ext(webbpsf_NIRCam):
         Add coronagraphic optics for NIRCam
 
         Note that self.options['bar_offset'] moves the mask in the opposite
-        direction as self.options['mask_shift_x']
+        direction as self.options['coron_shift_x']
         """
         # Allow arbitrary offsets of the focal plane masks with respect to the pixel grid origin;
         # In most use cases it's better to offset the star away from the mask instead, using
         # options['source_offset_*'], but doing it this way instead is helpful when generating
         # the Pandeia ETC reference PSF library.
 
-        # mask_shift_x/y override coron_shift_x/y
+        # coron_shift_x/y override coron_shift_x/y
         shift_x = self.options.get('mask_shift_x', None)
         shift_y = self.options.get('mask_shift_y', None)
 
@@ -344,16 +351,6 @@ class NIRCam_ext(webbpsf_NIRCam):
         """
         
         from webbpsf.optics import NIRCam_BandLimitedCoron
-
-        # mask_shift_x/y override coron_shift_x/y
-        shift_x = self.options.get('mask_shift_x', None)
-        shift_y = self.options.get('mask_shift_y', None)
-
-        # This will apply mask shifts to the default coron_shift keys
-        if shift_x is not None:
-            self.options['coron_shift_x'] = shift_x
-        if shift_y is not None:
-            self.options['coron_shift_y'] = shift_y
 
         shifts = {'shift_x': self.options.get('coron_shift_x', None),
                   'shift_y': self.options.get('coron_shift_y', None)}
@@ -763,10 +760,19 @@ class MIRI_ext(webbpsf_MIRI):
     @webbpsf_MIRI.detector_position.setter
     def detector_position(self, position):
         try:
-            x, y = map(int, position)
+            x, y = map(float, position)
         except ValueError:
             raise ValueError("Detector pixel coordinates must be a pair of numbers, not {}".format(position))
-        self._detector_position = (int(position[0]), int(position[1]))
+        self._detector_position = (x,y)
+
+    def _get_fits_header(self, result, options):
+        """ populate FITS Header keywords """
+        super(MIRI_ext, self)._get_fits_header(result, options)
+
+        # Keep detector X and Y positions as floats
+        dpos = np.asarray(self.detector_position, dtype=float)
+        result[0].header['DET_X'] = (dpos[0], "Detector X pixel position of array center")
+        result[0].header['DET_Y'] = (dpos[1], "Detector Y pixel position of array center")
     
     @property
     def fastaxis(self):
@@ -820,8 +826,8 @@ class MIRI_ext(webbpsf_MIRI):
         # In most use cases it's better to offset the star away from the mask instead, using
         # options['source_offset_*'], but doing it this way instead is helpful when generating
         # the Pandeia ETC reference PSF library.
-        offsets = {'shift_x': self.options.get('mask_shift_x', None),
-                   'shift_y': self.options.get('mask_shift_y', None)}
+        offsets = {'shift_x': self.options.get('coron_shift_x', None),
+                   'shift_y': self.options.get('coron_shift_y', None)}
 
         def make_fqpm_wrapper(name, wavelength):
             container = poppy.CompoundAnalyticOptic(name=name,
@@ -930,8 +936,8 @@ class MIRI_ext(webbpsf_MIRI):
         
         rot1 = -1*self._rotation if detector_orientation else 0
         rot2 = 0 if detector_orientation else self._rotation
-        offsets = {'shift_x': self.options.get('mask_shift_x', None),
-                   'shift_y': self.options.get('mask_shift_y', None)}
+        offsets = {'shift_x': self.options.get('coron_shift_x', None),
+                   'shift_y': self.options.get('coron_shift_y', None)}
         
         if pixelscale is None:
             pixelscale = self.pixelscale / self.oversample
@@ -1171,7 +1177,7 @@ class MIRI_ext(webbpsf_MIRI):
         Returns a single image or list of images if sp is a list of spectra. 
         By default, it returns only the detector-sampled PSF, but setting 
         return_oversample=True will also return a set of oversampled images
-         as a second output.
+        as a second output.
 
         Parameters
         ----------
@@ -1183,11 +1189,13 @@ class MIRI_ext(webbpsf_MIRI):
             Coronagraphic PSFs will further decrease this due to the smaller pupil
             size and coronagraphic spot. 
         return_oversample : bool
-            If True, then also returns the oversampled version of the PSF
+            Returns the oversampled version of the PSF instead of detector-sampled PSF.
+            Default: True.
         wfe_drift : float or None
             Wavefront error drift amplitude in nm.
         coord_vals : tuple or None
             Coordinates (in arcsec or pixels) to calculate field-dependent PSF.
+            If multiple values, then this should be an array ([xvals], [yvals]).
         coord_frame : str
             Type of input coordinates. 
 
@@ -1197,7 +1205,7 @@ class MIRI_ext(webbpsf_MIRI):
                 * 'idl': arcsecs relative to aperture reference location.
 
         return_hdul : bool
-            TODO: Return PSFs in an HDUList rather than set of arrays
+            Return PSFs in an HDUList rather than set of arrays (default: True).
         """        
         return _calc_psf_from_coeff(self, sp=sp, return_oversample=return_oversample, 
                                     wfe_drift=wfe_drift, coord_vals=coord_vals, 
@@ -1321,8 +1329,8 @@ def _init_inst(self, filter=None, pupil_mask=None, image_mask=None,
         'si_mask': None, 'si_mask_xgrid': None, 'si_mask_ygrid': None, 'si_mask_apname': None
     }
     if self.image_mask is not None:
-        self.options['mask_shift_x'] = 0
-        self.options['mask_shift_y'] = 0
+        self.options['coron_shift_x'] = 0
+        self.options['coron_shift_y'] = 0
 
 def _gen_save_dir(self):
     """
@@ -1391,14 +1399,14 @@ def _gen_save_name(self, wfe_drift=0):
     rth_str = f'r{offset_r:.2f}_th{offset_theta:+.1f}'
     
     # Mask offsetting
-    coron_offset_x = self.options.get('mask_shift_x', 0)
-    coron_offset_y = self.options.get('mask_shift_y', 0)
-    if coron_offset_x is None: 
-        coron_offset_x = 0
-    if coron_offset_y is None: 
-        coron_offset_y = 0
-    moff_str1 = '' if coron_offset_x==0 else f'_mx{coron_offset_x:.3f}'
-    moff_str2 = '' if coron_offset_y==0 else f'_my{coron_offset_y:.3f}'
+    coron_shift_x = self.options.get('coron_shift_x', 0)
+    coron_shift_y = self.options.get('coron_shift_y', 0)
+    if coron_shift_x is None: 
+        coron_shift_x = 0
+    if coron_shift_y is None: 
+        coron_shift_y = 0
+    moff_str1 = '' if coron_shift_x==0 else f'_mx{coron_shift_x:.3f}'
+    moff_str2 = '' if coron_shift_y==0 else f'_my{coron_shift_y:.3f}'
     moff_str = moff_str1 + moff_str2
     
     opd_dict = self.get_opd_info()
@@ -1767,8 +1775,8 @@ def _gen_psf_coeff(self, nproc=None, wfe_drift=0, force=False, save=True,
     offset_theta = self.options.get('offset_theta', 'None')
     
     # Mask offsetting
-    coron_offset_x = self.options.get('mask_shift_x', 'None')
-    coron_offset_y = self.options.get('mask_shift_y', 'None')
+    coron_shift_x = self.options.get('coron_shift_x', 'None')
+    coron_shift_y = self.options.get('coron_shift_y', 'None')
     bar_offset = self.options.get('bar_offset', 'None')
         
     # Jitter settings
@@ -1787,8 +1795,8 @@ def _gen_psf_coeff(self, nproc=None, wfe_drift=0, force=False, save=True,
     hdr['OFFTH'] = (offset_theta, 'Position angle OFFR (CCW)')
     if (self.image_mask is not None) and ('WB' in self.image_mask):
         hdr['BAROFF'] = (bar_offset, 'Image mask shift along wedge (arcsec)')
-    hdr['MASKOFFX'] = (coron_offset_x, 'Image mask shift in x (arcsec)')
-    hdr['MASKOFFY'] = (coron_offset_y, 'Image mask shift in y (arcsec)')
+    hdr['MASKOFFX'] = (coron_shift_x, 'Image mask shift in x (arcsec)')
+    hdr['MASKOFFY'] = (coron_shift_y, 'Image mask shift in y (arcsec)')
     if jitter is None:
         hdr['JITRTYPE'] = ('None', 'Type of jitter applied')
     else:
@@ -1934,7 +1942,7 @@ def _gen_wfedrift_coeff(self, force=False, save=True, wfe_list=[0,1,2,5,10,20,40
     npos = len(wfe_list)
 
     # Warn if mask shifting is currently enabled (only when an image mask is present)
-    for off_pos in ['mask_shift_x','mask_shift_y']:
+    for off_pos in ['coron_shift_x','coron_shift_y']:
         val = self.options[off_pos]
         if (self.image_mask is not None) and (val is not None) and (val != 0):
             _log.warn(f'{off_pos} is set to {val:.3f} arcsec. Should this be 0?')
@@ -2233,8 +2241,8 @@ def _gen_wfemask_coeff(self, force=False, save=True, return_results=False, retur
     _log.warn('Generating mask position-dependent coefficients. This may take some time...')
 
     # Current mask positions to return to at end
-    mask_shift_x_orig = self.options.get('mask_shift_x', 0)
-    mask_shift_y_orig = self.options.get('mask_shift_y', 0)
+    coron_shift_x_orig = self.options.get('coron_shift_x', 0)
+    coron_shift_y_orig = self.options.get('coron_shift_y', 0)
     apname = self.aperturename
 
     # Cycle through a list of field points
@@ -2314,8 +2322,8 @@ def _gen_wfemask_coeff(self, force=False, save=True, return_results=False, retur
     cf_all = []
     npos = len(xy_list)
     for i in trange(npos, leave=False, desc=""):
-        self.options['mask_shift_x'] = xy_list[i][0]
-        self.options['mask_shift_y'] = xy_list[i][1]
+        self.options['coron_shift_x'] = xy_list[i][0]
+        self.options['coron_shift_y'] = xy_list[i][1]
         if ind_sgd[i]==True:
             # Add just a set of 0s for SGD positions
             cf = np.zeros(self.psf_coeff.shape)
@@ -2328,8 +2336,8 @@ def _gen_wfemask_coeff(self, force=False, save=True, return_results=False, retur
     # Excludes concatenation of symmetric PSFs and SGD calculations
     if return_raw:
         # Return to previous values
-        self.options['mask_shift_x'] = mask_shift_x_orig
-        self.options['mask_shift_y'] = mask_shift_y_orig
+        self.options['coron_shift_x'] = coron_shift_x_orig
+        self.options['coron_shift_y'] = coron_shift_y_orig
         self.fov_pix = fov_pix_orig
         if self.name=='NIRCam':
             self.options['nd_squares'] = nd_squares_orig
@@ -2431,16 +2439,16 @@ def _gen_wfemask_coeff(self, force=False, save=True, return_results=False, retur
     xsgd, ysgd = (xoff_all[ind_sgd], yoff_all[ind_sgd])
     nsgd = len(xsgd)
     for xv, yv in tqdm(zip(xsgd, ysgd), total=nsgd, desc='SGD'):
-        self.options['mask_shift_x'] = xv
-        self.options['mask_shift_y'] = yv
+        self.options['coron_shift_x'] = xv
+        self.options['coron_shift_y'] = yv
         cf, _ = self.gen_psf_coeff(return_results=True, force=True, save=False, **kwargs)
         ind = (xoff_all==xv) & (yoff_all==yv)
         cf_resid_all[ind] = cf - coeff0
     setup_logging(log_prev, verbose=False)
 
     # Return to previous values
-    self.options['mask_shift_x'] = mask_shift_x_orig
-    self.options['mask_shift_y'] = mask_shift_y_orig
+    self.options['coron_shift_x'] = coron_shift_x_orig
+    self.options['coron_shift_y'] = coron_shift_y_orig
     self.fov_pix = fov_pix_orig
     if self.name=='NIRCam':
         self.options['nd_squares'] = nd_squares_orig
@@ -2862,8 +2870,7 @@ def _coeff_mod_wfe_mask(self, coord_vals, coord_frame):
 
     return cf_mod, nfield
 
-def _calc_sgd(self, xoff_asec, yoff_asec, use_coeff=True, 
-              return_oversample=True, **kwargs):
+def _calc_sgd(self, xoff_asec, yoff_asec, use_coeff=True, return_oversample=True, **kwargs):
     """Calculate small grid dithers PSFs"""
 
     if self.is_coron==False:
@@ -2883,8 +2890,8 @@ def _calc_sgd(self, xoff_asec, yoff_asec, use_coeff=True,
     else:
         
         # Current shift positions to return to after calculations
-        mask_shift_x_orig = self.options.get('mask_shift_x', 0)
-        mask_shift_y_orig = self.options.get('mask_shift_y', 0)
+        coron_shift_x_orig = self.options.get('coron_shift_x', 0)
+        coron_shift_y_orig = self.options.get('coron_shift_y', 0)
 
         npos = len(xoff_asec)
         log_prev = conf.logging_level
@@ -2892,16 +2899,17 @@ def _calc_sgd(self, xoff_asec, yoff_asec, use_coeff=True,
         hdul_sgd = fits.HDUList()
         for xoff, yoff in tqdm(zip(xoff_asec, yoff_asec), total=npos):
             # Shift mask in opposite direction
-            self.options['mask_shift_x'] = -1*xoff
-            self.options['mask_shift_y'] = -1*yoff
+            self.options['coron_shift_x'] = -1*xoff
+            self.options['coron_shift_y'] = -1*yoff
             res = self.calc_psf(fov_pixels=self.fov_pix, oversample=self.oversample, 
-                                add_distortion=False, crop_psf=False)
+                                add_distortion=True, crop_psf=False)
             hdu = res[0] if return_oversample else res[1]
             # hdul.append(fits.ImageHDU(data=hdu.data, header=hdu.hdr))
             hdul_sgd.append(hdu)
         setup_logging(log_prev, verbose=False)
-        self.options['mask_shift_x'] = mask_shift_x_orig
-        self.options['mask_shift_y'] = mask_shift_y_orig
+        self.options['coron_shift_x'] = coron_shift_x_orig
+        self.options['coron_shift_y'] = coron_shift_y_orig
 
     return hdul_sgd
+
 

@@ -1,9 +1,17 @@
 import numpy as np
+import six
 
 from scipy.ndimage import fourier_shift
 from scipy.ndimage.interpolation import rotate
 
+from astropy.io import fits
+
 from poppy.utils import krebin
+
+from .utils import S
+
+import logging
+_log = logging.getLogger('webbpsf_ext')
 
 ###########################################################################
 #    Image manipulation
@@ -391,8 +399,9 @@ def rotate_offset(data, angle, cen=None, cval=0.0, order=1,
 
     """
 
-    # Return input data if angle is set to None 0
-    if (angle is None) or (angle==0):
+    # Return input data if angle is set to None or 0
+    # and if 
+    if ((angle is None) or (angle==0)) and (cen is None):
         return data
 
     ndim = len(data.shape)
@@ -622,4 +631,372 @@ def frebin(image, dimensions=None, scale=None, total=True):
             return np.transpose(result)
         else:
             return np.transpose(result) / (sbox * lbox)
+
+
+def image_rescale(HDUlist_or_filename, pixscale_out, pixscale_in=None, 
+                  dist_in=None, dist_out=None, cen_star=True):
+    """ Rescale image flux
+
+    Scale the flux and rebin an image to some new pixel scale and distance. 
+    The object's physical units (AU) are assumed to be constant, so the 
+    total angular size changes if the distance to the object changes.
+
+    IT IS RECOMMENDED THAT UNITS BE IN PHOTONS/SEC/PIXEL (not mJy/arcsec)
+
+    Parameters
+    ==========
+    HDUlist_or_filename : HDUList or str
+        Input either an HDUList or file name.
+    pixscale_out : float
+        Desired pixel scale (asec/pix) of returned image. Will be saved in header info.
+    dist_out : float
+        Output distance (parsec) of object in image. Will be saved in header info.
+    
+    Keyword Args
+    ============
+    pixscale_in : float or None
+        Input image pixel scale. If None, then tries to grab info from the header.
+    args_in  : Two parameters consisting of the input image pixel scale and distance
+        assumed to be in units of arcsec/pixel and parsecs, respectively
+    args_out : Same as above, but the new desired outputs
+    cen_star : 
+        Is the star placed in the central pixel? If so, then the stellar flux is 
+        assumed to be a single pixel that is equal to the maximum flux in the
+        image. Rather than rebinning that pixel, the total flux is pulled out
+        and readded to the central pixel of the final image.
+
+    Returns an HDUlist of the new image
+    """
+
+    if isinstance(HDUlist_or_filename, six.string_types):
+        hdulist = fits.open(HDUlist_or_filename)
+    elif isinstance(HDUlist_or_filename, fits.HDUList):
+        hdulist = HDUlist_or_filename
+    else:
+        raise ValueError("Input must be a filename or HDUlist")
+    
+    header = hdulist[0].header
+    # Try to update input pixel scale if it exists in header
+    if pixscale_in is None:
+        key_test = ['PIXELSCL','PIXSCALE']
+        for k in key_test:
+            if k in header:
+                pixscale_in = header[k]
+        if pixscale_in is None:
+            raise KeyError("Cannot determine input image pixel scale.")
+
+    # Try to update input distance if it exists in header
+    if dist_in is None:
+        key_test = ['DISTANCE','DIST']
+        for k in key_test:
+            if k in header:
+                dist_in = header[k]
+
+    # If output distance is not set, set to input distance
+    if dist_out is None:
+        dist_out = 'None' if dist_in is None else dist_in
+        fratio = 1
+    elif dist_in is None:
+        raise ValueError('Input distance should not be None if output distance is specified.')
+    else:
+        fratio = dist_in / dist_out
+
+    # Scale the input flux by inverse square law
+    image = (hdulist[0].data) * fratio**2
+
+    # If we move the image closer while assuming same number of pixels with
+    # the same AU/pixel, then this implies we've increased the angle that 
+    # the image subtends. So, each pixel would have a larger angular size.
+    # New image scale in arcsec/pixel
+    imscale_new = pixscale_in * fratio
+
+    # Before rebinning, we want the flux in the central pixel to
+    # always be in the central pixel (the star). So, let's save
+    # and remove that flux then add back after the rebinning.
+    if cen_star:
+        mask_max = image==image.max()
+        star_flux = image[mask_max][0]
+        image[mask_max] = 0
+
+    # Rebin the image to get a pixel scale that oversamples the detector pixels
+    fact = imscale_new / pixscale_out
+    image_new = frebin(image, scale=fact)
+
+    # Restore stellar flux to the central pixel.
+    ny, nx = image_new.shape
+    if cen_star:
+        image_new[ny//2, nx//2] += star_flux
+
+    hdu_new = fits.PrimaryHDU(image_new)
+    hdu_new.header = hdulist[0].header.copy()
+    hdulist_new = fits.HDUList([hdu_new])
+    hdulist_new[0].header['PIXELSCL'] = (pixscale_out, 'arcsec/pixel')
+    hdulist_new[0].header['DISTANCE'] = (dist_out, 'parsecs')
+
+    return hdulist_new
+
+
+def model_to_hdulist(args_model, sp_star, bandpass):
+
+    """HDUList from model FITS file.
+
+    Convert disk model to an HDUList with units of photons/sec/pixel.
+    If observed filter is different than input filter, we assume that
+    the disk has a flat scattering, meaning it scales with stellar
+    continuum. Pixel sizes and distances are left unchanged, and
+    stored in header.
+
+    Parameters
+    ----------
+    args_model - tuple
+        Arguments describing the necessary model information:
+            - fname   : Name of model file or an HDUList
+            - scale0  : Pixel scale (in arcsec/pixel)
+            - dist0   : Assumed model distance
+            - wave_um : Wavelength of observation
+            - units0  : Assumed flux units (ie., MJy/arcsec^2 or muJy/pixel)
+    sp_star : :mod:`pysynphot.spectrum`
+        A pysynphot spectrum of central star. Used to adjust observed
+        photon flux if filter differs from model input
+    bandpass : :mod:`pysynphot.obsbandpass`
+        Output `Pysynphot` bandpass from instrument class. This corresponds 
+        to the flux at the entrance pupil for the particular filter.
+    """
+
+    #filt, mask, pupil = args_inst
+    fname, scale0, dist0, wave_um, units0 = args_model
+    wave0 = wave_um * 1e4
+
+
+    #### Read in the image, then convert from mJy/arcsec^2 to photons/sec/pixel
+
+    if isinstance(fname, fits.HDUList):
+        hdulist = fname
+    else:
+        # Open file
+        hdulist = fits.open(fname)
+
+    # Get rid of any non-standard header keywords
+    hdu = fits.PrimaryHDU(hdulist[0].data)
+    for k in hdulist[0].header.keys():
+        try:
+            hdu.header[k] = hdulist[0].header[k]
+        except ValueError:
+            pass
+    hdulist = fits.HDUList(hdu)
+
+    # Break apart units0
+    units_list = units0.split('/')
+    if 'mJy' in units_list[0]:
+        units_pysyn = S.units.mJy()
+    elif 'uJy' in units_list[0]:
+        units_pysyn = S.units.muJy()
+    elif 'nJy' in units_list[0]:
+        units_pysyn = S.units.nJy()
+    elif 'MJy' in units_list[0]:
+        hdulist[0].data *= 1000 # Convert to Jy
+        units_pysyn = S.units.Jy()
+    elif 'Jy' in units_list[0]: # Jy should be last
+        units_pysyn = S.units.Jy()
+    else:
+        errstr = "Do not recognize units0='{}'".format(units0)
+        raise ValueError(errstr)
+
+    # Convert from input units to photlam (photons/sec/cm^2/A/angular size)
+    im = units_pysyn.ToPhotlam(wave0, hdulist[0].data)
+
+    # We assume scattering is flat in photons/sec/A
+    # This means everything scales with stellar continuum
+    sp_star.convert('photlam')
+    wstar, fstar = (sp_star.wave/1e4, sp_star.flux)
+
+    # Compare observed wavelength to image wavelength
+    wobs_um = bandpass.avgwave() / 1e4 # Current bandpass wavelength
+
+    wdel = np.linspace(-0.1,0.1)
+    f_obs = np.interp(wobs_um+wdel, wstar, fstar)
+    f0    = np.interp(wave_um+wdel, wstar, fstar)
+    im *= np.mean(f_obs / f0)
+
+    # Convert to photons/sec/pixel
+    im *= bandpass.equivwidth() * S.refs.PRIMARY_AREA
+    # If input units are per arcsec^2 then scale by pixel scale
+    # This will be ph/sec for each oversampled pixel
+    if ('arcsec' in units_list[1]) or ('asec' in units_list[1]):
+        im *= scale0**2
+    elif 'mas' in units_list[1]:
+        im *= (scale0*1000)**2
+
+    # Save into HDUList
+    hdulist[0].data = im
+
+    hdulist[0].header['UNITS']    = 'photons/sec'
+    hdulist[0].header['PIXELSCL'] = (scale0, 'arcsec/pixel')
+    hdulist[0].header['DISTANCE'] = (dist0, 'parsecs')
+
+    return hdulist
+
+
+def distort_image(hdulist_or_filename, ext=0, to_frame='sci', fill_value=0, 
+                  xnew_coords=None, ynew_coords=None, return_coords=False,
+                  aper=None):
+    """ Distort an image
+
+    Apply SIAF instrument distortion to an image that is assumed to be in 
+    its ideal coordinates. The header information should contain the relevant
+    SIAF point information, such as SI instrument, aperture name, pixel scale,
+    detector oversampling, and detector position ('sci' coords).
+
+    This function then transforms the image to the new coordinate system using
+    scipy's RegularGridInterpolator (linear interpolation).
+
+    Parameters
+    ----------
+    hdulist_or_filename : str or HDUList
+        A PSF from WebbPSF, either as an HDUlist object or as a filename
+    ext : int
+        Extension of HDUList to perform distortion on.
+    fill_value : float or None
+        Value used to fill in any blank space by the skewed PSF. Default = 0.
+        If set to None, values outside the domain are extrapolated.
+    to_frame : str
+        Type of input coordinates. 
+
+            * 'tel': arcsecs V2,V3
+            * 'sci': pixels, in conventional DMS axes orientation
+            * 'det': pixels, in raw detector read out axes orientation
+            * 'idl': arcsecs relative to aperture reference location.
+
+    xnew_coords : None or ndarray
+        Array of x-values in new coordinate frame to interpolate onto.
+        Can be a 1-dimensional array of unique values, in which case 
+        the final image will be of size (ny_new, nx_new). Or a 2d array 
+        that corresponds to full regular grid and has same shape as 
+        `ynew_coords` (ny_new, nx_new). If set to None, then final image
+        is same size as input image, and coordinate grid spans the min
+        and max values of siaf_ap.convert(xidl,yidl,'idl',to_frame). 
+    ynew_coords : None or ndarray
+        Array of y-values in new coordinate frame to interpolate onto.
+        Can be a 1-dimensional array of unique values, in which case 
+        the final image will be of size (ny_new, nx_new). Or a 2d array 
+        that corresponds to full regular grid and has same shape as 
+        `xnew_coords` (ny_new, nx_new). If set to None, then final image
+        is same size as input image, and coordinate grid spans the min
+        and max values of siaf_ap.convert(xidl,yidl,'idl',to_frame). 
+    return_coords : bool
+        In addition to returning the final image, setting this to True
+        will return the full set of new coordinates. Output will then
+        be (psf_new, xnew, ynew), where all three array have the same
+        shape.
+    """
+
+    import pysiaf
+    from scipy.interpolate import RegularGridInterpolator
+    
+    def _get_default_siaf(instrument, aper_name):
+
+        # Create new naming because SIAF requires special capitalization
+        if instrument == "NIRCAM":
+            siaf_name = "NIRCam"
+        elif instrument == "NIRSPEC":
+            siaf_name = "NIRSpec"
+        else:
+            siaf_name = instrument
+
+        # Select a single SIAF aperture
+        siaf = pysiaf.Siaf(siaf_name)
+        aper = siaf.apertures[aper_name]
+
+        return aper
+
+    # Read in input PSF
+    if isinstance(hdulist_or_filename, str):
+        hdu_list = fits.open(hdulist_or_filename)
+    elif isinstance(hdulist_or_filename, fits.HDUList):
+        hdu_list = hdulist_or_filename
+    else:
+        raise ValueError("input must be a filename or HDUlist")
+
+    if aper is None:
+        # Log instrument and detector names
+        instrument = hdu_list[0].header["INSTRUME"].upper()
+        aper_name = hdu_list[0].header["APERNAME"].upper()
+        # Pull default values
+        aper = _get_default_siaf(instrument, aper_name)
+    
+    # Pixel scale information
+    ny, nx = hdu_list[ext].shape
+    pixelscale = hdu_list[ext].header["PIXELSCL"]  # the pixel scale carries the over-sample value
+    oversamp   = hdu_list[ext].header["DET_SAMP"]  # PSF oversampling relative to detector 
+
+    # Get 'sci' reference location where PSF is observed
+    xsci_cen = hdu_list[ext].header["DET_X"]  # center x location in pixels ('sci')
+    ysci_cen = hdu_list[ext].header["DET_Y"]  # center y location in pixels ('sci')
+
+    # ###############################################
+    # Create an array of indices (in pixels) for where the PSF is located on the detector
+    nx_half, ny_half = ( (nx-1)/2., (ny-1)/2. )
+    xlin = np.linspace(-1*nx_half, nx_half, nx)
+    ylin = np.linspace(-1*ny_half, ny_half, ny)
+    xarr, yarr = np.meshgrid(xlin, ylin) 
+
+    # Convert the PSF center point from pixels to arcseconds using pysiaf
+    xidl_cen, yidl_cen = aper.sci_to_idl(xsci_cen, ysci_cen)
+
+    # Get 'idl' coords
+    xidl = xarr * pixelscale + xidl_cen
+    yidl = yarr * pixelscale + yidl_cen
+
+    # ###############################################
+    # Create an array of indices (in pixels) that the final data will be interpolated onto
+    xnew_cen, ynew_cen = aper.convert(xsci_cen, ysci_cen, 'sci', to_frame)
+    # If new x and y values are specified, create a meshgrid
+    if (xnew_coords is not None) and (ynew_coords is not None):
+        if len(xnew_coords.shape)==1 and len(ynew_coords.shape)==1:
+            xnew, ynew = np.meshgrid(xnew_coords, ynew_coords)
+        elif len(xnew_coords.shape)==2 and len(ynew_coords.shape)==2:
+            assert xnew_coords.shape==ynew_coords.shape, "If new x and y inputs are a grid, must be same shapes"
+            xnew, ynew = xnew_coords, ynew_coords
+    elif to_frame=='sci':
+        xnew = xarr / oversamp + xnew_cen
+        ynew = yarr / oversamp + ynew_cen
+    else:
+        xv, yv = aper.convert(xidl, yidl, 'idl', to_frame)
+        xmin, xmax = (xv.min(), xv.max())
+        ymin, ymax = (yv.min(), yv.max())
+        
+        # Range xnew from 0 to 1
+        xnew = xarr - xarr.min()
+        xnew /= xnew.max()
+        # Set to xmin to xmax
+        xnew = xnew * (xmax - xmin) + xmin
+        # Make sure center value is xnew_cen
+        xnew += xnew_cen - np.median(xnew)
+
+        # Range ynew from 0 to 1
+        ynew = yarr - yarr.min()
+        ynew /= ynew.max()
+        # Set to ymin to ymax
+        ynew = ynew * (ymax - ymin) + ymin
+        # Make sure center value is xnew_cen
+        ynew += ynew_cen - np.median(ynew)
+    
+    # Convert requested coordinates to 'idl' coordinates
+    xnew_idl, ynew_idl = aper.convert(xnew, ynew, to_frame, 'idl')
+
+    # ###############################################
+    # Interpolate using Regular Grid Interpolator
+    xvals = xlin * pixelscale + xidl_cen
+    yvals = ylin * pixelscale + yidl_cen
+    func = RegularGridInterpolator((yvals,xvals), hdu_list[ext].data, method='linear', 
+                                   bounds_error=False, fill_value=fill_value)
+
+    # Create an array of (yidl, xidl) values to interpolate onto
+    pts = np.array([ynew_idl.flatten(),xnew_idl.flatten()]).transpose()
+    psf_new = func(pts).reshape(xnew.shape)
+    
+    if return_coords:
+        return (psf_new, xnew, ynew)
+    else:
+        return psf_new
 

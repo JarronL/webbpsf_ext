@@ -1,12 +1,9 @@
-# The six library is useful for Python 2 and 3 compatibility
-import six, os
-
 # Import libraries
 import numpy as np
 import multiprocessing as mp
 import traceback
 
-from .utils import conf, webbpsf, poppy, S
+from .utils import conf, poppy, S
 from .maths import jl_poly
 from .image_manip import krebin
 from .bandpasses import miri_filter, nircam_filter
@@ -17,8 +14,10 @@ import logging
 _log = logging.getLogger('webbpsf_ext')
 
 import scipy
+from scipy import fftpack
+from astropy.convolution import convolve, convolve_fft
 from scipy.interpolate import griddata, RegularGridInterpolator, interp1d
-from numpy.polynomial import legendre
+#from numpy.polynomial import legendre
 
 # Program bar
 # from tqdm.auto import trange, tqdm
@@ -140,7 +139,7 @@ def _wrap_coeff_for_mp(args):
     # fov_pix_orig = fov_pix # Does calc_psf change fov_pix??
     try:
         hdu_list = inst.calc_psf(fov_pixels=fov_pix, oversample=oversample, monochromatic=w*1e-6,
-                                 add_distortion=False, crop_psf=True)
+                                 add_distortion=True, crop_psf=True)
         # Distortions are ignored here. It's preferred do perform these later.
         # See the WebbPSF functions in webbpsf.distortion
 
@@ -157,8 +156,9 @@ def _wrap_coeff_for_mp(args):
 
     # Return to previous setting
     poppy.conf.use_multiprocessing = mp_prev
-    # return pad_or_cut_to_size(hdu_list[2].data, fov_pix_orig*oversample)
-    return hdu_list[0]
+
+    # Return distorted PSF
+    return hdu_list[2]
 
 def gen_image_from_coeff(inst, coeff, coeff_hdr, sp_norm=None, nwaves=None, 
                     use_sp_waveset=False, return_oversample=False):
@@ -486,4 +486,29 @@ def field_coeff_func(v2grid, v3grid, cf_fields, v2_new, v3_new):
     # If only 1 point, remove first axes
     res = func(pts)
     res = res.squeeze() if res.shape[0]==1 else res
+    return res
+
+def _convolve_psfs_for_mp(arg_vals):
+    """
+    Internal helper routine for parallelizing computations across multiple processors,
+    specifically for convolving position-dependent PSFs with an extended image or
+    field of PSFs.
+
+    """
+    
+    im, psf, ind_mask = arg_vals
+    im_temp = im.copy()
+    im_temp[~ind_mask] = 0
+    
+    if np.allclose(im_temp,0):
+        # No need to convolve anything if no flux!
+        res = im_temp
+    else:
+        # Normalize PSF sum to 1.0
+        # Otherwise convolve_fft may throw an error if psf.sum() is too small
+        norm = psf.sum()
+        psf = psf / norm
+        res = convolve_fft(im_temp, psf, fftn=fftpack.fftn, ifftn=fftpack.ifftn, allow_huge=True)
+        res *= norm
+
     return res

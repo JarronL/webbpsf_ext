@@ -216,9 +216,182 @@ def NIRCam_V2V3_limits(module, channel='LW', pupil=None, rederive=False, return_
 
 
 
-def gen_sgd_offsets(sgd_type, fsm_std=2, slew_std=5):
+
+def ap_radec(ap_obs, ap_ref, coord_ref, pa, base_off=(0,0), dith_off=(0,0),
+             get_cenpos=True, get_vert=False):
+    """Aperture reference point(s) RA/Dec
+    
+    Given the (RA, Dec) and position angle of a given reference aperture,
+    return the (RA, Dec) associated with the reference point (usually center) 
+    of a different aperture. Can also return the corner vertices of the
+    aperture. 
+    
+    Typically, the reference aperture (ap_ref) is used for the telescope 
+    pointing information (e.g., NRCALL), but you may want to determine
+    locations of the individual detector apertures (NRCA1_FULL, NRCB3_FULL, etc).
+    
+    Parameters
+    ----------
+    ap_obs : str
+        Name of observed aperture (e.g., NRCA5_FULL)
+    ap_ref : str
+        Name of reference aperture (e.g., NRCALL_FULL)
+    coord_ref : tuple or list
+        Center position of reference aperture (RA/Dec deg)
+    pa : float
+        Position angle in degrees measured from North to V3 axis in North to East direction.
+        
+    Keywords
+    --------
+    base_off : list or tuple
+        X/Y offset of overall aperture offset (see APT pointing file)
+    dither_off : list or tuple
+        Additional offset from dithering (see APT pointing file)
+    get_cenpos : bool
+        Return aperture reference location coordinates?
+    get_vert: bool
+        Return closed polygon vertices (useful for plotting)?
     """
-    Create a series of x and y position offsets for a SGD 
+
+    if (get_cenpos==False) and (get_vert==False):
+        _log.warning("Neither get_cenpos nor get_vert were set to True. Nothing to return.")
+        return
+
+    si_match = {'NRC': 'nircam', 'NIS': 'niriss', 'MIR': 'miri', 'NRS': 'nirspec', 'FGS': 'fgs'}
+    siaf_obs = pysiaf.Siaf(si_match.get(ap_obs[0:3]))
+    siaf_ref = pysiaf.Siaf(si_match.get(ap_ref[0:3]))
+    ap_siaf_ref = siaf_ref[ap_ref]
+    ap_siaf_obs = siaf_obs[ap_obs]
+
+    # RA and Dec of ap ref location and the objects in the field
+    ra_ref, dec_ref = coord_ref
+
+    # Field offset as specified in APT Special Requirements
+    # These appear to be defined in 'idl' coords
+    x_off, y_off  = (base_off[0] + dith_off[0], base_off[1] + dith_off[1])
+
+    # V2/V3 reference location aligned with RA/Dec reference
+    # and offset by (x_off, y_off) in 'idl' coords
+    v2_ref, v3_ref = np.array(ap_siaf_ref.convert(x_off, y_off, 'idl', 'tel'))
+
+    # Attitude correction matrix relative to reference aperture
+    att = pysiaf.utils.rotations.attitude(v2_ref, v3_ref, ra_ref, dec_ref, pa)
+
+    # Get V2/V3 position of observed SIAF aperture and convert to RA/Dec
+    if get_cenpos==True:
+        v2_obs, v3_obs  = ap_siaf_obs.reference_point('tel')
+        ra_obs, dec_obs = pysiaf.utils.rotations.pointing(att, v2_obs, v3_obs)
+        cen_obs = (ra_obs, dec_obs)
+    
+    # Get V2/V3 vertices of observed SIAF aperture and convert to RA/Dec
+    if get_vert==True:
+        v2_vert, v3_vert  = ap_siaf_obs.closed_polygon_points('tel', rederive=False)
+        ra_vert, dec_vert = pysiaf.utils.rotations.pointing(att, v2_vert, v3_vert)
+        vert_obs = (ra_vert, dec_vert)
+
+    if (get_cenpos==True) and (get_vert==True):
+        return cen_obs, vert_obs
+    elif get_cenpos==True:
+        return cen_obs
+    elif get_vert==True:
+        return vert_obs
+    else:
+        _log.warning("Neither get_cenpos nor get_vert were set to True. Nothing to return.")
+        return
+
+
+def radec_to_v2v3(coord_objs, siaf_ref_name, coord_ref, pa_ref, base_off=(0,0), dith_off=(0,0)):
+    """RA/Dec to V2/V3
+    
+    Convert a series of RA/Dec positions to telescope V2/V3 coordinates (in arcsec).
+    
+    Parameters
+    ----------
+    coord_objs : tuple 
+        (RA, Dec) positions (deg), where RA and Dec are numpy arrays.    
+    siaf_ref_name : str
+        Reference SIAF aperture name (e.g., 'NRCALL_FULL') 
+    coord_ref : list or tuple
+        RA and Dec towards which reference SIAF points
+    pa : float
+        Position angle in degrees measured from North to V3 axis in North to East direction.
+        
+    Keywords
+    --------
+    base_off : list or tuple
+        X/Y offset of overall aperture offset (see APT pointing file)
+    dither_off : list or tuple
+        Additional offset from dithering (see APT pointing file)
+    """
+    
+    # SIAF object setup
+    si_match = {'NRC': 'nircam', 'NIS': 'niriss', 'MIR': 'miri', 'NRS': 'nirspec', 'FGS': 'fgs'}
+    siaf_ref = pysiaf.Siaf(si_match.get(siaf_ref_name[0:3]))
+    siaf_ap = siaf_ref[siaf_ref_name]
+    
+    # RA and Dec of ap ref location and the objects in the field
+    ra_ref, dec_ref = coord_ref
+    ra_obj, dec_obj = coord_objs
+
+    # Field offset as specified in APT Special Requirements
+    # These appear to be defined in 'idl' coords
+    x_off, y_off  = (base_off[0] + dith_off[0], base_off[1] + dith_off[1])
+
+    # V2/V3 reference location aligned with RA/Dec reference
+    # and offset by (x_off, y_off) in 'idl' coords
+    v2_ref, v3_ref = np.array(siaf_ap.convert(x_off, y_off, 'idl', 'tel'))
+
+    # Attitude correction matrix relative to NRCALL_FULL aperture
+    att = pysiaf.utils.rotations.attitude(v2_ref-x_off, v3_ref+y_off, ra_ref, dec_ref, pa_ref)
+
+    # Convert all RA/Dec coordinates into V2/V3 positions for objects
+    v2_obj, v3_obj = pysiaf.utils.rotations.getv2v3(att, ra_obj, dec_obj)
+
+    return (v2_obj, v3_obj)
+
+
+def v2v3_to_pixel(ap_obs, v2_obj, v3_obj, frame='sci'):
+    """V2/V3 to pixel coordinates
+    
+    Convert object V2/V3 coordinates into pixel positions.
+
+    Parameters
+    ==========
+    ap_obs : str
+        Name of observed aperture (e.g., NRCA5_FULL)
+    v2_obj : ndarray
+        V2 locations of stellar sources.
+    v3_obj : ndarray
+        V3 locations of stellar sources.
+
+    Keywords
+    ========
+    frame : str
+        'det' or 'sci' coordinate frame. 'det' is always full frame reference.
+        'sci' is relative to subarray size if not a full frame aperture.
+    """
+    
+    # SIAF object setup
+    si_match = {'NRC': 'nircam', 'NIS': 'niriss', 'MIR': 'miri', 'NRS': 'nirspec', 'FGS': 'fgs'}
+    siaf = pysiaf.Siaf(si_match.get(ap_obs[0:3]))
+    ap_siaf = siaf[ap_obs]
+
+    if frame=='det':
+        xpix, ypix = ap_siaf.tel_to_det(v2_obj, v3_obj)
+    elif frame=='sci':
+        xpix, ypix = ap_siaf.tel_to_sci(v2_obj, v3_obj)
+    else:
+        raise ValueError("Do not recognize frame keyword value: {}".format(frame))
+        
+    return (xpix, ypix)
+
+
+def gen_sgd_offsets(sgd_type, slew_std=5, fsm_std=2.5):
+    """
+    Create a series of x and y position offsets for a SGD pattern.
+    This includes the central position as the first in the series.
+    By default, will also add random movement errors using the
+    `slew_std` and `fsm_std` keywords.
     
     Parameters
     ==========
@@ -275,3 +448,59 @@ def gen_sgd_offsets(sgd_type, fsm_std=2, slew_std=5):
         yoff_msec[1:] += y_fsm[1:]
     
     return xoff_msec / 1000, yoff_msec / 1000
+
+
+def get_idl_offset(base_offset=(0,0), dith_offset=(0,0), base_std=0, use_ta=True, 
+                   dith_std=0, use_sgd=True, **kwargs):
+    """
+    Calculate pointing offsets in 'idl' coordinates. Inputs come from the
+    APT's .pointing file. For a sequence of dithers, make sure to only
+    calculate the base offset once, and all dithers independently. For
+    instance:
+    
+        >>> base_offset = get_idl_offset(base_std=None)
+        >>> dith1 = get_idl_offset(base_offset, dith_offset=(-0.01,+0.01), dith_std=None)
+        >>> dith2 = get_idl_offset(base_offset, dith_offset=(+0.01,+0.01), dith_std=None)
+        >>> dith3 = get_idl_offset(base_offset, dith_offset=(+0.01,-0.01), dith_std=None)
+        >>> dith4 = get_idl_offset(base_offset, dith_offset=(-0.01,-0.01), dith_std=None)
+    
+    Parameters
+    ==========
+    base_offset : array-like
+        Corresponds to (BaseX, BaseY) columns in .pointing file. 
+    dith_offset : array-like
+        Corresponds to (DithX, DithY ) columns in .pointing file. 
+    base_std : float or array-like or None
+        The 1-sigma pointing uncertainty per axis for telescope slew. 
+        If None, then standard deviation is chosen to be either 5 mas 
+        or 100 mas, depending on `use_ta` setting.
+    use_ta : bool
+        If observation uses a target acquisition, then assume only 5 mas
+        of pointing uncertainty, other 100 mas for "blind" pointing.
+    base_std : float or array-like or None
+        The 1-sigma pointing uncertainty per axis for dithers. If None,
+        then standard deviation is chosen to be either 2.5 or 5 mas, 
+        depending on `use_sgd` setting.
+    use_sgd : bool
+        If True, then we're employing small-grid dithers with the fine
+        steering mirror, which has a ~2.5 mas uncertainty. Otherwise,
+        assume standard small angle maneuver, which has ~5 mas uncertainty.
+    """
+    
+
+    # Convert to arrays (values of mas)
+    base_xy = np.asarray(base_offset, dtype='float') * 1000
+    dith_xy = np.asarray(dith_offset, dtype='float') * 1000
+
+    # Set telescope slew uncertainty
+    if base_std is None:
+        base_std = 5.0 if use_ta else 100
+    
+    # No dither offset 
+    if dith_xy[0]==dith_xy[1]==0:
+        dith_std = 0
+    elif (dith_std is None):
+        dith_std = 2.5 if use_sgd else 5.0
+    
+    offset = np.random.normal(loc=base_xy, scale=base_std) + np.random.normal(loc=dith_xy, scale=dith_std)
+    return offset / 1000
