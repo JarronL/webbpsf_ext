@@ -1309,10 +1309,6 @@ def linder_table(file=None, **kwargs):
 
     Parameters
     ----------
-    age : float
-        Age in Myr. If set to None, then an array of ages from the file 
-        is used to generate dictionary. If set, chooses the closest age
-        supplied in table.
     file : string
         Location and name of Linder et al file. 
         Default is 'BEX_evol_mags_-3_MH_0.00.dat'
@@ -1345,10 +1341,10 @@ def linder_table(file=None, **kwargs):
     
     return tbl
     
-def linder_filter(table, filt, age, dist=10, cond_interp=True, cond_file=None, **kwargs):
+def linder_filter(table, filt, age, dist=10, cond_file=None, **kwargs):
     """Linder Mags vs Mass Arrays
     
-    Given a Linder table, NIRCam filter, and age, return arrays of MJup 
+    Given a Linder table, filter name, and age (Myr), return arrays of MJup 
     and Vega mags. If distance (pc) is provided, then return the apparent 
     magnitude, otherwise absolute magnitude at 10pc.
     
@@ -1365,7 +1361,7 @@ def linder_filter(table, filt, age, dist=10, cond_interp=True, cond_file=None, *
     filt : string
         Name of NIRCam filter.
     age : float
-        Age of planet mass.
+        Age in Myr of planet.
     dist : float
         Distance in pc. Default is 10pc (abs mag).
     """    
@@ -1422,7 +1418,10 @@ def linder_filter(table, filt, age, dist=10, cond_interp=True, cond_file=None, *
         for k in d_tbl2.keys():
             tbl2 = d_tbl2[k]
             mass2_mjup = mass2_mjup + list(tbl2['MJup'].data)
-            mag2 = mag2 + list(tbl2[filt+'a'].data)
+            try:
+                mag2 = mag2 + list(tbl2[filt+'a'].data) # NIRCam
+            except KeyError:
+                mag2 = mag2 + list(tbl2[filt].data)  # MIRI
             age2 = age2 + list(np.ones(len(tbl2))*k)
     
         mass2_mjup = np.array(mass2_mjup)
@@ -1597,15 +1596,20 @@ def cond_filter(table, filt, module='A', dist=None, **kwargs):
     """
     Given a COND table and NIRCam filter, return arrays of MJup and Vega mags.
     If distance (pc) is provided, then return the apparent magnitude,
-    otherwise absolute magnitude at 10pc.
+    otherwise absolute magnitude at 10pc. Input table has already been filtered
+    by age.
     """
 
-    mcol = 'MJup'
-    fcol = filt + module.lower()
-
     # Table Data
+    try:
+        fcol = filt + module.lower()
+        mag_data  = table[fcol].data
+    except KeyError:
+        fcol = filt
+        mag_data  = table[fcol].data
+
+    mcol = 'MJup'
     mass_data = table[mcol].data
-    mag_data  = table[fcol].data
 
     # Data to interpolate onto
     mass_arr = list(np.arange(0.1,1,0.1)) + list(np.arange(1,10)) \
