@@ -2873,6 +2873,15 @@ def _coeff_mod_wfe_mask(self, coord_vals, coord_frame):
 def _calc_sgd(self, xoff_asec, yoff_asec, use_coeff=True, return_oversample=True, **kwargs):
     """Calculate small grid dithers PSFs"""
 
+    add_distortion = True
+    try:
+        from webbpsf.distortion import RegularGridInterpolator
+    except ImportError:
+        # Ignore distortions if older griddata implementation.
+        # Newer RGI implementation is much faster
+        add_distortion = False
+
+
     if self.is_coron==False:
         _log.warn("`calc_sgd` only valid for coronagraphic observations (set `image_mask` attribute).")
         return
@@ -2888,7 +2897,6 @@ def _calc_sgd(self, xoff_asec, yoff_asec, use_coeff=True, return_oversample=True
         hdul_sgd = self.calc_psf_from_coeff(coord_frame='sci', coord_vals=(xsci,ysci), 
                                             return_oversample=True, **kwargs)
     else:
-        
         # Current shift positions to return to after calculations
         coron_shift_x_orig = self.options.get('coron_shift_x', 0)
         coron_shift_y_orig = self.options.get('coron_shift_y', 0)
@@ -2902,7 +2910,7 @@ def _calc_sgd(self, xoff_asec, yoff_asec, use_coeff=True, return_oversample=True
             self.options['coron_shift_x'] = -1*xoff
             self.options['coron_shift_y'] = -1*yoff
             res = self.calc_psf(fov_pixels=self.fov_pix, oversample=self.oversample, 
-                                add_distortion=True, crop_psf=False)
+                                add_distortion=add_distortion, crop_psf=True)
             hdu = res[0] if return_oversample else res[1]
             # hdul.append(fits.ImageHDU(data=hdu.data, header=hdu.hdr))
             hdul_sgd.append(hdu)
@@ -2911,5 +2919,4 @@ def _calc_sgd(self, xoff_asec, yoff_asec, use_coeff=True, return_oversample=True
         self.options['coron_shift_y'] = coron_shift_y_orig
 
     return hdul_sgd
-
 

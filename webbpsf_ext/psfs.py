@@ -136,12 +136,16 @@ def _wrap_coeff_for_mp(args):
     poppy.conf.use_multiprocessing = False
 
     inst,w,fov_pix,oversample = args
-    # fov_pix_orig = fov_pix # Does calc_psf change fov_pix??
     try:
+        add_distortion = True
+        try:
+            from webbpsf.distortion import RegularGridInterpolator
+        except ImportError:
+            # Ignore distortions if older griddata implementation.
+            # Newer RGI implementation is much faster
+            add_distortion = False
         hdu_list = inst.calc_psf(fov_pixels=fov_pix, oversample=oversample, monochromatic=w*1e-6,
-                                 add_distortion=True, crop_psf=True)
-        # Distortions are ignored here. It's preferred do perform these later.
-        # See the WebbPSF functions in webbpsf.distortion
+                                 add_distortion=add_distortion, crop_psf=True)
 
     except Exception as e:
         print('Caught exception in worker thread (w = {}):'.format(w))
