@@ -8,11 +8,11 @@ from astropy.io import fits, ascii
 from astropy.table import Table
 import astropy.units as u
 
-from scipy.interpolate import griddata, RegularGridInterpolator
+from scipy.interpolate import griddata, RegularGridInterpolator, interp1d
 
 from .utils import conf, S
 from .bandpasses import miri_filter, nircam_filter
-from .maths import jl_poly, jl_poly_fit
+from .maths import jl_poly, jl_poly_fit, binned_statistic
 from .robust import medabsdev
 
 import logging
@@ -1420,8 +1420,10 @@ def linder_filter(table, filt, age, dist=10, cond_file=None, **kwargs):
             mass2_mjup = mass2_mjup + list(tbl2['MJup'].data)
             try:
                 mag2 = mag2 + list(tbl2[filt+'a'].data) # NIRCam
-            except KeyError:
-                mag2 = mag2 + list(tbl2[filt].data)  # MIRI
+            except KeyError:        
+                filt_alt = {'F1065C':'F1000W', 'F1140C':'F1130W', 'F1550C':'F1500W', 'F2300C':'F2100W'}
+                fcol = filt_alt.get(filt, filt)
+                mag2 = mag2 + list(tbl2[fcol].data)  # MIRI
             age2 = age2 + list(np.ones(len(tbl2))*k)
     
         mass2_mjup = np.array(mass2_mjup)
@@ -1440,7 +1442,7 @@ def linder_filter(table, filt, age, dist=10, cond_file=None, **kwargs):
 
     #######################################################
     
-    xlim = np.array([x2.min(),x.max()+5]) 
+    xlim = np.array([x2.min(),x.max()+5]) # magntidue limits
     ylim = np.array([6,10])  # 10^6 to 10^10 yrs
     dx = (xlim[1] - xlim[0]) / 200
     dy = (ylim[1] - ylim[0]) / 200
@@ -1572,7 +1574,6 @@ def cond_table(age=None, file=None, **kwargs):
     ind2 = np.array(ind2)-1
 
     # Everything is Gyr, but prefer Myr
-    ages_str = np.array(times_gyr)
     ages_gyr = np.array(times_gyr, dtype='float64')
     ages_myr = np.array(ages_gyr * 1000, dtype='int')
     #times = ['{:.0f}'.format(a) for a in ages_myr]
@@ -1605,7 +1606,12 @@ def cond_filter(table, filt, module='A', dist=None, **kwargs):
         fcol = filt + module.lower()
         mag_data  = table[fcol].data
     except KeyError:
-        fcol = filt
+        # MIRI coronagraphic filters are incorrect in the AMES-COND files.
+        # It assumes extra attenuation from the central mask, which gives
+        # the incorrect flux for off-axis points sources. Instead, use some
+        # alternate bandpasses
+        filt_alt = {'F1065C':'F1000W', 'F1140C':'F1130W', 'F1550C':'F1500W', 'F2300C':'F2100W'}
+        fcol = filt_alt.get(filt, filt)
         mag_data  = table[fcol].data
 
     mcol = 'MJup'
@@ -1710,3 +1716,204 @@ def _trim_nan_array(xgrid, ygrid, zgrid):
         zgrid2 = zgrid2[1:-1,1:-1]
         
     return xgrid2, ygrid2, zgrid2
+
+def companion_spec(bandpass, model='SB12', atmo='hy3s', mass=10, age=100, entropy=10,
+    dist=10, accr=False, mmdot=None, mdot=None, accr_rin=2, truncated=False,
+    sptype=None, Av=0, renorm_args=None, **kwargs):
+    """ Determine flux (ph/sec) of a companion 
+
+    Add exoplanet information that will be used to generate a point
+    source image using a spectrum from Spiegel & Burrows (2012).
+    Use self.kill_planets() to delete them.
+
+    Coordinate convention is for +N up and +E to left.
+
+    Parameters
+    ----------
+    atmo : str
+        A string consisting of one of four atmosphere types:
+        ['hy1s', 'hy3s', 'cf1s', 'cf3s'].
+    mass: int
+        Number 1 to 15 Jupiter masses.
+    age: float
+        Age in millions of years (1-1000).
+    entropy: float
+        Initial entropy (8.0-13.0) in increments of 0.25
+
+    sptype : str
+        Instead of using a exoplanet spectrum, specify a stellar type.
+    renorm_args : dict
+        Pysynphot renormalization arguments in case you want
+        very specific luminosity in some bandpass.
+        Includes (value, units, bandpass).
+
+    Av : float
+        Extinction magnitude (assumes Rv=4.0) of the companion
+        (e.g., due to being embedded in a disk).
+
+    accr : bool
+        Include accretion? default: False
+    mmdot : float
+        From Zhu et al. (2015), the Mjup^2/yr value.
+        If set to None then calculated from age and mass.
+    mdot : float
+        Or use mdot (Mjup/yr) instead of mmdot.
+    accr_rin : float
+        Inner radius of accretion disk (units of RJup; default: 2)
+    truncated: bool
+         Full disk or truncated (ie., MRI; default: False).
+
+     """
+    # Spiegel & Burrows model already have a class
+    # For BEX and COND models, make 
+    if model.lower() in ['sb12', 'bex', 'cond']:
+        calc_accr = False if model.lower() in ['bex', 'cond'] else accr
+        pl = {
+            'atmo': atmo, 'mass': mass, 'age': age,  
+            'entropy': entropy, 'distance': dist,
+            'accr': calc_accr, 'mmdot': mmdot, 'mdot': mdot, 
+            'accr_rin': accr_rin, 'truncated': truncated
+        }
+        planet = planets_sb12(**pl)
+        sp = planet.export_pysynphot()
+        
+        # Check spectral overlap
+        sp_overlap = S.observation.check_overlap(bandpass, sp)
+
+        # Ensure there is a data point at the edge of the input bandpass
+        if sp_overlap != 'full':
+            w_end = np.max(bandpass.wave)
+            f_end = sp.sample(w_end)
+            w_new = np.append(sp.wave, w_end)
+            f_new = np.append(sp.flux, f_end)
+            sp = S.ArraySpectrum(w_new, f_new, waveunits=sp.waveunits, fluxunits=sp.fluxunits)
+
+        del_mag = 0
+        # Add accretion mag offsets for BEX and COND models
+        if (model.lower() in ['bex', 'cond']) and (accr==True):
+            if sp_overlap != 'full':
+                _log.warn(f"Overlap between spectrum and bandpass: {sp_overlap}.")
+                _log.warn("Accretion calculation may be unreliable.")
+            pl = {
+                'atmo': atmo, 'mass': mass, 'age': age,  
+                'entropy': entropy, 'distance': dist,
+                'accr': True, 'mmdot': mmdot, 'mdot': mdot, 
+                'accr_rin': accr_rin, 'truncated': truncated
+            }
+            planet = planets_sb12(**pl)
+            # Get spectrum from accretion component
+            sp_mdot = sp_accr(planet.mmdot, rin=planet.rin,
+                                dist=planet.distance, truncated=planet.truncated,
+                                waveout=sp.waveunits, fluxout=sp.fluxunits)
+            # Interpolate accretion spectrum at each wavelength
+            fnew = np.interp(sp.wave, sp_mdot.wave, sp_mdot.flux)
+            sp_new = S.ArraySpectrum(sp.wave, fnew, waveunits=sp.waveunits, 
+                                        fluxunits=sp.fluxunits)
+            obs_accr = S.Observation(sp_new, bandpass, binset=bandpass.wave)
+            del_mag -= obs_accr.effstim('vegamag')
+            # Make new spectrum to continue using
+            sp = planet.export_pysynphot()
+
+        # Add extinction from the disk
+        if Av>0: 
+            Rv = 4.0  
+            sp_ext = sp * S.Extinction(Av/Rv, name='mwrv4')
+
+            if model.lower() in ['bex', 'cond']:
+                if sp_overlap != 'full':
+                    _log.warn(f"Overlap between spectrum and bandpass: {sp_overlap}.")
+                    _log.warn("Extinction calculation may be unreliable.")
+                obs = S.Observation(sp, bandpass, binset=bandpass.wave)
+                obs_ext = S.Observation(sp_ext, bandpass, binset=bandpass.wave)
+                del_mag += obs_ext.effstim('vegamag') - obs.effstim('vegamag')
+            sp = sp_ext
+                        
+        # For BEX and COND models, set up renorm_args
+        if model.lower()=='bex':
+            table = linder_table()
+            mass_arr, mag_arr = linder_filter(table, bandpass.name, age, dist=dist)
+            mag = np.interp(mass, mass_arr, mag_arr)
+            mag += del_mag  # Apply extinction and/or accretion offsets
+            renorm_args = (mag, 'vegamag', bandpass)
+        elif model.lower()=='cond':
+            table = cond_table(age)
+            mass_arr, mag_arr = cond_filter(table, bandpass.name, dist=dist)
+            mag = np.interp(mass, mass_arr, mag_arr)
+            mag += del_mag  # Apply extinction and/or accretion offsets
+            renorm_args = (mag, 'vegamag', bandpass)
+            
+        # Renormalize to some specified flux in a given bandpass
+        if (renorm_args is not None) and (len(renorm_args) > 0):
+            sp_norm = sp.renorm(*renorm_args, force=True)
+            sp = sp_norm
+        elif sp_overlap != 'full':
+            _log.warn(f"Overlap between spectrum and bandpass: {sp_overlap}.")
+            _log.warn("Recommend supplying renorm_args input.")
+   
+    elif model.lower() in ['bosz', 'ck04models', 'phoenix']:
+        pl = {'sptype': sptype, 'Av': Av, 'renorm_args': renorm_args}
+        sp = stellar_spectrum(sptype)
+        if Av>0: 
+            Rv = 4.0  
+            sp *= S.Extinction(Av/Rv, name='mwrv4')
+        if (renorm_args is not None) and (len(renorm_args) > 0):
+            sp_norm = sp.renorm(*renorm_args, force=True)
+            sp = sp_norm
+            
+    name = kwargs.get('name')
+    if name is not None:
+        sp.name = name
+        
+    return sp
+
+def bin_spectrum(sp, wave, waveunits='um'):
+    """Rebin spectrum
+
+    Rebin a :mod:`pysynphot.spectrum` to a different wavelength grid.
+    This function first converts the input spectrum to units
+    of counts then combines the photon flux onto the
+    specified wavelength grid.
+
+    Output spectrum units are the same as the input spectrum.
+
+    Parameters
+    -----------
+    sp : :mod:`pysynphot.spectrum`
+        Spectrum to rebin.
+    wave : array_like
+        Wavelength grid to rebin onto.
+    waveunits : str
+        Units of wave input. Must be recognizeable by Pysynphot.
+
+    Returns
+    -------
+    :mod:`pysynphot.spectrum`
+        Rebinned spectrum in same units as input spectrum.
+    """
+
+    waveunits0 = sp.waveunits
+    fluxunits0 = sp.fluxunits
+
+    # Convert wavelength of input spectrum to desired output units
+    sp.convert(waveunits)
+    # We also want input to be in terms of counts to conserve flux
+    sp.convert('flam')
+
+    edges = S.binning.calculate_bin_edges(wave)
+    ind = (sp.wave >= edges[0]) & (sp.wave <= edges[-1])
+    binflux = binned_statistic(sp.wave[ind], sp.flux[ind], np.mean, bins=edges)
+
+    # Interpolate over NaNs
+    ind_nan = np.isnan(binflux)
+    finterp = interp1d(wave[~ind_nan], binflux[~ind_nan], kind='cubic')
+    binflux[ind_nan] = finterp(wave[ind_nan])
+
+    sp2 = S.ArraySpectrum(wave, binflux, waveunits=waveunits, fluxunits='flam')
+    sp2.convert(waveunits0)
+    sp2.convert(fluxunits0)
+
+    # Put back units of original input spectrum
+    sp.convert(waveunits0)
+    sp.convert(fluxunits0)
+
+    return sp2
