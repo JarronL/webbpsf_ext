@@ -34,8 +34,6 @@ _log = logging.getLogger('webbpsf_ext')
 
 from .version import __version__
 
-
-
 # WebbPSF and Poppy stuff
 from .utils import webbpsf, poppy
 from webbpsf import MIRI as webbpsf_MIRI
@@ -358,9 +356,9 @@ class NIRCam_ext(webbpsf_NIRCam):
         if pixelscale is None:
             pixelscale = self.pixelscale / self.oversample
         if npix is None:
-            os = self.pixelscale / pixelscale
+            osamp = self.pixelscale / pixelscale
             npix = 320 if 'long' in self.channel else 640
-            npix = int(npix * os + 0.5)
+            npix = int(npix * osamp + 0.5)
 
         if self.is_coron:
             bar_offset = self.get_bar_offset()
@@ -1320,6 +1318,7 @@ def _init_inst(self, filter=None, pupil_mask=None, image_mask=None,
     # Any pixels beyond this size will be considered to have 0 residual difference
     self._fovmax_wfedrift = 256
     self._fovmax_wfefield = 128
+    self._fovmax_wfemask  = 256
 
     self.psf_coeff = None
     self.psf_coeff_header = None
@@ -1757,6 +1756,7 @@ def _gen_psf_coeff(self, nproc=None, wfe_drift=0, force=False, save=True,
         'GRATNG14', 'GRATNG23', 'FLATTYPE', 'CCCSTATE', 'TACQNAME',
         'PUPILINT', 'PUPILOPD', 'OPD_FILE', 'OPDSLICE', 'TEL_WFE', 
         'SI_WFE', 'SIWFETYP', 'SIWFEFPT',
+        'ROTATION', 'DISTORT', 'SIAF_VER', 'MIR_DIST', 'KERN_AMP', 'KERNFOLD',
         'NORMALIZ', 'FFTTYPE', 'AUTHOR', 'DATE', 'VERSION',  'DATAVERS'
     ]
     for key in copy_keys:
@@ -2204,7 +2204,7 @@ def _gen_wfemask_coeff(self, force=False, save=True, return_results=False, retur
         return
 
     # fov_pix should not be more than some size to preserve memory
-    fov_max = self._fovmax_wfefield if self.oversample<=4 else self._fovmax_wfefield / 2 
+    fov_max = self._fovmax_wfemask if self.oversample<=4 else self._fovmax_wfemask / 2 
     fov_pix_orig = self.fov_pix
     if self.fov_pix>fov_max:
         self.fov_pix = fov_max if (self.fov_pix % 2 == 0) else fov_max + 1
@@ -2243,6 +2243,7 @@ def _gen_wfemask_coeff(self, force=False, save=True, return_results=False, retur
     # Current mask positions to return to at end
     coron_shift_x_orig = self.options.get('coron_shift_x', 0)
     coron_shift_y_orig = self.options.get('coron_shift_y', 0)
+    detector_position_orig = self.detector_position
     apname = self.aperturename
 
     # Cycle through a list of field points
@@ -2324,6 +2325,8 @@ def _gen_wfemask_coeff(self, force=False, save=True, return_results=False, retur
     for i in trange(npos, leave=False, desc=""):
         self.options['coron_shift_x'] = xy_list[i][0]
         self.options['coron_shift_y'] = xy_list[i][1]
+        xyshift = -1 * np.array(xy_list[i]) / self.pixelscale
+        self.detector_position = np.array(detector_position_orig) + xyshift
         if ind_sgd[i]==True:
             # Add just a set of 0s for SGD positions
             cf = np.zeros(self.psf_coeff.shape)
@@ -2338,6 +2341,7 @@ def _gen_wfemask_coeff(self, force=False, save=True, return_results=False, retur
         # Return to previous values
         self.options['coron_shift_x'] = coron_shift_x_orig
         self.options['coron_shift_y'] = coron_shift_y_orig
+        self.detector_position = detector_position_orig
         self.fov_pix = fov_pix_orig
         if self.name=='NIRCam':
             self.options['nd_squares'] = nd_squares_orig
@@ -2441,6 +2445,8 @@ def _gen_wfemask_coeff(self, force=False, save=True, return_results=False, retur
     for xv, yv in tqdm(zip(xsgd, ysgd), total=nsgd, desc='SGD'):
         self.options['coron_shift_x'] = xv
         self.options['coron_shift_y'] = yv
+        xyshift = -1 * np.array([xv,yv]) / self.pixelscale
+        self.detector_position = np.array(detector_position_orig) + xyshift
         cf, _ = self.gen_psf_coeff(return_results=True, force=True, save=False, **kwargs)
         ind = (xoff_all==xv) & (yoff_all==yv)
         cf_resid_all[ind] = cf - coeff0
@@ -2449,6 +2455,7 @@ def _gen_wfemask_coeff(self, force=False, save=True, return_results=False, retur
     # Return to previous values
     self.options['coron_shift_x'] = coron_shift_x_orig
     self.options['coron_shift_y'] = coron_shift_y_orig
+    self.detector_position = detector_position_orig
     self.fov_pix = fov_pix_orig
     if self.name=='NIRCam':
         self.options['nd_squares'] = nd_squares_orig
@@ -2581,7 +2588,7 @@ def _calc_psf_from_coeff(self, sp=None, return_oversample=True,
     # if multiple field points were present, we want to return PSF for each location
     if nfield>1:
         psf_all = []
-        for ii in trange(nfield, leave=False):
+        for ii in trange(nfield, leave=True, desc='PSFs'):
             # Just a single spectrum? Or unique spectrum at each field point?
             sp_norm = sp[ii] if((sp is not None) and (len(sp)==nfield)) else sp
             res = gen_image_from_coeff(self, psf_coeff[ii], psf_coeff_hdr, sp_norm=sp_norm,
@@ -2624,6 +2631,12 @@ def _calc_psf_from_coeff(self, sp=None, return_oversample=True,
                 hdr['XVAL']   = (coord_vals[0], f'[{cunits}] Input X coordinate')
                 hdr['YVAL']   = (coord_vals[1], f'[{cunits}] Input Y coordinate')
                 hdr['CFRAME'] = (coord_frame, 'Specified coordinate frame')
+            else:
+                cunits = 'pixels'
+                hdr['XVAL']   = (hdr['DET_X'], f'[{cunits}] Input X coordinate')
+                hdr['YVAL']   = (hdr['DET_Y'], f'[{cunits}] Input Y coordinate')
+                hdr['CFRAME'] = ('sci', 'Specified coordinate frame')
+
             hdul = fits.HDUList([fits.PrimaryHDU(data=psf, header=hdr)])
             # Append wavelength solution
             if wave is not None:
@@ -2711,6 +2724,7 @@ def _coeff_mod_wfe_drift(self, wfe_drift, key='wfe_drift'):
         _log.warning("Will continue assuming `wfe_drift=0`.")
         cf_mod = 0
     else:
+        _log.info("Generating WFE drift modifications...")
         psf_coeff_hdr = self.psf_coeff_header
         psf_coeff     = self.psf_coeff
 
@@ -2775,6 +2789,7 @@ def _coeff_mod_wfe_field(self, coord_vals, coord_frame):
 
     # PSF Modifications assuming we successfully found v2/v3
     if (v2 is not None):
+        _log.info("Generating field-dependent modifications...")
         # print(v2,v3)
         nfield = np.size(v2)
         cf_mod = field_coeff_func(v2grid, v3grid, cf_fit, v2, v3)
@@ -2850,6 +2865,7 @@ def _coeff_mod_wfe_mask(self, coord_vals, coord_frame):
 
     # PSF Modifications assuming we successfully found (xsci,ysci)
     if (xsci is not None):
+        _log.info("Generating mask-dependent modifications...")
         # print(v2,v3)
         nfield = np.size(xsci)
         field_rot = 0 if self._rotation is None else self._rotation
@@ -2900,6 +2916,7 @@ def _calc_sgd(self, xoff_asec, yoff_asec, use_coeff=True, return_oversample=True
         # Current shift positions to return to after calculations
         coron_shift_x_orig = self.options.get('coron_shift_x', 0)
         coron_shift_y_orig = self.options.get('coron_shift_y', 0)
+        detector_position_orig = self.detector_position
 
         npos = len(xoff_asec)
         log_prev = conf.logging_level
@@ -2909,6 +2926,9 @@ def _calc_sgd(self, xoff_asec, yoff_asec, use_coeff=True, return_oversample=True
             # Shift mask in opposite direction
             self.options['coron_shift_x'] = -1*xoff
             self.options['coron_shift_y'] = -1*yoff
+            # Pixel location information
+            xyshift = np.array([xoff,yoff]) / self.pixelscale
+            self.detector_position = np.array(detector_position_orig) + xyshift
             res = self.calc_psf(fov_pixels=self.fov_pix, oversample=self.oversample, 
                                 add_distortion=add_distortion, crop_psf=True)
             hdu = res[0] if return_oversample else res[1]
@@ -2917,6 +2937,7 @@ def _calc_sgd(self, xoff_asec, yoff_asec, use_coeff=True, return_oversample=True
         setup_logging(log_prev, verbose=False)
         self.options['coron_shift_x'] = coron_shift_x_orig
         self.options['coron_shift_y'] = coron_shift_y_orig
+        self.detector_position = detector_position_orig
 
     return hdul_sgd
 
