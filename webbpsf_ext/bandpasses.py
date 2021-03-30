@@ -19,16 +19,6 @@ def read_filter(self, *args, **kwargs):
 
     print(self.inst_name)
 
-class Alpha(object):
-    def __init__(self):
-        self.inst_name = "MIRI"
-    get_bandpass = read_filter
-
-class Bravo(object):
-    def __init__(self):
-        self.inst_name = "NIRCam"
-    get_bandpass = read_filter
-
 
 def bp_igood(bp, min_trans=0.001, fext=0.05):
     """
