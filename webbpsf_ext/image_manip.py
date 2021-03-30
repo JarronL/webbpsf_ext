@@ -1,14 +1,23 @@
 import numpy as np
+import multiprocessing as mp
 import six
 
 from scipy.ndimage import fourier_shift
 from scipy.ndimage.interpolation import rotate
+
+import scipy
+from scipy import fftpack
+from astropy.convolution import convolve, convolve_fft
 
 from astropy.io import fits
 
 from poppy.utils import krebin
 
 from .utils import S
+from .coords import dist_image
+
+# Program bar
+from tqdm.auto import trange, tqdm
 
 import logging
 _log = logging.getLogger('webbpsf_ext')
@@ -839,7 +848,7 @@ def model_to_hdulist(args_model, sp_star, bandpass):
 
 def distort_image(hdulist_or_filename, ext=0, to_frame='sci', fill_value=0, 
                   xnew_coords=None, ynew_coords=None, return_coords=False,
-                  aper=None):
+                  aper=None, sci_cen=None):
     """ Distort an image
 
     Apply SIAF instrument distortion to an image that is assumed to be in 
@@ -888,11 +897,16 @@ def distort_image(hdulist_or_filename, ext=0, to_frame='sci', fill_value=0,
         will return the full set of new coordinates. Output will then
         be (psf_new, xnew, ynew), where all three array have the same
         shape.
+    aper : None or :mod:`pysiaf.Aperture`
+        Option to pass the SIAF aperture if it is already known or
+        specified to save time on generating a new one. If set to None,
+        then automatically determines a new `pysiaf` aperture based on
+        information stored in the header.
     """
 
     import pysiaf
     from scipy.interpolate import RegularGridInterpolator
-    
+
     def _get_default_siaf(instrument, aper_name):
 
         # Create new naming because SIAF requires special capitalization
@@ -930,8 +944,11 @@ def distort_image(hdulist_or_filename, ext=0, to_frame='sci', fill_value=0,
     oversamp   = hdu_list[ext].header["DET_SAMP"]  # PSF oversampling relative to detector 
 
     # Get 'sci' reference location where PSF is observed
-    xsci_cen = hdu_list[ext].header["DET_X"]  # center x location in pixels ('sci')
-    ysci_cen = hdu_list[ext].header["DET_Y"]  # center y location in pixels ('sci')
+    if sci_cen is None:
+        xsci_cen = hdu_list[ext].header["DET_X"]  # center x location in pixels ('sci')
+        ysci_cen = hdu_list[ext].header["DET_Y"]  # center y location in pixels ('sci')
+    else:
+        xsci_cen, ysci_cen = sci_cen
 
     # ###############################################
     # Create an array of indices (in pixels) for where the PSF is located on the detector
@@ -1000,3 +1017,184 @@ def distort_image(hdulist_or_filename, ext=0, to_frame='sci', fill_value=0,
     else:
         return psf_new
 
+def _convolve_psfs_for_mp(arg_vals):
+    """
+    Internal helper routine for parallelizing computations across multiple processors,
+    specifically for convolving position-dependent PSFs with an extended image or
+    field of PSFs.
+
+    """
+    
+    im, psf, ind_mask = arg_vals
+    im_temp = im.copy()
+    im_temp[~ind_mask] = 0
+    
+    if np.allclose(im_temp,0):
+        # No need to convolve anything if no flux!
+        res = im_temp
+    else:
+        # Normalize PSF sum to 1.0
+        # Otherwise convolve_fft may throw an error if psf.sum() is too small
+        norm = psf.sum()
+        psf = psf / norm
+        res = convolve_fft(im_temp, psf, fftn=fftpack.fftn, ifftn=fftpack.ifftn, allow_huge=True)
+        res *= norm
+
+    return res
+
+def convolve_image(hdul_sci_image, hdul_psfs):
+    """ Convolve image with various PSFs
+
+    """
+    
+    import pysiaf
+    
+    # Get SIAF aperture info
+    hdr = hdul_psfs[0].header
+    siaf = pysiaf.siaf.Siaf(hdr['INSTRUME'])
+    siaf_ap = siaf[hdr['APERNAME']]
+    
+    # Get xsci and ysci coordinates
+    xvals = np.array([hdu.header['XVAL'] for hdu in hdul_psfs])
+    yvals = np.array([hdu.header['YVAL'] for hdu in hdul_psfs])
+    if 'sci' in hdr['CFRAME']:
+        xsci, ysci = (xvals, yvals)
+    else:
+        xsci, ysci = siaf_ap.convert(xvals, yvals, hdr['CFRAME'], 'sci')
+    
+    xoff_sci_asec_psfs = (xsci - siaf_ap.XSciRef) * siaf_ap.XSciScale
+    yoff_sci_asec_psfs = (ysci - siaf_ap.YSciRef) * siaf_ap.YSciScale
+    
+    # Size of input image in arcsec
+    im_input = hdul_sci_image[0].data
+    pixscale = hdul_sci_image[0].header['PIXELSCL']
+    ysize, xsize = im_input.shape
+    ysize_asec = ysize * siaf_ap.YSciScale
+    xsize_asec = xsize * siaf_ap.XSciScale
+    
+    # Create mask for input image for each PSF to convolve
+    rho_arr = []
+    coords_asec = (xoff_sci_asec_psfs, yoff_sci_asec_psfs)
+    for xv, yv in np.transpose(coords_asec):
+        cen = (xsize_asec/2 + xv, ysize_asec/2 + yv)
+        # cen_pix = (cen[0]/siaf_ap.XSciScale, cen[1]/siaf_ap.YSciScale)
+        # rho = dist_image(im_input, pixscale=pixscale, center=cen_pix)
+        yarr, xarr = np.indices((ysize,xsize))
+        xarr = xarr*siaf_ap.XSciScale - cen[0]
+        yarr = yarr*siaf_ap.YSciScale - cen[1]
+        rho = np.sqrt(xarr**2 + yarr**2)
+        rho_arr.append(rho)
+    rho_arr = np.array(rho_arr)
+
+    # Calculate indices corresponding to closest PSF
+    im_indices = np.argmin(rho_arr, axis=0)
+    del rho_arr
+
+    # Create an image mask for each PSF
+    npsf = len(hdul_psfs)
+    mask_arr = np.array([im_indices==i for i in range(npsf)])
+    
+    # Split into workers
+    worker_args = [(im_input, hdul_psfs[i].data, mask_arr[i]) for i in range(npsf)]
+
+    nsplit = 4
+    if nsplit>1:
+        im_conv = []
+        try:
+            with mp.Pool(nsplit) as pool:
+                for res in tqdm(pool.imap_unordered(_convolve_psfs_for_mp, worker_args), total=npsf):
+                    im_conv.append(res)
+                pool.close()
+            if im_conv[0] is None:
+                raise RuntimeError('Returned None values. Issue with multiprocess??')
+        except Exception as e:
+            print('Caught an exception during multiprocess.')
+            print('Closing multiprocess pool.')
+            pool.terminate()
+            pool.close()
+            raise e
+        else:
+            print('Closing multiprocess pool.')
+
+        im_conv = np.array(im_conv).sum(axis=0)
+    else:
+        im_conv = np.sum(np.array([_convolve_psfs_for_mp(wa) for wa in tqdm(worker_args)]), axis=0)
+
+    return im_conv
+
+
+def make_disk_image(inst, disk_params, sp_star=None, pixscale_out=None, dist_out=None):
+    """
+    Rescale disk model flux to desired pixel scale and distance.
+    If instrument bandpass is different from disk model, scales 
+    flux assuming a grey scattering model.
+
+    Returns image flux values in photons/sec.
+    
+    Parameters
+    ==========
+    
+    """
+
+    from .spectra import stellar_spectrum
+    
+    # Get stellar spectrum
+    if sp_star is None:
+        sp_star = stellar_spectrum('flat')
+        
+    # Set desired distance to be the same as the stellar object
+    if dist_out is None:
+        dist_out = disk_params['dist']
+    
+    # Create disk image for input bandpass from model
+    keys = ['file', 'pixscale', 'dist', 'wavelength', 'units']
+    args_model = tuple(disk_params[k] for k in keys)
+
+    # Open model file and scale disk emission to new bandpass, assuming grey scattering properties
+    hdul_model = model_to_hdulist(args_model, sp_star, inst.bandpass)
+
+    # Change pixel scale (default is same as inst pixel oversampling)
+    # Provide option to move disk to a different distance
+    # `dist_in` and `pixscale_in` will be pulled from HDUList header
+    if pixscale_out is None:
+        pixscale_out = inst.pixelscale / inst.oversample
+    hdul_disk_image = image_rescale(hdul_model, pixscale_out, dist_out=dist_out, 
+                                    cen_star=disk_params['cen_star'])
+
+    copy_keys = [
+        'INSTRUME', 'APERNAME', 'FILTER', 'DET_SAMP',
+        'DET_NAME', 'DET_X', 'DET_Y', 'DET_V2', 'DET_V3',
+    ]
+    head_temp = inst.psf_coeff_header
+    for key in copy_keys:
+        try:
+            hdul_disk_image[0].header[key] = (head_temp[key], head_temp.comments[key])
+        except (AttributeError, KeyError):
+            pass
+        
+    return hdul_disk_image
+
+def rotate_shift_image(hdul, PA_offset=0, delx_asec=0, dely_asec=0):
+    """ Rotate/Shift image
+    
+    Rotate 
+    
+    PA_offset : float
+        Rotate entire scene by some position angle. 
+        Positive values are counter-clockwise.
+    """
+        
+    # Rotate
+    if np.abs(PA_offset)!=0:
+        im_rot = rotate(hdul[0].data, -1*PA_offset, reshape=False, order=1)
+    else:
+        im_rot = hdul[0].data
+    delx, dely = np.array([delx_asec, dely_asec]) / hdul[0].header['PIXELSCL']
+    
+    # Get position offsets
+    im_new = fshift(im_rot, delx, dely, pad=True)
+    
+    hdu_new = fits.PrimaryHDU(im_new)
+    hdu_new.header = hdul[0].header
+    
+    return fits.HDUList(hdu_new)

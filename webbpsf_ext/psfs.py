@@ -13,9 +13,6 @@ from .opds import OPDFile_to_HDUList
 import logging
 _log = logging.getLogger('webbpsf_ext')
 
-import scipy
-from scipy import fftpack
-from astropy.convolution import convolve, convolve_fft
 from scipy.interpolate import griddata, RegularGridInterpolator, interp1d
 #from numpy.polynomial import legendre
 
@@ -492,27 +489,3 @@ def field_coeff_func(v2grid, v3grid, cf_fields, v2_new, v3_new):
     res = res.squeeze() if res.shape[0]==1 else res
     return res
 
-def _convolve_psfs_for_mp(arg_vals):
-    """
-    Internal helper routine for parallelizing computations across multiple processors,
-    specifically for convolving position-dependent PSFs with an extended image or
-    field of PSFs.
-
-    """
-    
-    im, psf, ind_mask = arg_vals
-    im_temp = im.copy()
-    im_temp[~ind_mask] = 0
-    
-    if np.allclose(im_temp,0):
-        # No need to convolve anything if no flux!
-        res = im_temp
-    else:
-        # Normalize PSF sum to 1.0
-        # Otherwise convolve_fft may throw an error if psf.sum() is too small
-        norm = psf.sum()
-        psf = psf / norm
-        res = convolve_fft(im_temp, psf, fftn=fftpack.fftn, ifftn=fftpack.ifftn, allow_huge=True)
-        res *= norm
-
-    return res
