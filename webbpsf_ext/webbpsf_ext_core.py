@@ -173,17 +173,24 @@ class NIRCam_ext(webbpsf_NIRCam):
         self._oversample = value
     
     @property
+    def wave_fit(self):
+        """Wavelength range to fit"""
+        if self.quick:
+            w1 = self.bandpass.wave.min() / 1e4
+            w2 = self.bandpass.wave.max() / 1e4
+        else:
+            w1, w2 = (2.4,5.1) if self.channel=='long' else (0.5,2.5)
+        return w1, w2
+    @property
     def npsf(self):
-        
+        """Number of wavelengths/PSFs to fit"""
+        w1, w2 = self.wave_fit
         npsf = self._npsf
-        
-        # Default to 10 PSF simulations per um
-        w1 = self.bandpass.wave.min() / 1e4
-        w2 = self.bandpass.wave.max() / 1e4
+        # Default to 20 PSF simulations per um
         if npsf is None:
             dn = 20 
             npsf = int(np.ceil(dn * (w2-w1)))
-
+            
         # Want at least 5 monochromatic PSFs
         npsf = 5 if npsf<5 else int(npsf)
 
@@ -191,9 +198,9 @@ class NIRCam_ext(webbpsf_NIRCam):
         npsf = self.ndeg+1 if npsf<=self.ndeg else int(npsf)
 
         return npsf
-    
     @npsf.setter
     def npsf(self, value):
+        """Set number of wavelengths/PSFs to fit"""
         self._npsf = value
         
     @property
@@ -212,7 +219,23 @@ class NIRCam_ext(webbpsf_NIRCam):
     @property
     def quick(self):
         """Perform quicker coeff calculation over limited bandwidth?"""
-        return False if self._quick is None else self._quick
+
+        # If WLP4 is used, then narrow bandpass, so turn on quick flag
+        wl4_list = ['WEAK LENS +12 (=4+8)', 'WEAK LENS -4 (=4-8)', 'WEAK LENS +4',
+                    'WLP12', 'WLM8', 'WLP4']
+        if (self.pupil_mask in wl4_list) or ('N' in self.filter):
+            is_narrow = True
+        else:
+            is_narrow = False
+                    
+        if self._quick is not None:
+            quick = self._quick
+        elif is_narrow:
+            quick = True
+        else:
+            quick = False
+
+        return quick
     @quick.setter
     def quick(self, value):
         """Perform quicker coeff calculation over limited bandwidth?"""
@@ -379,7 +402,7 @@ class NIRCam_ext(webbpsf_NIRCam):
         """
         Parse out OPD information for a given OPD, which can be a file name, tuple (file,slice), 
         HDUList, or OTE Linear Model. Returns dictionary of some relevant information for 
-        logging purposes. The dictionary has an OPD version as an OTE LM.
+        logging purposes. The dictionary returns the OPD as an OTE LM by default.
         
         This outputs an OTE Linear Model. In order to update instrument class:
             >>> opd_dict = inst.get_opd_info()
@@ -706,13 +729,22 @@ class MIRI_ext(webbpsf_MIRI):
         self._oversample = value
     
     @property
+    def wave_fit(self):
+        """Wavelength range to fit"""
+        if self.quick:
+            w1 = self.bandpass.wave.min() / 1e4
+            w2 = self.bandpass.wave.max() / 1e4
+        else:
+            w1, w2 = (5,30)
+        return (w1, w2)
+    @property
     def npsf(self):
         """Number of wavelengths/PSFs to fit"""
+
+        w1, w2 = self.wave_fit
+
         npsf = self._npsf
-        
         # Default to 10 PSF simulations per um
-        w1 = self.bandpass.wave.min() / 1e4
-        w2 = self.bandpass.wave.max() / 1e4
         if npsf is None:
             dn = 10 
             npsf = int(np.ceil(dn * (w2-w1)))
@@ -726,7 +758,7 @@ class MIRI_ext(webbpsf_MIRI):
         return npsf
     @npsf.setter
     def npsf(self, value):
-        """Number of wavelengths/PSFs to fit"""
+        """Set number of wavelengths/PSFs to fit"""
         self._npsf = value
         
     @property
@@ -748,7 +780,11 @@ class MIRI_ext(webbpsf_MIRI):
     @property
     def quick(self):
         """Perform quicker coeff calculation over limited bandwidth?"""
-        return True if self._quick is None else self._quick
+        if self._quick is not None:
+            quick = self._quick
+        else:
+            quick = True
+        return quick
     @quick.setter
     def quick(self, value):
         """Perform quicker coeff calculation over limited bandwidth?"""
@@ -1640,8 +1676,9 @@ def _gen_psf_coeff(self, nproc=None, wfe_drift=0, force=False, save=True,
     log_prev = conf.logging_level
     setup_logging('WARN', verbose=False)
     
-    w1 = self.bandpass.wave.min() / 1e4
-    w2 = self.bandpass.wave.max() / 1e4
+    # w1 = self.bandpass.wave.min() / 1e4
+    # w2 = self.bandpass.wave.max() / 1e4
+    w1, w2 = self.wave_fit
     npsf = self.npsf
     waves = np.linspace(w1, w2, npsf)
         
@@ -2501,12 +2538,13 @@ def _calc_psf_from_coeff(self, sp=None, return_oversample=True,
     Parameters
     ----------
     sp : :mod:`pysynphot.spectrum`
-        If not specified, the default is flat in phot lam 
-        (equal number of photons per spectral bin).
-        The default is normalized to produce 1 count/sec within that bandpass,
-        assuming the telescope collecting area and instrument bandpass. 
+        If not specified, the default is flat in phot lam (equal number of photons 
+        per wavelength bin). The default is normalized to produce 1 count/sec within 
+        that bandpass, assuming the telescope collecting area and instrument bandpass. 
         Coronagraphic PSFs will further decrease this due to the smaller pupil
         size and coronagraphic spot. 
+        If set, then the resulting PSF image will be scaled to generate the total
+        observed number of photons from the spectrum.
     return_oversample : bool
         If True, then also returns the oversampled version of the PSF (default: True).
     wfe_drift : float or None
@@ -2557,6 +2595,7 @@ def _calc_psf_from_coeff(self, sp=None, return_oversample=True,
     nfield = 1 if nfield is None else nfield
 
     # Modify PSF coefficients based on field-dependence with a focal plane mask
+    nfield_mask = None
     if self.image_mask is not None:
         cf_mod, nfield_mask = _coeff_mod_wfe_mask(self, coord_vals, coord_frame)
         psf_coeff_mod += cf_mod
@@ -2761,7 +2800,7 @@ def _coeff_mod_wfe_field(self, coord_vals, coord_frame):
     cf_fit = self._psf_coeff_mod['si_field'] 
     v2grid  = self._psf_coeff_mod['si_field_v2grid'] 
     v3grid  = self._psf_coeff_mod['si_field_v3grid'] 
-    apname  = self._psf_coeff_mod['si_feild_apname']
+    apname  = self._psf_coeff_mod['si_field_apname']
     siaf_ap = self.siaf[apname] if apname is not None else None
 
     # Modify PSF coefficients based on position
