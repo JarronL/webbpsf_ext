@@ -1682,8 +1682,8 @@ def _gen_psf_coeff(self, nproc=None, wfe_drift=0, force=False, save=True,
     npsf = self.npsf
     waves = np.linspace(w1, w2, npsf)
         
-    fov_pix = self.fov_pix #if fov_pix is None else fov_pix
-    oversample = self.oversample #if oversample is None else oversample
+    fov_pix = self.fov_pix 
+    oversample = self.oversample 
             
     # Get OPD info and convert to OTE LM
     opd_dict = self.get_opd_info(HDUL_to_OTELM=True)
@@ -1743,7 +1743,7 @@ def _gen_psf_coeff(self, nproc=None, wfe_drift=0, force=False, save=True,
     else:
         # Pass arguments to the helper function
         hdu_arr = []
-        for wa in worker_arguments:
+        for wa in tqdm(worker_arguments, desc='PSFs', leave=False):
             hdu = _wrap_coeff_for_mp(wa)
             if hdu is None:
                 raise RuntimeError('Returned None values. Issue with WebbPSF??')
@@ -2190,6 +2190,9 @@ def _gen_wfefield_coeff(self, force=False, save=True, return_results=False, retu
     # Initial settings
     coeff0 = self.psf_coeff
     x0, y0 = self.detector_position
+
+    if kwargs.get('nproc') is None:
+        kwargs['nproc'] = nproc_use(self.fov_pix, self.oversample, self.npsf)
 
     # Calculate new coefficients at each position
     cf_fields = []
@@ -2822,6 +2825,7 @@ def _coeff_mod_wfe_field(self, coord_vals, coord_frame):
             x = np.array(coord_vals[0])
             y = np.array(coord_vals[1])
             v2, v3 = siaf_ap.convert(x,y, cframe, 'tel')
+            v2, v3 = (v2/60., v3/60.) # convert to arcmin
         else:
             _log.warning("coord_frame setting '{}' not recognized.".format(coord_frame))
             _log.warning("`calc_psf_from_coeff` will continue with default PSF.")
