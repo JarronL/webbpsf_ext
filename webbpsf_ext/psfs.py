@@ -162,7 +162,7 @@ def _wrap_coeff_for_mp(args):
     return hdu_list[2]
 
 def gen_image_from_coeff(inst, coeff, coeff_hdr, sp_norm=None, nwaves=None, 
-                    use_sp_waveset=False, return_oversample=False):
+                         use_sp_waveset=False, return_oversample=False):
     
     """Generate PSF
 
