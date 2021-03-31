@@ -5,6 +5,8 @@ import time
 import os, six
 from numpy.lib.arraypad import pad
 import multiprocessing as mp
+# from multiprocessing import set_start_method, Pool
+# set_start_method("spawn")
 # import traceback
 
 from astropy.io import fits
@@ -1726,7 +1728,7 @@ def _gen_psf_coeff(self, nproc=None, wfe_drift=0, force=False, save=True,
         hdu_arr = []
         try:
             with mp.Pool(nproc) as pool:
-                for res in tqdm(pool.imap_unordered(_wrap_coeff_for_mp, worker_arguments), total=npsf, desc='PSFs', leave=False):
+                for res in tqdm(pool.imap(_wrap_coeff_for_mp, worker_arguments), total=npsf, desc='PSFs', leave=False):
                     hdu_arr.append(res)
                 pool.close()
             if hdu_arr[0] is None:
@@ -1980,9 +1982,14 @@ def _gen_wfedrift_coeff(self, force=False, save=True, wfe_list=[0,1,2,5,10,20,40
 
     # Warn if mask shifting is currently enabled (only when an image mask is present)
     for off_pos in ['coron_shift_x','coron_shift_y']:
-        val = self.options[off_pos]
+        val = self.options.get(off_pos)
         if (self.image_mask is not None) and (val is not None) and (val != 0):
             _log.warn(f'{off_pos} is set to {val:.3f} arcsec. Should this be 0?')
+
+    # Set number of processors to 1 for now. 
+    # There's a bug in the multiprocessing that can slow things down.
+    if kwargs.get('nproc') is None:
+        kwargs['nproc'] = 1
 
     log_prev = conf.logging_level
     setup_logging('WARN', verbose=False)
@@ -2191,8 +2198,10 @@ def _gen_wfefield_coeff(self, force=False, save=True, return_results=False, retu
     coeff0 = self.psf_coeff
     x0, y0 = self.detector_position
 
+    # Set number of processors to 1 for now. 
+    # There's a bug in the multiprocessing that can slow things down.
     if kwargs.get('nproc') is None:
-        kwargs['nproc'] = nproc_use(self.fov_pix, self.oversample, self.npsf)
+        kwargs['nproc'] = 1
 
     # Calculate new coefficients at each position
     cf_fields = []
@@ -2356,6 +2365,10 @@ def _gen_wfemask_coeff(self, force=False, save=True, return_results=False, retur
             ind_zero = np.abs(yoff)==0
             ind_sgd = (np.abs(yoff) <= 0.02) & ~ind_zero
 
+    # Set number of processors to 1 for now. 
+    # There's a bug in the multiprocessing that can slow things down.
+    if kwargs.get('nproc') is None:
+        kwargs['nproc'] = 1
 
     # Get PSF coefficients for each specified position
     log_prev = conf.logging_level
