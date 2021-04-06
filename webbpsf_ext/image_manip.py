@@ -2,19 +2,17 @@ import numpy as np
 import multiprocessing as mp
 import six
 
+import scipy
+from scipy import fftpack
 from scipy.ndimage import fourier_shift
 from scipy.ndimage.interpolation import rotate
 
-import scipy
-from scipy import fftpack
 from astropy.convolution import convolve, convolve_fft
-
 from astropy.io import fits
 
 from poppy.utils import krebin
 
 from .utils import S
-from .coords import dist_image
 
 # Program bar
 from tqdm.auto import trange, tqdm
@@ -1198,3 +1196,4 @@ def rotate_shift_image(hdul, PA_offset=0, delx_asec=0, dely_asec=0):
     hdu_new.header = hdul[0].header
     
     return fits.HDUList(hdu_new)
+
