@@ -1606,6 +1606,60 @@ def _drift_opd(self, wfe_drift, opd=None):
     return wfe_dict
 
 
+def _inst_copy(self):
+    """
+    Create a copy of the instrument class that has just been initialized.
+    """
+
+    # Change log levels to WARNING for pyNRC, WebbPSF, and POPPY
+    log_prev = conf.logging_level
+    setup_logging('WARN', verbose=False)
+
+    init_params = {
+        'filter'    : self.filter, 
+        'pupil_mask': self.pupil_mask, 
+        'image_mask': self.image_mask, 
+        'fov_pix'   : self.fov_pix, 
+        'oversample': self.oversample,
+        'auto_gen_coeffs': False
+    }
+
+    # Init same subclass
+    if self.name=='NIRCam':
+        inst = NIRCam_ext(**init_params)
+    elif self.name=='MIRI':
+        inst = MIRI_ext(**init_params)
+
+    # Get OPD info
+    inst.pupilopd = self.pupilopd
+    inst.pupil    = self.pupil
+
+    # Detector and aperture info
+    inst._detector = self._detector
+    inst._detector_position = self._detector_position
+    inst._aperturename = self._aperturename
+
+    # Other options
+    inst.options = self.options
+
+    # PSF coeff info
+    inst.use_legendre = self.use_legendre
+    inst._ndeg = self._ndeg
+    inst._npsf = self._npsf
+    inst._quick = self._quick
+
+    ### Instrument-specific parameters
+    # Grism order for NIRCam
+    try: inst._grism_order = self._grism_order
+    except: pass
+    # ND square for NIRCam
+    try: inst._ND_acq = self._ND_acq
+    except: pass
+
+    setup_logging(log_prev, verbose=False)
+    return inst
+
+
 def _gen_psf_coeff(self, nproc=None, wfe_drift=0, force=False, save=True, 
                    return_results=False, return_extras=False, **kwargs):
 
@@ -1704,7 +1758,7 @@ def _gen_psf_coeff(self, nproc=None, wfe_drift=0, force=False, save=True,
     pupilopd_orig = deepcopy(self.pupilopd)
     pupil_orig = deepcopy(self.pupil)
     self.pupilopd = opd_new
-    self.pupil = opd_new
+    self.pupil    = opd_new
     
     # How many processors to split into?
     if nproc is None:
@@ -1713,22 +1767,18 @@ def _gen_psf_coeff(self, nproc=None, wfe_drift=0, force=False, save=True,
 
     # Make a paired down copy of self with limited data for 
     # copying to multiprocessor theads. This reduces memory
-    # swapping overheads.
-    inst_copy = deepcopy(self)
-    del inst_copy._psf_coeff_mod
-    inst_copy.psf_coeff = None
-    inst_copy.psf_coeff_header = None
-    inst_copy._psf_coeff_mod = {}
+    # swapping overheads and limitations.
+    inst_copy = _inst_copy(self) if nproc > 1 else self
 
-    setup_logging('WARN', verbose=False)
     t0 = time.time()
     # Setup the multiprocessing pool and arguments to pass to each pool
     worker_arguments = [(inst_copy, wlen, fov_pix, oversample) for wlen in waves]
     if nproc > 1:
+
         hdu_arr = []
         try:
             with mp.Pool(nproc) as pool:
-                for res in tqdm(pool.imap(_wrap_coeff_for_mp, worker_arguments), total=npsf, desc='PSFs', leave=False):
+                for res in tqdm(pool.imap(_wrap_coeff_for_mp, worker_arguments), total=npsf, desc='Single PSFs', leave=False):
                     hdu_arr.append(res)
                 pool.close()
             if hdu_arr[0] is None:
@@ -1745,7 +1795,7 @@ def _gen_psf_coeff(self, nproc=None, wfe_drift=0, force=False, save=True,
     else:
         # Pass arguments to the helper function
         hdu_arr = []
-        for wa in tqdm(worker_arguments, desc='PSFs', leave=False):
+        for wa in tqdm(worker_arguments, desc='Single PSFs', leave=False):
             hdu = _wrap_coeff_for_mp(wa)
             if hdu is None:
                 raise RuntimeError('Returned None values. Issue with WebbPSF??')
@@ -1966,12 +2016,21 @@ def _gen_wfedrift_coeff(self, force=False, save=True, wfe_list=[0,1,2,5,10,20,40
         self.fov_pix = fov_pix_orig
         _log.info(f"Loading {outname}")
         out = np.load(outname)
+
+        wfe_drift = out.get('wfe_drift')
+        # Account for possibility that wfe_drift_off is None
+        try:
+            wfe_drift_off = out.get('wfe_drift_off')
+        except ValueError:
+            wfe_drift_off = None
+        wfe_drift_lxmap = out.get('wfe_drift_lxmap')
+
         if return_results:
-            return out['arr_0'], out['arr_1'], out['arr_2']
+            return wfe_drift, wfe_drift_off, wfe_drift_lxmap
         else:
-            self._psf_coeff_mod['wfe_drift'] = out['arr_0']
-            self._psf_coeff_mod['wfe_drift_off'] = out['arr_1']
-            self._psf_coeff_mod['wfe_drift_lxmap'] = out['arr_2']
+            self._psf_coeff_mod['wfe_drift'] = wfe_drift
+            self._psf_coeff_mod['wfe_drift_off'] = wfe_drift_off
+            self._psf_coeff_mod['wfe_drift_lxmap'] = wfe_drift_lxmap
             return
 
     _log.warn('Generating WFE Drift coefficients. This may take some time...')
@@ -1985,11 +2044,6 @@ def _gen_wfedrift_coeff(self, force=False, save=True, wfe_list=[0,1,2,5,10,20,40
         val = self.options.get(off_pos)
         if (self.image_mask is not None) and (val is not None) and (val != 0):
             _log.warn(f'{off_pos} is set to {val:.3f} arcsec. Should this be 0?')
-
-    # Set number of processors to 1 for now. 
-    # There's a bug in the multiprocessing that can slow things down.
-    if kwargs.get('nproc') is None:
-        kwargs['nproc'] = 1
 
     log_prev = conf.logging_level
     setup_logging('WARN', verbose=False)
@@ -2007,7 +2061,7 @@ def _gen_wfedrift_coeff(self, force=False, save=True, wfe_list=[0,1,2,5,10,20,40
         self.image_mask = None
         
         cf_wfe_off = []
-        for wfe_drift in tqdm(wfe_list, leave=False, desc="WFE Drift (Off-Axis)"):
+        for wfe_drift in tqdm(wfe_list, leave=False, desc="Off-Axis"):
             cf, _ = self.gen_psf_coeff(wfe_drift=wfe_drift, force=True, save=False, return_results=True, **kwargs)
             cf_wfe_off.append(cf)
         cf_wfe_off = np.array(cf_wfe_off)
@@ -2051,7 +2105,7 @@ def _gen_wfedrift_coeff(self, force=False, save=True, wfe_list=[0,1,2,5,10,20,40
 
     if save:
         _log.info(f"Saving to {outname}")
-        np.savez(outname, cf_fit, cf_fit_off, lxmap)
+        np.savez(outname, wfe_drift=cf_fit, wfe_drift_off=cf_fit_off, wfe_drift_lxmap=lxmap)
     _log.info('Done.')
 
     # Options to return results from function
@@ -2198,11 +2252,6 @@ def _gen_wfefield_coeff(self, force=False, save=True, return_results=False, retu
     coeff0 = self.psf_coeff
     x0, y0 = self.detector_position
 
-    # Set number of processors to 1 for now. 
-    # There's a bug in the multiprocessing that can slow things down.
-    if kwargs.get('nproc') is None:
-        kwargs['nproc'] = 1
-
     # Calculate new coefficients at each position
     cf_fields = []
     for xsci, ysci in tqdm(zip(xsci_all, ysci_all), total=npos):
@@ -2210,6 +2259,7 @@ def _gen_wfefield_coeff(self, force=False, save=True, return_results=False, retu
         self.detector_position = (xsci, ysci)
         cf, _ = self.gen_psf_coeff(force=True, save=False, return_results=True, **kwargs)
         cf_fields.append(cf)
+    cf_fields = np.array(cf_fields)
 
     # Reset to initial values
     self.detector_position = (x0,y0)
@@ -2218,10 +2268,15 @@ def _gen_wfefield_coeff(self, force=False, save=True, return_results=False, retu
 
     # Return raw results for further analysis
     if return_raw:
-        return np.array(cf_fields), v2_all, v3_all
+        return cf_fields, v2_all, v3_all
 
     # Get residuals
-    cf_fields_resid = np.array(cf_fields) - coeff0
+    new_shape = cf_fields.shape[-2:]
+    if coeff0.shape[-2:] != new_shape:
+        coeff0_resize = np.array([pad_or_cut_to_size(im, new_shape) for im in coeff0])
+        coeff0 = coeff0_resize
+
+    cf_fields_resid = cf_fields - coeff0
     del cf_fields
 
     # Create an evenly spaced grid of V2/V3 coordinates
@@ -2365,17 +2420,12 @@ def _gen_wfemask_coeff(self, force=False, save=True, return_results=False, retur
             ind_zero = np.abs(yoff)==0
             ind_sgd = (np.abs(yoff) <= 0.02) & ~ind_zero
 
-    # Set number of processors to 1 for now. 
-    # There's a bug in the multiprocessing that can slow things down.
-    if kwargs.get('nproc') is None:
-        kwargs['nproc'] = 1
-
     # Get PSF coefficients for each specified position
     log_prev = conf.logging_level
     setup_logging('WARN', verbose=False)
     cf_all = []
     npos = len(xy_list)
-    for i in trange(npos, leave=False, desc=""):
+    for i in trange(npos, leave=False, desc="Mask Offsets"):
         self.options['coron_shift_x'] = xy_list[i][0]
         self.options['coron_shift_y'] = xy_list[i][1]
         xyshift = -1 * np.array(xy_list[i]) / self.pixelscale
