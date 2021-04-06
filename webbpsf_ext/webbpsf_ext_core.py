@@ -1491,7 +1491,7 @@ def _get_opd_info(self, opd=None, HDUL_to_OTELM=True):
     elif isinstance(opd, six.string_types):
         opd = (opd, 0)
 
-    # Change log levels to WARNING for pyNRC, WebbPSF, and POPPY
+    # Change log levels to WARNING 
     log_prev = conf.logging_level
     setup_logging('WARN', verbose=False)
 
@@ -1557,7 +1557,7 @@ def _drift_opd(self, wfe_drift, opd=None):
     opd_name = opd_dict['opd_name']
     opd_num  = opd_dict['opd_num']
     opd_str  = opd_dict['opd_str']
-    opd      = opd_dict['pupilopd']
+    opd      = deepcopy(opd_dict['pupilopd'])
         
     # If there is wfe_drift, create a OTE Linear Model
     wfe_dict = {'therm':0, 'frill':0, 'iec':0, 'opd':opd}
@@ -1573,7 +1573,7 @@ def _drift_opd(self, wfe_drift, opd=None):
         # Give IEC heaters 1 nm 
         wfe_iec = 1 if np.abs(wfe_drift) > 2 else 0
 
-        # Split remainder evenly between frill and OTE thermal slew
+        # Split remainder between frill and OTE thermal slew
         wfe_remain_var = wfe_drift**2 - wfe_iec**2
         wfe_frill = np.sqrt(0.8*wfe_remain_var)
         wfe_therm = np.sqrt(0.2*wfe_remain_var)
@@ -1586,9 +1586,9 @@ def _drift_opd(self, wfe_drift, opd=None):
             wfe_iec *= -1
 
         # Apply IEC
-        opd.apply_iec_drift(wfe_iec, delay_update=True)
+        opd.apply_iec_drift(amplitude=wfe_iec, delay_update=True)
         # Apply frill
-        opd.apply_frill_drift(wfe_frill, delay_update=True)
+        opd.apply_frill_drift(amplitude=wfe_frill, delay_update=True)
 
         # Apply OTE thermal slew amplitude
         # This is slightly different due to how thermal slews are specified
@@ -1602,6 +1602,14 @@ def _drift_opd(self, wfe_drift, opd=None):
         wfe_dict['frill'] = wfe_frill
         wfe_dict['iec']   = wfe_iec
         wfe_dict['opd']   = opd
+    else:
+        # Apply IEC
+        opd.apply_iec_drift(amplitude=0, delay_update=True)
+        # Apply frill
+        opd.apply_frill_drift(amplitude=0, delay_update=True)
+        # Apply OTE thermal slew amplitude
+        opd.thermal_slew(0*u.min, scaling=0)
+        wfe_dict['opd'] = opd
 
     return wfe_dict
 
@@ -1631,8 +1639,8 @@ def _inst_copy(self):
         inst = MIRI_ext(**init_params)
 
     # Get OPD info
-    inst.pupilopd = self.pupilopd
-    inst.pupil    = self.pupil
+    inst.pupilopd = deepcopy(self.pupilopd)
+    inst.pupil    = deepcopy(self.pupil)
 
     # Detector and aperture info
     inst._detector = self._detector
@@ -2830,8 +2838,7 @@ def _coeff_mod_wfe_drift(self, wfe_drift, key='wfe_drift'):
         cf_mod = 0
     else:
         _log.info("Generating WFE drift modifications...")
-        psf_coeff_hdr = self.psf_coeff_header
-        psf_coeff     = self.psf_coeff
+        psf_coeff = self.psf_coeff
 
         cf_fit = self._psf_coeff_mod[key] 
         lxmap  = self._psf_coeff_mod['wfe_drift_lxmap'] 
