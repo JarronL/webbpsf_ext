@@ -2,6 +2,8 @@
 import numpy as np
 from numpy.polynomial import legendre
 
+from .coords import dist_image
+from .image_manip import frebin
 
 ###########################################################################
 #    Polynomial fitting
@@ -325,13 +327,13 @@ def hist_indices(values, bins=10, return_more=False):
     vmax = values_flat.max()
     N  = len(values_flat)   
     
-    try: # if bins is an integer
+    try: # assume it's already an array
+        binsize = bins[1] - bins[0]
+    except TypeError: # if bins is an integer
         binsize = (vmax - vmin) / bins
         bins = np.arange(vmin, vmax + binsize, binsize)
         bins[0] = vmin
         bins[-1] = vmax
-    except: # otherwise assume it's already an array
-        binsize = bins[1] - bins[0]
     
     # Central value of each bin
     center_vals = bins[:-1] + binsize / 2.
@@ -417,3 +419,57 @@ def binned_statistic(x, values, func=np.mean, bins=10):
     
     return res
 
+
+def radial_std(im_diff, pixscale=None, oversample=None, supersample=False, func=np.std):
+    """Generate contrast curve of PSF difference
+
+    Find the standard deviation within fixed radial bins of a differenced image.
+    Returns two arrays representing the 1-sigma contrast curve at given distances.
+
+    Parameters
+    ==========
+    im_diff : ndarray
+        Differenced image of two PSFs, for instance.
+
+    Keywords
+    ========
+    pixscale : float  
+        Pixel scale of the input image
+    oversample : int
+        Is the input image oversampled compared to detector? If set, then
+        the binsize will be pixscale*oversample (if supersample=False).
+    supersample : bool
+        If set, then oversampled data will have a binsize of pixscale,
+        otherwise the binsize is pixscale*oversample.
+    func_std : func
+        The function to use for calculating the radial standard deviation.
+
+    """
+
+    from astropy.convolution import convolve, Gaussian1DKernel
+
+    # Set oversample to 1 if supersample keyword is set
+    oversample = 1 if supersample or (oversample is None) else oversample
+
+    # Rebin data
+    data_rebin = frebin(im_diff, scale=1/oversample)
+
+    # Determine pixel scale of rebinned data
+    pixscale = 1 if pixscale is None else oversample*pixscale
+
+    # Pixel distances
+    rho = dist_image(data_rebin, pixscale=pixscale)
+
+    # Get radial profiles
+    binsize = pixscale
+    bins = np.arange(rho.min(), rho.max() + binsize, binsize)
+    nan_mask = np.isnan(data_rebin)
+    igroups, _, rr = hist_indices(rho[~nan_mask], bins, True)
+    stds = binned_statistic(igroups, data_rebin[~nan_mask], func=func)
+    stds = convolve(stds, Gaussian1DKernel(1))
+
+    # Ignore corner regions
+    arr_size = np.min(data_rebin.shape) * pixscale
+    mask = rr < (arr_size/2)
+
+    return rr[mask], stds[mask]
