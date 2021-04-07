@@ -939,7 +939,7 @@ class MIRI_ext(webbpsf_MIRI):
             # now put back in the aberrations we grabbed above.
             optsys.add_pupil(miri_aberrations)
 
-        optsys.add_rotation(self._rotation, hide=True)
+        optsys.add_rotation(-1*self._rotation, hide=True)
         optsys.planes[-1].wavefront_display_hint = 'intensity'
 
         return (optsys, trySAM, SAM_box_size if trySAM else None)
