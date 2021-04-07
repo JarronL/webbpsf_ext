@@ -39,15 +39,3 @@ S.refs.setref(area = 25.78e4) # cm^2 according to jwst_pupil_RevW_npix1024.fits.
 
 # Progress bar
 from tqdm.auto import trange, tqdm
-
-# The following won't work on readthedocs compilation
-if not on_rtd:
-    # Grab WebbPSF assumed pixel scales
-    log_prev = conf.logging_level
-    setup_logging('WARN', verbose=False)
-    nc_temp = webbpsf.NIRCam()
-    setup_logging(log_prev, verbose=False)
-
-    pixscale_SW = nc_temp._pixelscale_short
-    pixscale_LW = nc_temp._pixelscale_long
-    del nc_temp

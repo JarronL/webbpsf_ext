@@ -4,7 +4,7 @@ _log = logging.getLogger('webbpsf_ext')
 
 __epsilon = np.finfo(float).eps
 
-from .utils import webbpsf, poppy, pysiaf
+from .utils import pysiaf
 
 def dist_image(image, pixscale=None, center=None, return_theta=False):
     """Pixel distances

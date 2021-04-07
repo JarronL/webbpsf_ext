@@ -6,9 +6,9 @@ import traceback
 from .utils import conf, poppy, S
 from .maths import jl_poly
 from .image_manip import krebin
-from .bandpasses import miri_filter, nircam_filter
 from .bandpasses import nircam_grism_res, niriss_grism_res
-from .opds import OPDFile_to_HDUList
+# from .bandpasses import miri_filter, nircam_filter
+# from .opds import OPDFile_to_HDUList
 
 import logging
 _log = logging.getLogger('webbpsf_ext')
