@@ -134,13 +134,13 @@ def _wrap_coeff_for_mp(args):
 
     inst,w,fov_pix,oversample = args
     try:
-        add_distortion = True
-        try:
-            from webbpsf.distortion import RegularGridInterpolator
-        except ImportError:
-            # Ignore distortions if older griddata implementation.
-            # Newer RGI implementation is much faster
-            add_distortion = False
+        add_distortion = inst.include_distortions
+        # try:
+        #     from webbpsf.distortion import RegularGridInterpolator
+        # except ImportError:
+        #     # Ignore distortions if older griddata implementation.
+        #     # Newer RGI implementation is much faster
+        #     add_distortion = False
         hdu_list = inst.calc_psf(fov_pixels=fov_pix, oversample=oversample, monochromatic=w*1e-6,
                                  add_distortion=add_distortion, crop_psf=True)
 
@@ -159,7 +159,10 @@ def _wrap_coeff_for_mp(args):
     poppy.conf.use_multiprocessing = mp_prev
 
     # Return distorted PSF
-    return hdu_list[2]
+    if add_distortion:
+        return hdu_list[2]
+    else:
+        return hdu_list[0]
 
 def gen_image_from_coeff(inst, coeff, coeff_hdr, sp_norm=None, nwaves=None, 
                          use_sp_waveset=False, return_oversample=False):
