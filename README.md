@@ -4,6 +4,8 @@
 
 *Authors*: Jarron Leisenring (University of Arizona, Steward Observatory)
 
+**!!! WARNING - Currently Requires WebbPSF and Poppy development versions !!!**
+
 `webbpsf_ext` provides some enhancements to the [WebbPSF](https://webbpsf.readthedocs.io) package for PSF creation. This is a subset of the [pyNRC](https://github.com/JarronL/pynrc) implementation for storing and retrieving JWST PSFs. In particular, this module generates and saves polynomial coefficients to quickly create unique instrument PSFs as a function of wavelength, focal plane position, wavefront error drift from thermal distortions.
 
 More specifically, `webbpsf_ext` uses WebbPSF to generate a series of monochromatic PSF simulations, then produces polynomial fits to each pixel. Storing the coefficients rather than a library of PSFS allows for quick creation (via matrix multiplication) of PSF images for an arbitrary number of wavelengths (subject to hardware memory limitations, of course). The applications range from quickly creating PSFs for many different stellar types over wide bandpasses to generating a large number of monochromatic PSFs for spectral dispersion.
