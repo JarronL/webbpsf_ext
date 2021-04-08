@@ -349,30 +349,6 @@ class NIRCam_ext(webbpsf_NIRCam):
                            ND_acq=self.ND_acq, coron_substrate=self.coron_substrate, **kwargs)
         return bp
 
-    def _addAdditionalOptics(self, optsys, oversample=2):
-        """
-        Add coronagraphic optics for NIRCam
-
-        Note that self.options['bar_offset'] moves the mask in the opposite
-        direction as self.options['coron_shift_x']
-        """
-        # Allow arbitrary offsets of the focal plane masks with respect to the pixel grid origin;
-        # In most use cases it's better to offset the star away from the mask instead, using
-        # options['source_offset_*'], but doing it this way instead is helpful when generating
-        # the Pandeia ETC reference PSF library.
-
-        # coron_shift_x/y override coron_shift_x/y
-        shift_x = self.options.get('mask_shift_x', None)
-        shift_y = self.options.get('mask_shift_y', None)
-
-        # This will apply mask shifts to the default coron_shift keys
-        if shift_x is not None:
-            self.options['coron_shift_x'] = shift_x
-        if shift_y is not None:
-            self.options['coron_shift_y'] = shift_y
-
-        return super(NIRCam_ext, self)._addAdditionalOptics(optsys, oversample=oversample)
-
     def get_bar_offset(self):
         """
         Obtain the value of the bar offset that would be passed through to
@@ -873,123 +849,6 @@ class MIRI_ext(webbpsf_MIRI):
     def bandpass(self):
         return miri_filter(self.filter)
 
-    def _addAdditionalOptics(self, optsys, oversample=2):
-        """Add coronagraphic or spectrographic optics for MIRI.
-        Semi-analytic coronagraphy algorithm used for the Lyot only.
-
-        """
-
-        # For MIRI coronagraphy, all the coronagraphic optics are rotated the same
-        # angle as the instrument is, relative to the primary. So they see the unrotated
-        # telescope pupil. Likewise the LRS grism is rotated but its pupil stop is not.
-        #
-        # We model this by just not rotating till after the coronagraph. Thus we need to
-        # un-rotate the primary that was already created in get_optical_system.
-        # This approach is required computationally so we can work in an unrotated frame
-        # aligned with the FQPM axes.
-
-        defaultpupil = optsys.planes.pop(2)  # throw away the rotation of the entrance pupil we just added
-
-        if self.include_si_wfe:
-            # temporarily remove the SI internal aberrations
-            # from the system - will add back in after the
-            # coronagraph planes.
-            miri_aberrations = optsys.planes.pop(2)
-
-        # Add image plane mask
-        # For the MIRI FQPMs, we require the star to be centered not on the middle pixel, but
-        # on the cross-hairs between four pixels. (Since that is where the FQPM itself is centered)
-        # This is with respect to the intermediate calculation pixel scale, of course, not the
-        # final detector pixel scale.
-        if ((self.image_mask is not None) and ('FQPM' in self.image_mask)) or ('force_fqpm_shift' in self.options):
-            optsys.add_pupil(poppy.FQPM_FFT_aligner())
-
-        # Allow arbitrary offsets of the focal plane masks with respect to the pixel grid origin;
-        # In most use cases it's better to offset the star away from the mask instead, using
-        # options['source_offset_*'], but doing it this way instead is helpful when generating
-        # the Pandeia ETC reference PSF library.
-        offsets = {'shift_x': self.options.get('coron_shift_x', None),
-                   'shift_y': self.options.get('coron_shift_y', None)}
-
-        def make_fqpm_wrapper(name, wavelength):
-            container = poppy.CompoundAnalyticOptic(name=name,
-                                                    opticslist=[poppy.IdealFQPM(wavelength=wavelength, name=self.image_mask, **offsets),
-                                                                poppy.SquareFieldStop(size=24, rotation=self._rotation, **offsets)])
-            return container
-
-        if self.image_mask == 'FQPM1065':
-            optsys.add_image(make_fqpm_wrapper("MIRI FQPM 1065", 10.65e-6))
-            trySAM = False
-        elif self.image_mask == 'FQPM1140':
-            optsys.add_image(make_fqpm_wrapper("MIRI FQPM 1140", 11.40e-6))
-            trySAM = False
-        elif self.image_mask == 'FQPM1550':
-            optsys.add_image(make_fqpm_wrapper("MIRI FQPM 1550", 15.50e-6))
-            trySAM = False
-        elif self.image_mask == 'LYOT2300':
-            # diameter is 4.25 (measured) 4.32 (spec) supposedly 6 lambda/D
-            # optsys.add_image(function='CircularOcculter',radius =4.25/2, name=self.image_mask)
-            # Add bar occulter: width = 0.722 arcsec (or perhaps 0.74, Dean says there is ambiguity)
-            # optsys.add_image(function='BarOcculter', width=0.722, angle=(360-4.76))
-            # position angle of strut mask is 355.5 degrees  (no = =360 -2.76 degrees
-            # optsys.add_image(function='fieldstop',size=30)
-            container = poppy.CompoundAnalyticOptic(name="MIRI Lyot Occulter",
-                                            opticslist=[poppy.CircularOcculter(radius=4.25 / 2, name=self.image_mask, **offsets),
-                                                        poppy.BarOcculter(width=0.722, **offsets),
-                                                        poppy.SquareFieldStop(size=30, rotation=self._rotation, **offsets)])
-            optsys.add_image(container)
-            trySAM = False  # FIXME was True - see https://github.com/mperrin/poppy/issues/169
-            SAM_box_size = [5, 20]
-        elif self.image_mask == 'LRS slit':
-            # one slit, 5.5 x 0.6 arcsec in height (nominal)
-            #           4.7 x 0.51 arcsec (measured for flight model. See MIRI-TR-00001-CEA)
-            #
-            # Per Klaus Pontoppidan: The LRS slit is aligned with the detector x-axis, so that the
-            # dispersion direction is along the y-axis.
-            optsys.add_image(optic=poppy.RectangularFieldStop(width=4.7, height=0.51,
-                                                              rotation=self._rotation, name=self.image_mask, **offsets))
-            trySAM = False
-        else:
-            optsys.add_image()
-            trySAM = False
-
-        if ((self.image_mask is not None and 'FQPM' in self.image_mask)
-                or 'force_fqpm_shift' in self.options):
-            optsys.add_pupil(poppy.FQPM_FFT_aligner(direction='backward'))
-
-        # add pupil plane mask
-        shift_x, shift_y = self._get_pupil_shift()
-        rotation = self.options.get('pupil_rotation', None)
-
-        if self.pupil_mask == 'MASKFQPM':
-            optsys.add_pupil(transmission=self._datapath + "/optics/MIRI_FQPMLyotStop.fits.gz",
-                             name=self.pupil_mask,
-                             flip_y=True, shift_x=shift_x, shift_y=shift_y, rotation=rotation)
-            optsys.planes[-1].wavefront_display_hint = 'intensity'
-        elif self.pupil_mask == 'MASKLYOT':
-            optsys.add_pupil(transmission=self._datapath + "/optics/MIRI_LyotLyotStop.fits.gz",
-                             name=self.pupil_mask,
-                             flip_y=True, shift_x=shift_x, shift_y=shift_y, rotation=rotation)
-            optsys.planes[-1].wavefront_display_hint = 'intensity'
-        elif self.pupil_mask == 'P750L LRS grating' or self.pupil_mask == 'P750L':
-            optsys.add_pupil(transmission=self._datapath + "/optics/MIRI_LRS_Pupil_Stop.fits.gz",
-                             name=self.pupil_mask,
-                             flip_y=True, shift_x=shift_x, shift_y=shift_y, rotation=rotation)
-            optsys.planes[-1].wavefront_display_hint = 'intensity'
-        else:  # all the MIRI filters have a tricontagon outline, even the non-coron ones.
-            optsys.add_pupil(transmission=self._WebbPSF_basepath + "/tricontagon.fits.gz",
-                             name='filter cold stop', shift_x=shift_x, shift_y=shift_y, rotation=rotation)
-            # FIXME this is probably slightly oversized? Needs to have updated specifications here.
-
-        if self.include_si_wfe:
-            # now put back in the aberrations we grabbed above.
-            optsys.add_pupil(miri_aberrations)
-
-        optsys.add_rotation(-1*self._rotation, hide=True)
-        optsys.planes[-1].wavefront_display_hint = 'intensity'
-
-        return (optsys, trySAM, SAM_box_size if trySAM else None)
-
     def gen_mask_image(self, npix=None, pixelscale=None, detector_orientation=True):
         """
         Return an image representation of the focal plane mask.
@@ -1363,6 +1222,9 @@ def _init_inst(self, filter=None, pupil_mask=None, image_mask=None,
         self.include_si_wfe = False if self.is_coron else True
     else:
         self.include_si_wfe = True
+
+    # Options to include or exclude distortions
+    self.include_distortions = True
     
     # Settings for fov_pix and oversample
     # Default odd for normal imaging, even for coronagraphy
@@ -1464,7 +1326,6 @@ def _gen_save_name(self, wfe_drift=0):
     else:
         bar_str = ''
 
-    
     # Jitter settings
     jitter = self.options.get('jitter')
     jitter_sigma = self.options.get('jitter_sigma', 0)
@@ -1503,6 +1364,10 @@ def _gen_save_name(self, wfe_drift=0):
     # Add SI WFE tag if included
     if self.include_si_wfe:
         fname = fname + '_siwfe'
+
+    # Add distortions tag if included
+    if self.include_distortions:
+        fname = fname + '_distort'
 
     if self.use_legendre:
         fname = fname + '_legendre'
@@ -3064,13 +2929,13 @@ def _coeff_mod_wfe_mask(self, coord_vals, coord_frame):
 def _calc_sgd(self, xoff_asec, yoff_asec, use_coeff=True, return_oversample=True, **kwargs):
     """Calculate small grid dithers PSFs"""
 
-    add_distortion = True
-    try:
-        from webbpsf.distortion import RegularGridInterpolator
-    except ImportError:
-        # Ignore distortions if older griddata implementation.
-        # Newer RGI implementation is much faster
-        add_distortion = False
+    add_distortion = self.include_distortions
+    # try:
+    #     from webbpsf.distortion import RegularGridInterpolator
+    # except ImportError:
+    #     # Ignore distortions if older griddata implementation.
+    #     # Newer RGI implementation is much faster
+    #     add_distortion = False
 
 
     if self.is_coron==False:
