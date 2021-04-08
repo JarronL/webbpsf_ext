@@ -103,6 +103,8 @@ class NIRCam_ext(webbpsf_NIRCam):
 
         # Option to calculate ND acquisition for coronagraphic obs
         self._ND_acq = False
+        # Option to specify that coronagraphic substrate materials is present.
+        self._coron_substrate = None
 
         if auto_gen_coeffs:
             self.gen_psf_coeff()
@@ -152,9 +154,24 @@ class NIRCam_ext(webbpsf_NIRCam):
         return self._ND_acq
     @ND_acq.setter
     def ND_acq(self, value):
-        """Set whether or not we're placed on an ND acquisition square."""
         _check_list(value, [True, False], 'ND_acq')
         self._ND_acq = value
+
+    @property
+    def coron_substrate(self):
+        """Include coronagraphic substrate material?"""
+        # True by default if Lyot stop is in place.
+        # User should override this if intention is to get 
+        # PSF outside of substrate region.
+        if ((self._coron_substrate is None) and self.is_lyot):
+            val = True
+        else: 
+            val = self._coron_substrate
+        return val
+    @coron_substrate.setter
+    def coron_substrate(self, value):
+        _check_list(value, [True, False], 'coron_substrate')
+        self._coron_substrate = value
 
     @property
     def fov_pix(self):
@@ -297,10 +314,39 @@ class NIRCam_ext(webbpsf_NIRCam):
         return slowaxis
 
     @property
-    def bandpass(self):
+    def bandpass(self, **kwargs):
+        """ Return bandpass throughput
+
+        Keyword Arguments
+        -----------------
+        ice_scale : float
+            Add in additional OTE H2O absorption. This is a scale factor
+            relative to 0.0131 um thickness. Also includes about 0.0150 um of
+            photolyzed Carbon.
+        nvr_scale : float
+            Modify NIRCam non-volatile residue. This is a scale factor relative 
+            to 0.280 um thickness already built into filter throughput curves. 
+            If set to None, then assumes a scale factor of 1.0. 
+            Setting nvr_scale=0 will remove these contributions.
+        ote_scale : float
+            Scale factor of OTE contaminants relative to End of Life model. 
+            This is the same as setting ice_scale. Will override ice_scale value.
+        nc_scale : float
+            Scale factor for NIRCam contaminants relative to End of Life model.
+            This model assumes 0.189 um of NVR and 0.050 um of water ice on
+            the NIRCam optical elements. Setting this keyword will remove all
+            NVR contributions built into the NIRCam filter curves.
+            Overrides nvr_scale value.
+
+        Returns
+        -------
+        :mod:`pysynphot.obsbandpass`
+            A Pysynphot bandpass object.
+
+        """
         bp = nircam_filter(self.filter, pupil=self.pupil_mask, mask=self.image_mask,
-                           module=self.module, ND_acq=self.ND_acq, 
-                           grism_order=self._grism_order)
+                           module=self.module, grism_order=self._grism_order,
+                           ND_acq=self.ND_acq, coron_substrate=self.coron_substrate, **kwargs)
         return bp
 
     def _addAdditionalOptics(self, optsys, oversample=2):
@@ -2698,12 +2744,21 @@ def _calc_psf_from_coeff(self, sp=None, return_oversample=True,
     psf_coeff = psf_coeff + psf_coeff_mod
     del psf_coeff_mod
 
+    # Make sp a list of spectral objects if it already isn't
+    if sp is None:
+        nspec = 0
+    elif (sp is not None) and (not isinstance(sp, list)):
+        sp = [sp]
+        nspec = 1
+    else:
+        nspec = len(sp)
+
     # if multiple field points were present, we want to return PSF for each location
     if nfield>1:
         psf_all = []
         for ii in trange(nfield, leave=True, desc='PSFs'):
             # Just a single spectrum? Or unique spectrum at each field point?
-            sp_norm = sp[ii] if((sp is not None) and (len(sp)==nfield)) else sp
+            sp_norm = sp[ii] if((sp is not None) and (nspec==nfield)) else sp
             res = gen_image_from_coeff(self, psf_coeff[ii], psf_coeff_hdr, sp_norm=sp_norm,
                                        return_oversample=return_oversample)
             # For grisms (etc), the wavelength solution is the same for each field point
@@ -2750,7 +2805,14 @@ def _calc_psf_from_coeff(self, sp=None, return_oversample=True,
                 hdr['YVAL']   = (hdr['DET_Y'], f'[{cunits}] Input Y coordinate')
                 hdr['CFRAME'] = ('sci', 'Specified coordinate frame')
 
-            hdul = fits.HDUList([fits.PrimaryHDU(data=psf, header=hdr)])
+            hdul = fits.HDUList()
+            # Append each spectrum
+            if nspec<=1:
+                hdul.append(fits.ImageHDU(data=psf, header=hdr))
+            else:
+                for ii in range(nspec):
+                    hdul.append(fits.ImageHDU(data=psf[ii], header=hdr))
+
             # Append wavelength solution
             if wave is not None:
                 hdul.append(fits.ImageHDU(data=wave, name='Wavelengths'))
