@@ -1448,11 +1448,12 @@ def _get_opd_info(self, opd=None, HDUL_to_OTELM=True):
     out_dict = {'opd_name':opd_name, 'opd_num':opd_num, 'opd_str':opd_str, 'pupilopd':opd}
     return out_dict
 
-def _drift_opd(self, wfe_drift, opd=None):
+def _drift_opd(self, wfe_drift, opd=None, 
+               wfe_therm=None, wfe_frill=None, wfe_iec=None):
     """
     A quick method to drift the pupil OPD. This function applies 
     some WFE drift to input OPD file by breaking up the wfe_drift 
-    attribute into thermal, frill, and IEC components. If we want 
+    parameter into thermal, frill, and IEC components. If we want 
     more realistic time evolution, then we should use the procedure 
     in dev_utils/WebbPSF_OTE_LM.ipynb to create a time series of OPD
     maps, which can then be passed directly to create unique PSFs.
@@ -1461,6 +1462,23 @@ def _drift_opd(self, wfe_drift, opd=None):
         >>> opd_dict = inst.drift_opd()
         >>> inst.pupilopd = opd_dict['opd']
         >>> inst.pupil = opd_dict['opd']
+
+    Parameters
+    ----------
+    wfe_drift : float
+        Desired WFE drift (delta RMS) in nm.
+    opd : Various
+        file name, tuple (file,slice), HDUList, or OTE Linear Model
+        of the OPD map.
+    wfe_therm : None or float
+        Option to specify thermal component of WFE drift (nm RMS). 
+        `wfe_drift` is ignored.
+    wfe_frill : None or float
+        Option to specify frill component of WFE drift (nm RMS). 
+        `wfe_drift` is ignored.
+    wfe_iec : None or float
+        Option to specify IEC component of WFE drift (nm RMS). 
+        `wfe_drift` is ignored.
     """
     
     # Get Pupil OPD info and convert to OTE LM
@@ -1472,7 +1490,29 @@ def _drift_opd(self, wfe_drift, opd=None):
         
     # If there is wfe_drift, create a OTE Linear Model
     wfe_dict = {'therm':0, 'frill':0, 'iec':0, 'opd':opd}
-    if (wfe_drift > 0):
+    if (wfe_therm is not None) or (wfe_frill is not None) or (wfe_iec is not None):
+        wfe_therm = 0 if wfe_therm is None else wfe_therm
+        wfe_frill = 0 if wfe_frill is None else wfe_frill
+        wfe_iec = 0 if wfe_iec is None else wfe_iec
+
+        # Apply IEC
+        opd.apply_iec_drift(amplitude=wfe_iec, delay_update=True)
+        # Apply frill
+        opd.apply_frill_drift(amplitude=wfe_frill, delay_update=True)
+
+        # Apply OTE thermal slew amplitude
+        # This is slightly different due to how thermal slews are specified
+        delta_time = 14*24*60 * u.min
+        wfe_scale = (wfe_therm / 24)
+        if wfe_scale == 0:
+            delta_time = 0
+        opd.thermal_slew(delta_time, case='BOL', scaling=wfe_scale)
+        
+        wfe_dict['therm'] = wfe_therm
+        wfe_dict['frill'] = wfe_frill
+        wfe_dict['iec']   = wfe_iec
+        wfe_dict['opd']   = opd
+    elif (wfe_drift > 0):
         _log.info('Performing WFE drift of {}nm'.format(wfe_drift))
 
         # Apply WFE drift to OTE Linear Model (Amplitude of frill drift)
