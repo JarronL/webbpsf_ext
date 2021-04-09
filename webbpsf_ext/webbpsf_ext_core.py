@@ -2213,7 +2213,7 @@ def _gen_wfefield_coeff(self, force=False, save=True, return_results=False, retu
 
     # Calculate new coefficients at each position
     cf_fields = []
-    for xsci, ysci in tqdm(zip(xsci_all, ysci_all), total=npos):
+    for xsci, ysci in tqdm(zip(xsci_all, ysci_all), total=npos, desc='Field Points'):
         # Update saved detector position and calculate PSF coeff
         self.detector_position = (xsci, ysci)
         cf, _ = self.gen_psf_coeff(force=True, save=False, return_results=True, **kwargs)
@@ -2315,10 +2315,10 @@ def _gen_wfemask_coeff(self, force=False, save=True, return_results=False, retur
         # Negative shifts will place source in upper right quadrant
         # Depend on PSF symmetries for other three quadrants
         if 'FQPM' in self.image_mask:
-            xy_offsets = -1 * np.array([0, 0.005, 0.01, 0.08, 0.10, 0.2, 0.5, 1, 10, 12])
+            xy_offsets = -1 * np.array([0, 0.005, 0.01, 0.08, 0.10, 0.2, 0.5, 1, 5, 11])
         elif 'LYOT' in self.image_mask:
             # TODO: Update offsets to optimize for Lyot mask
-            xy_offsets = -1 * np.array([0, 0.01, 0.1, 0.36, 0.5, 1, 2.1, 10, 15])
+            xy_offsets = -1 * np.array([0, 0.01, 0.1, 0.36, 0.5, 1, 2.1, 5, 11])
         else:
             raise NotImplementedError(f'{self.name} with {self.image_mask} not implemented.')
 
@@ -2383,7 +2383,7 @@ def _gen_wfemask_coeff(self, force=False, save=True, return_results=False, retur
     log_prev = conf.logging_level
     setup_logging('WARN', verbose=False)
     cf_all = []
-    npos = len(xy_list)
+    npos = len(xoff)
     for i in trange(npos, leave=False, desc="Mask Offsets"):
         self.options['coron_shift_x'] = xy_list[i][0]
         self.options['coron_shift_y'] = xy_list[i][1]
