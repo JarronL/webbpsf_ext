@@ -1040,7 +1040,7 @@ def _convolve_psfs_for_mp(arg_vals):
 
     return res
 
-def convolve_image(hdul_sci_image, hdul_psfs):
+def convolve_image(hdul_sci_image, hdul_psfs, aper=None):
     """ Convolve image with various PSFs
 
     """
@@ -1049,8 +1049,11 @@ def convolve_image(hdul_sci_image, hdul_psfs):
     
     # Get SIAF aperture info
     hdr = hdul_psfs[0].header
-    siaf = pysiaf.siaf.Siaf(hdr['INSTRUME'])
-    siaf_ap = siaf[hdr['APERNAME']]
+    if aper is None:
+        siaf = pysiaf.siaf.Siaf(hdr['INSTRUME'])
+        siaf_ap = siaf[hdr['APERNAME']]
+    else:
+        siaf_ap = aper
     
     # Get xsci and ysci coordinates
     xvals = np.array([hdu.header['XVAL'] for hdu in hdul_psfs])
@@ -1067,19 +1070,17 @@ def convolve_image(hdul_sci_image, hdul_psfs):
     im_input = hdul_sci_image[0].data
     pixscale = hdul_sci_image[0].header['PIXELSCL']
     ysize, xsize = im_input.shape
-    ysize_asec = ysize * siaf_ap.YSciScale
-    xsize_asec = xsize * siaf_ap.XSciScale
+    ysize_asec = ysize * pixscale
+    xsize_asec = xsize * pixscale
     
     # Create mask for input image for each PSF to convolve
     rho_arr = []
     coords_asec = (xoff_sci_asec_psfs, yoff_sci_asec_psfs)
     for xv, yv in np.transpose(coords_asec):
         cen = (xsize_asec/2 + xv, ysize_asec/2 + yv)
-        # cen_pix = (cen[0]/siaf_ap.XSciScale, cen[1]/siaf_ap.YSciScale)
-        # rho = dist_image(im_input, pixscale=pixscale, center=cen_pix)
         yarr, xarr = np.indices((ysize,xsize))
-        xarr = xarr*siaf_ap.XSciScale - cen[0]
-        yarr = yarr*siaf_ap.YSciScale - cen[1]
+        xarr = xarr*pixscale - cen[0]
+        yarr = yarr*pixscale - cen[1]
         rho = np.sqrt(xarr**2 + yarr**2)
         rho_arr.append(rho)
     rho_arr = np.array(rho_arr)
