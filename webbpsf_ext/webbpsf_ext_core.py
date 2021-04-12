@@ -1220,6 +1220,8 @@ def _init_inst(self, filter=None, pupil_mask=None, image_mask=None,
     # Don't include SI WFE error for coronagraphy
     if self.name=='MIRI':
         self.include_si_wfe = False if self.is_coron else True
+    elif self.name=='NIRCam':
+        self.include_si_wfe = True
     else:
         self.include_si_wfe = True
 
@@ -1606,6 +1608,10 @@ def _inst_copy(self):
     inst._ndeg = self._ndeg
     inst._npsf = self._npsf
     inst._quick = self._quick
+
+    # SI WFE and distortions
+    inst.include_si_wfe = self.include_si_wfe
+    inst.include_distortions = self.include_distortions
 
     ### Instrument-specific parameters
     # Grism order for NIRCam
@@ -2385,10 +2391,14 @@ def _gen_wfemask_coeff(self, force=False, save=True, return_results=False, retur
     cf_all = []
     npos = len(xoff)
     for i in trange(npos, leave=False, desc="Mask Offsets"):
-        self.options['coron_shift_x'] = xy_list[i][0]
-        self.options['coron_shift_y'] = xy_list[i][1]
-        xyshift = -1 * np.array(xy_list[i]) / self.pixelscale
-        self.detector_position = np.array(detector_position_orig) + xyshift
+        self.options['coron_shift_x'] = xoff[i]
+        self.options['coron_shift_y'] = yoff[i]
+
+        # Pixel offset information
+        field_rot = 0 if self._rotation is None else self._rotation
+        xyoff_pix = np.array(xy_rot(-1*xoff[i], -1*yoff[i], -field_rot)) / self.pixelscale
+        self.detector_position = np.array(detector_position_orig) + xyoff_pix
+
         if ind_sgd[i]==True:
             # Add just a set of 0s for SGD positions
             cf = np.zeros(self.psf_coeff.shape)
@@ -2496,7 +2506,8 @@ def _gen_wfemask_coeff(self, force=False, save=True, return_results=False, retur
         ind_zero = np.abs(yoff_all)==0
         ind_sgd = (np.abs(xoff_all)<=0.02) & ~ind_zero
     else:
-        raise NotImplementedError('Only MIRI for different WFE mask modifications')
+        msg = f'{self.name} not implemented for different WFE mask modifications.'
+        raise NotImplementedError(msg)
 
     # Get PSF coefficients for each SGD position
     log_prev = conf.logging_level
@@ -2507,8 +2518,12 @@ def _gen_wfemask_coeff(self, force=False, save=True, return_results=False, retur
     for xv, yv in tqdm(zip(xsgd, ysgd), total=nsgd, desc='SGD'):
         self.options['coron_shift_x'] = xv
         self.options['coron_shift_y'] = yv
-        xyshift = -1 * np.array([xv,yv]) / self.pixelscale
-        self.detector_position = np.array(detector_position_orig) + xyshift
+
+        # Pixel offset information
+        field_rot = 0 if self._rotation is None else self._rotation
+        xyoff_pix = np.array(xy_rot(-1*xv, -1*yv, -field_rot)) / self.pixelscale
+        self.detector_position = np.array(detector_position_orig) + xyoff_pix
+
         cf, _ = self.gen_psf_coeff(return_results=True, force=True, save=False, **kwargs)
         ind = (xoff_all==xv) & (yoff_all==yv)
         cf_resid_all[ind] = cf - coeff0
@@ -2908,8 +2923,8 @@ def _coeff_mod_wfe_mask(self, coord_vals, coord_frame):
     psf_coeff     = self.psf_coeff
 
     cf_fit = self._psf_coeff_mod['si_mask'] 
-    xgrid  = self._psf_coeff_mod['si_mask_xgrid'] 
-    ygrid  = self._psf_coeff_mod['si_mask_ygrid'] 
+    xgrid  = self._psf_coeff_mod['si_mask_xgrid']  # arcsec
+    ygrid  = self._psf_coeff_mod['si_mask_ygrid']  # arcsec
     apname = self._psf_coeff_mod['si_mask_apname']
     siaf_ap = self.siaf[apname] if apname is not None else None
 
@@ -2969,15 +2984,6 @@ def _coeff_mod_wfe_mask(self, coord_vals, coord_frame):
 def _calc_sgd(self, xoff_asec, yoff_asec, use_coeff=True, return_oversample=True, **kwargs):
     """Calculate small grid dithers PSFs"""
 
-    add_distortion = self.include_distortions
-    # try:
-    #     from webbpsf.distortion import RegularGridInterpolator
-    # except ImportError:
-    #     # Ignore distortions if older griddata implementation.
-    #     # Newer RGI implementation is much faster
-    #     add_distortion = False
-
-
     if self.is_coron==False:
         _log.warn("`calc_sgd` only valid for coronagraphic observations (set `image_mask` attribute).")
         return
@@ -3003,14 +3009,18 @@ def _calc_sgd(self, xoff_asec, yoff_asec, use_coeff=True, return_oversample=True
         setup_logging('WARN', verbose=False)
         hdul_sgd = fits.HDUList()
         for xoff, yoff in tqdm(zip(xoff_asec, yoff_asec), total=npos):
+            # Mask shift information
+            field_rot = 0 if self._rotation is None else self._rotation
+            xoff_mask, yoff_mask = xy_rot(-1*xoff_asec, -1*yoff_asec, field_rot)
+
             # Shift mask in opposite direction
-            self.options['coron_shift_x'] = -1*xoff
-            self.options['coron_shift_y'] = -1*yoff
-            # Pixel location information
+            self.options['coron_shift_x'] = xoff_mask
+            self.options['coron_shift_y'] = yoff_mask
+
             xyshift = np.array([xoff,yoff]) / self.pixelscale
             self.detector_position = np.array(detector_position_orig) + xyshift
             res = self.calc_psf(fov_pixels=self.fov_pix, oversample=self.oversample, 
-                                add_distortion=add_distortion, crop_psf=True)
+                                add_distortion=self.include_distortions, crop_psf=True)
             hdu = res[0] if return_oversample else res[1]
             # hdul.append(fits.ImageHDU(data=hdu.data, header=hdu.hdr))
             hdul_sgd.append(hdu)
