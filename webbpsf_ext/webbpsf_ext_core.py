@@ -5,9 +5,7 @@ import time
 import os, six
 from numpy.lib.arraypad import pad
 import multiprocessing as mp
-# from multiprocessing import set_start_method, Pool
-# set_start_method("spawn")
-# import traceback
+import traceback
 
 from astropy.io import fits
 from astropy.table import Table
@@ -17,7 +15,7 @@ from copy import deepcopy
 
 # Bandpasses, PSFs, and OPDs
 from .bandpasses import miri_filter, nircam_filter
-from .psfs import nproc_use, _wrap_coeff_for_mp, gen_image_from_coeff
+from .psfs import nproc_use, gen_image_from_coeff
 from .psfs import make_coeff_resid_grid, field_coeff_func
 from .opds import OPDFile_to_HDUList
 
@@ -678,6 +676,69 @@ class NIRCam_ext(webbpsf_NIRCam):
                                     wfe_drift=wfe_drift, coord_vals=coord_vals, 
                                     coord_frame=coord_frame, **kwargs)
 
+    def calc_psf(self, add_distortion=None, fov_pixels=None, oversample=None, **kwargs):
+        """ Compute a PSF
+
+        Slight modification of inherent WebbPSF `calc_psf` function. If add_distortion, fov_pixels,
+        and oversample are not specified, then we automatically use the associated attributes.
+
+        Notes
+        -----
+        More advanced PSF computation options (pupil shifts, source positions, jitter, ...)
+        may be set by configuring the `.options` dictionary attribute of this class.
+
+        Parameters
+        ----------
+        source : synphot.spectrum.SourceSpectrum or dict
+            specification of source input spectrum. Default is a 5700 K sunlike star.
+        nlambda : int
+            How many wavelengths to model for broadband?
+            The default depends on how wide the filter is: (5,3,1) for types (W,M,N) respectively
+        monochromatic : float, optional
+            Setting this to a wavelength value (in meters) will compute a monochromatic PSF at that
+            wavelength, overriding filter and nlambda settings.
+        fov_arcsec : float
+            field of view in arcsec. Default=5
+        fov_pixels : int
+            field of view in pixels. This is an alternative to fov_arcsec.
+        outfile : string
+            Filename to write. If None, then result is returned as an HDUList
+        oversample, detector_oversample, fft_oversample : int
+            How much to oversample. Default=4. By default the same factor is used for final output
+            pixels and intermediate optical planes, but you may optionally use different factors
+            if so desired.
+        overwrite : bool
+            overwrite output FITS file if it already exists?
+        display : bool
+            Whether to display the PSF when done or not.
+        save_intermediates, return_intermediates : bool
+            Options for saving to disk or returning to the calling function the intermediate optical planes during
+            the propagation. This is useful if you want to e.g. examine the intensity in the Lyot plane for a
+            coronagraphic propagation.
+        normalize : string
+            Desired normalization for output PSFs. See doc string for OpticalSystem.calc_psf. Default is
+            to normalize the entrance pupil to have integrated total intensity = 1.
+        add_distortion : bool
+            If True, will add 2 new extensions to the PSF HDUlist object. The 2nd extension
+            will be a distorted version of the over-sampled PSF and the 3rd extension will
+            be a distorted version of the detector-sampled PSF.
+        crop_psf : bool
+            If True, when the PSF is rotated to match the detector's rotation in the focal
+            plane, the PSF will be cropped so the shape of the distorted PSF will match it's
+            undistorted counterpart. This will only be used for NIRCam, NIRISS, and FGS PSFs.
+        """
+
+        # Automatically use already defined properties
+        add_distortion = self.include_distortions if add_distortion is None else add_distortion
+        fov_pixels = self.fov_pix if fov_pixels is None else fov_pixels
+        oversample = self.oversample if oversample is None else oversample
+
+        kwargs['add_distortion'] = add_distortion
+        kwargs['fov_pixels'] = fov_pixels
+        kwargs['oversample'] = oversample
+
+        return super(NIRCam_ext, self).calc_psf(**kwargs) 
+
     # def calc_sgd(self, xoff_asec, yoff_asec, use_coeff=True, 
     #     return_oversample=True, **kwargs):
     #     """ Calculate small grid dither PSF
@@ -1152,6 +1213,69 @@ class MIRI_ext(webbpsf_MIRI):
                                     wfe_drift=wfe_drift, coord_vals=coord_vals, 
                                     coord_frame=coord_frame, **kwargs)
 
+    def calc_psf(self, add_distortion=None, fov_pixels=None, oversample=None, **kwargs):
+        """ Compute a PSF
+
+        Slight modification of inherent WebbPSF `calc_psf` function. If add_distortion, fov_pixels,
+        and oversample are not specified, then we automatically use the associated attributes.
+
+        Notes
+        -----
+        More advanced PSF computation options (pupil shifts, source positions, jitter, ...)
+        may be set by configuring the `.options` dictionary attribute of this class.
+
+        Parameters
+        ----------
+        source : synphot.spectrum.SourceSpectrum or dict
+            specification of source input spectrum. Default is a 5700 K sunlike star.
+        nlambda : int
+            How many wavelengths to model for broadband?
+            The default depends on how wide the filter is: (5,3,1) for types (W,M,N) respectively
+        monochromatic : float, optional
+            Setting this to a wavelength value (in meters) will compute a monochromatic PSF at that
+            wavelength, overriding filter and nlambda settings.
+        fov_arcsec : float
+            field of view in arcsec. Default=5
+        fov_pixels : int
+            field of view in pixels. This is an alternative to fov_arcsec.
+        outfile : string
+            Filename to write. If None, then result is returned as an HDUList
+        oversample, detector_oversample, fft_oversample : int
+            How much to oversample. Default=4. By default the same factor is used for final output
+            pixels and intermediate optical planes, but you may optionally use different factors
+            if so desired.
+        overwrite : bool
+            overwrite output FITS file if it already exists?
+        display : bool
+            Whether to display the PSF when done or not.
+        save_intermediates, return_intermediates : bool
+            Options for saving to disk or returning to the calling function the intermediate optical planes during
+            the propagation. This is useful if you want to e.g. examine the intensity in the Lyot plane for a
+            coronagraphic propagation.
+        normalize : string
+            Desired normalization for output PSFs. See doc string for OpticalSystem.calc_psf. Default is
+            to normalize the entrance pupil to have integrated total intensity = 1.
+        add_distortion : bool
+            If True, will add 2 new extensions to the PSF HDUlist object. The 2nd extension
+            will be a distorted version of the over-sampled PSF and the 3rd extension will
+            be a distorted version of the detector-sampled PSF.
+        crop_psf : bool
+            If True, when the PSF is rotated to match the detector's rotation in the focal
+            plane, the PSF will be cropped so the shape of the distorted PSF will match it's
+            undistorted counterpart. This will only be used for NIRCam, NIRISS, and FGS PSFs.
+        """
+
+        # Automatically use already defined properties
+        add_distortion = self.include_distortions if add_distortion is None else add_distortion
+        fov_pixels = self.fov_pix if fov_pixels is None else fov_pixels
+        oversample = self.oversample if oversample is None else oversample
+
+        kwargs['add_distortion'] = add_distortion
+        kwargs['fov_pixels'] = fov_pixels
+        kwargs['oversample'] = oversample
+
+        return super(MIRI_ext, self).calc_psf(**kwargs) 
+
 
 #############################################################
 #  Functions for use across instrument classes
@@ -1617,6 +1741,7 @@ def _inst_copy(self):
     # Grism order for NIRCam
     try: inst._grism_order = self._grism_order
     except: pass
+
     # ND square for NIRCam
     try: inst._ND_acq = self._ND_acq
     except: pass
@@ -1624,6 +1749,40 @@ def _inst_copy(self):
     setup_logging(log_prev, verbose=False)
     return inst
 
+
+def _wrap_coeff_for_mp(args):
+    """
+    Internal helper routine for parallelizing computations across multiple processors
+    for multiple WebbPSF monochromatic calculations.
+
+    args => (inst,w,fov_pix,oversample)
+    """
+    # No multiprocessing for monochromatic wavelengths
+    mp_prev = poppy.conf.use_multiprocessing
+    poppy.conf.use_multiprocessing = False
+
+    inst,w = args
+    try:
+        hdu_list = inst.calc_psf(monochromatic=w*1e-6, crop_psf=True)
+    except Exception as e:
+        print('Caught exception in worker thread (w = {}):'.format(w))
+        # This prints the type, value, and stack trace of the
+        # current exception being handled.
+        traceback.print_exc()
+
+        print('')
+        #raise e
+        poppy.conf.use_multiprocessing = mp_prev
+        return None
+
+    # Return to previous setting
+    poppy.conf.use_multiprocessing = mp_prev
+
+    # Return distorted PSF
+    if inst.include_distortions:
+        return hdu_list[2]
+    else:
+        return hdu_list[0]
 
 def _gen_psf_coeff(self, nproc=None, wfe_drift=0, force=False, save=True, 
                    return_results=False, return_extras=False, **kwargs):
@@ -1737,7 +1896,7 @@ def _gen_psf_coeff(self, nproc=None, wfe_drift=0, force=False, save=True,
 
     t0 = time.time()
     # Setup the multiprocessing pool and arguments to pass to each pool
-    worker_arguments = [(inst_copy, wlen, fov_pix, oversample) for wlen in waves]
+    worker_arguments = [(inst_copy, wlen) for wlen in waves]
     if nproc > 1:
 
         hdu_arr = []

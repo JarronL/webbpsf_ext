@@ -1,7 +1,6 @@
 # Import libraries
 import numpy as np
 import multiprocessing as mp
-import traceback
 
 from .utils import conf, poppy, S
 from .maths import jl_poly
@@ -119,50 +118,6 @@ def nproc_use(fov_pix, oversample, nwavelengths, coron=False):
         format(avail_GB, mem_total, nproc))
 
     return int(nproc)
-
-
-def _wrap_coeff_for_mp(args):
-    """
-    Internal helper routine for parallelizing computations across multiple processors
-    for multiple WebbPSF monochromatic calculations.
-
-    args => (inst,w,fov_pix,oversample)
-    """
-    # No multiprocessing for monochromatic wavelengths
-    mp_prev = poppy.conf.use_multiprocessing
-    poppy.conf.use_multiprocessing = False
-
-    inst,w,fov_pix,oversample = args
-    try:
-        add_distortion = inst.include_distortions
-        # try:
-        #     from webbpsf.distortion import RegularGridInterpolator
-        # except ImportError:
-        #     # Ignore distortions if older griddata implementation.
-        #     # Newer RGI implementation is much faster
-        #     add_distortion = False
-        hdu_list = inst.calc_psf(fov_pixels=fov_pix, oversample=oversample, monochromatic=w*1e-6,
-                                 add_distortion=add_distortion, crop_psf=True)
-
-    except Exception as e:
-        print('Caught exception in worker thread (w = {}):'.format(w))
-        # This prints the type, value, and stack trace of the
-        # current exception being handled.
-        traceback.print_exc()
-
-        print('')
-        #raise e
-        poppy.conf.use_multiprocessing = mp_prev
-        return None
-
-    # Return to previous setting
-    poppy.conf.use_multiprocessing = mp_prev
-
-    # Return distorted PSF
-    if add_distortion:
-        return hdu_list[2]
-    else:
-        return hdu_list[0]
 
 def gen_image_from_coeff(inst, coeff, coeff_hdr, sp_norm=None, nwaves=None, 
                          use_sp_waveset=False, return_oversample=False):
