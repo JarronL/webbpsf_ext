@@ -27,7 +27,7 @@ _log = logging.getLogger('webbpsf_ext')
 def pad_or_cut_to_size(array, new_shape, fill_val=0.0, offset_vals=None):
     """
     Resize an array to a new shape by either padding with zeros
-    or trimming off rows and/or columns. The ouput shape can
+    or trimming off rows and/or columns. The output shape can
     be of any arbitrary amount.
 
     Parameters
@@ -641,7 +641,7 @@ def frebin(image, dimensions=None, scale=None, total=True):
 
 
 def image_rescale(HDUlist_or_filename, pixscale_out, pixscale_in=None, 
-                  dist_in=None, dist_out=None, cen_star=True):
+                  dist_in=None, dist_out=None, cen_star=True, shape_out=None):
     """ Rescale image flux
 
     Scale the flux and rebin an image to some new pixel scale and distance. 
@@ -663,16 +663,23 @@ def image_rescale(HDUlist_or_filename, pixscale_out, pixscale_in=None,
     ============
     pixscale_in : float or None
         Input image pixel scale. If None, then tries to grab info from the header.
-    args_in  : Two parameters consisting of the input image pixel scale and distance
+    args_in : tuple
+        Two parameters consisting of the input image pixel scale and distance
         assumed to be in units of arcsec/pixel and parsecs, respectively
-    args_out : Same as above, but the new desired outputs
-    cen_star : 
+    args_out : tuple
+        Same as args_in, but the new desired outputs.
+    cen_star : bool
         Is the star placed in the central pixel? If so, then the stellar flux is 
         assumed to be a single pixel that is equal to the maximum flux in the
         image. Rather than rebinning that pixel, the total flux is pulled out
         and readded to the central pixel of the final image.
+    shape_out : tuple, int, or None
+        Desired size for the output array (ny,nx). If a single value, then will 
+        create a 2-element tuple of the same value.
 
-    Returns an HDUlist of the new image
+    Returns
+    =======
+        HDUlist of the new image.
     """
 
     if isinstance(HDUlist_or_filename, six.string_types):
@@ -733,6 +740,9 @@ def image_rescale(HDUlist_or_filename, pixscale_out, pixscale_in=None,
     ny, nx = image_new.shape
     if cen_star:
         image_new[ny//2, nx//2] += star_flux
+
+    if shape_out is not None:
+        image_new = pad_or_cut_to_size(image_new, shape_out)
 
     hdu_new = fits.PrimaryHDU(image_new)
     hdu_new.header = hdulist[0].header.copy()
@@ -1121,8 +1131,8 @@ def convolve_image(hdul_sci_image, hdul_psfs, aper=None):
 
     return im_conv
 
-
-def make_disk_image(inst, disk_params, sp_star=None, pixscale_out=None, dist_out=None):
+def make_disk_image(inst, disk_params, sp_star=None, pixscale_out=None, dist_out=None,
+                    shape_out=None):
     """
     Rescale disk model flux to desired pixel scale and distance.
     If instrument bandpass is different from disk model, scales 
@@ -1132,7 +1142,31 @@ def make_disk_image(inst, disk_params, sp_star=None, pixscale_out=None, dist_out
     
     Parameters
     ==========
-    
+    inst : mod::webbpsf_ext instrument class
+        E.g. NIRCam_ext, MIRI_ext classes
+    disk_params : dict
+        Arguments describing the necessary model information:
+            - 'file'       : Path to model file or an HDUList.
+            - 'pixscale'   : Pixel scale (arcsec/pixel).
+            - 'dist'       : Assumed model distance in parsecs.
+            - 'wavelength' : Wavelength of observation in microns.
+            - 'units'      : String of assumed flux units (ie., MJy/arcsec^2 or muJy/pixel)
+            - 'cen_star'   : True/False. Is the star placed in the central pixel? 
+        Will Convert from [M,m,u,n]Jy/[arcsec^2,pixel] to photons/sec/pixel
+
+    Keyword Args
+    ============
+    sp_star : :mod:`pysynphot.spectrum`
+        A pysynphot spectrum of central star. Used to adjust observed
+        photon flux if filter differs from model input
+    pixscale_out : float
+        Desired pixelscale of returned image.
+    dist_out : float
+        Distance to place disk at. Flux is scaled appropriately relative to
+        the input distance specified in `disk_params`.
+    shape_out : tuple, int, or None
+        Desired size for the output array (ny,nx). If a single value, then will 
+        create a 2-element tuple of the same value.
     """
 
     from .spectra import stellar_spectrum
@@ -1158,7 +1192,7 @@ def make_disk_image(inst, disk_params, sp_star=None, pixscale_out=None, dist_out
     if pixscale_out is None:
         pixscale_out = inst.pixelscale / inst.oversample
     hdul_disk_image = image_rescale(hdul_model, pixscale_out, dist_out=dist_out, 
-                                    cen_star=disk_params['cen_star'])
+                                    cen_star=disk_params['cen_star'], shape_out=shape_out)
 
     copy_keys = [
         'INSTRUME', 'APERNAME', 'FILTER', 'DET_SAMP',
