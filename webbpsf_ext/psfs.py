@@ -6,17 +6,11 @@ from .utils import conf, poppy, S
 from .maths import jl_poly
 from .image_manip import krebin
 from .bandpasses import nircam_grism_res, niriss_grism_res
-# from .bandpasses import miri_filter, nircam_filter
-# from .opds import OPDFile_to_HDUList
 
 import logging
 _log = logging.getLogger('webbpsf_ext')
 
-from scipy.interpolate import griddata, RegularGridInterpolator, interp1d
-#from numpy.polynomial import legendre
-
-# Program bar
-# from tqdm.auto import trange, tqdm
+from scipy.interpolate import griddata, RegularGridInterpolator
 
 __epsilon = np.finfo(float).eps
 
@@ -184,18 +178,19 @@ def gen_image_from_coeff(inst, coeff, coeff_hdr, sp_norm=None, nwaves=None,
 
     # Get wavelength range
     npix = coeff.shape[-1]
-    waveset = create_waveset(bp, npix, nwaves=nwaves)
+    # waveset = create_waveset(bp, npix, nwaves=nwaves, is_grism=is_grism)
+
+    # List of sp observation converted to count rate
+    obs_list = create_obslist(bp, npix, nwaves=nwaves, is_grism=is_grism,
+                              sp_norm=sp_norm, use_sp_waveset=use_sp_waveset)
+    nspec = len(obs_list)
+
+    # Get wavelength range
+    waveset = obs_list[0].binwave
     wgood = waveset / 1e4
     w1 = wgood.min()
     w2 = wgood.max()
     wrange = w2 - w1
-
-    # List of sp observation converted to count rate
-    obs_list = create_obslist(bp, npix, sp_norm=sp_norm, 
-                              use_sp_waveset=use_sp_waveset, nwaves=nwaves)
-    waveset = obs_list[0].binwave
-    wgood = waveset / 1e4
-    nspec = len(obs_list)
 
     # Create a PSF for each wgood wavelength
     use_legendre = True if coeff_hdr['LEGNDR'] else False
@@ -327,12 +322,14 @@ def gen_image_from_coeff(inst, coeff, coeff_hdr, sp_norm=None, nwaves=None,
             return data_list
 
 
-def create_waveset(bp, npix, nwaves=None):
+def create_waveset(bp, npix, nwaves=None, is_grism=False):
 
     waveset = np.copy(bp.wave)
     if nwaves is not None:
         # Evenly spaced wavelengths
         waveset = np.linspace(waveset.min(), waveset.max(), nwaves)
+    elif is_grism:
+        waveset = waveset
     else:
         # For generating the PSF, let's save some time and memory by not using
         # ever single wavelength in the bandpass.
@@ -354,13 +351,13 @@ def create_waveset(bp, npix, nwaves=None):
     
     return waveset
 
-def create_obslist(bp, npix, nwaves=None, sp_norm=None, use_sp_waveset=False):
+def create_obslist(bp, npix, nwaves=None, is_grism=False,
+                   sp_norm=None, use_sp_waveset=False):
 
-    waveset = create_waveset(bp, npix, nwaves=nwaves)
+    waveset = create_waveset(bp, npix, nwaves=nwaves, is_grism=is_grism)
     wgood = waveset / 1e4
     w1 = wgood.min()
     w2 = wgood.max()
-    wrange = w2 - w1
 
     # Flat spectrum with equal photon flux in each spectal bin
     if sp_norm is None:
