@@ -196,16 +196,16 @@ class NIRCam_ext(webbpsf_NIRCam):
             w1 = self.bandpass.wave.min() / 1e4
             w2 = self.bandpass.wave.max() / 1e4
         else:
-            w1, w2 = (2.4,5.1) if self.channel=='long' else (0.5,2.5)
+            w1, w2 = (2.4,5.2) if self.channel=='long' else (0.5,2.5)
         return w1, w2
     @property
     def npsf(self):
         """Number of wavelengths/PSFs to fit"""
         w1, w2 = self.wave_fit
         npsf = self._npsf
-        # Default to 20 PSF simulations per um
+        # Default to 10 PSF simulations per um
         if npsf is None:
-            dn = 20 
+            dn = 10 if self.channel=='long' else 20
             npsf = int(np.ceil(dn * (w2-w1)))
             
         # Want at least 5 monochromatic PSFs
@@ -224,11 +224,17 @@ class NIRCam_ext(webbpsf_NIRCam):
     def ndeg(self):
         ndeg = self._ndeg
         if ndeg is None:
-            # TODO: Quantify these better
-            if self.use_legendre:
-                ndeg = 7 if self.quick else 9
+            if self.quick:
+                if  self.filter[-1]=='W2':
+                    ndeg = 9
+                elif self.filter[-1]=='W':
+                    ndeg = 8
+                elif self.filter[-1]=='M':
+                    ndeg = 6
+                else:
+                    ndeg = 4
             else:
-                ndeg = 7 if self.quick else 9
+                ndeg = 9
         return ndeg
     @ndeg.setter
     def ndeg(self, value):
@@ -237,27 +243,22 @@ class NIRCam_ext(webbpsf_NIRCam):
     def quick(self):
         """Perform quicker coeff calculation over limited bandwidth?"""
 
-        # If WLP4 is used, then narrow bandpass, so turn on quick flag
-        wl4_list = ['WEAK LENS +12 (=4+8)', 'WEAK LENS -4 (=4-8)', 'WEAK LENS +4',
-                    'WLP12', 'WLM8', 'WLP4']
-        if (self.pupil_mask in wl4_list) or ('N' in self.filter):
-            is_narrow = True
-        else:
-            is_narrow = False
-                    
+        # If quick is not explicitly set by user, then default to True:
         if self._quick is not None:
             quick = self._quick
-        elif is_narrow:
-            quick = True
         else:
-            quick = False
-
+            quick = True
+            
         return quick
     @quick.setter
     def quick(self, value):
         """Perform quicker coeff calculation over limited bandwidth?"""
         _check_list(value, [True, False], 'quick')
         self._quick = value
+
+    @property
+    def siaf_ap(self):
+        return self.siaf[self.aperturename]
 
     @property
     def scaid(self):
@@ -568,7 +569,7 @@ class NIRCam_ext(webbpsf_NIRCam):
 
         return res
 
-    def gen_wfemask_coeff(self, force=False, save=True, **kwargs):
+    def gen_wfemask_coeff(self, large_grid=False, force=False, save=True, **kwargs):
         """ Fit WFE changes in mask position
 
         For coronagraphic masks, slight changes in the PSF location
@@ -581,6 +582,12 @@ class NIRCam_ext(webbpsf_NIRCam):
 
         Parameters
         ----------
+        large_grid : bool
+            Use a large number (high-density) of grid points to create coefficients.
+            If True, then a higher fidelity PSF variations across the FoV, but could
+            take hours to genrate on the first pass. Setting to False allows for
+            quicker coefficient creation with a smaller memory footprint, useful for
+            testing and debugging.        
         force : bool
             Forces a recalculation of coefficients even if saved file exists. 
             (default: False)
@@ -599,9 +606,9 @@ class NIRCam_ext(webbpsf_NIRCam):
             prior to fitting. Final results will not be saved to the dictionary attributes.
 
         """
-        return _gen_wfemask_coeff(self, force=force, save=save, **kwargs)
+        return _gen_wfemask_coeff(self, large_grid=large_grid, force=force, save=save, **kwargs)
 
-    def gen_wfefield_coeff(self, force=False, save=True, **kwargs):
+    def gen_wfefield_coeff(self, large_grid=False, force=False, save=True, **kwargs):
         """ Fit WFE field-dependent coefficients
 
         Find a relationship between field position and PSF coefficients for
@@ -614,7 +621,7 @@ class NIRCam_ext(webbpsf_NIRCam):
             (default: False)
         save : bool
             Save the resulting PSF coefficients to a file? (default: True)
-
+            
         Keyword Args
         ------------
         return_results : bool
@@ -876,6 +883,10 @@ class MIRI_ext(webbpsf_MIRI):
         _check_list(value, [True, False], 'quick')
         self._quick = value
 
+    @property
+    def siaf_ap(self):
+        return self.siaf[self.aperturename]
+
     @webbpsf_MIRI.detector_position.setter
     def detector_position(self, position):
         try:
@@ -1134,7 +1145,7 @@ class MIRI_ext(webbpsf_MIRI):
         """
         return _gen_wfefield_coeff(self, force=force, save=save, **kwargs)
 
-    def gen_wfemask_coeff(self, force=False, save=True, **kwargs):
+    def gen_wfemask_coeff(self, large_grid=False, force=False, save=True, **kwargs):
         """ Fit WFE changes in mask position
 
         For coronagraphic masks, slight changes in the PSF location
@@ -1147,6 +1158,12 @@ class MIRI_ext(webbpsf_MIRI):
 
         Parameters
         ----------
+        large_grid : bool
+            Use a large number (high-density) of grid points to create coefficients.
+            If True, then a higher fidelity PSF variations across the FoV, but could
+            take hours to genrate on the first pass. Setting to False allows for
+            quicker coefficient creation with a smaller memory footprint, useful for
+            testing and debugging.        
         force : bool
             Forces a recalculation of coefficients even if saved file exists. 
             (default: False)
@@ -1165,7 +1182,7 @@ class MIRI_ext(webbpsf_MIRI):
             prior to fitting. Final results will not be saved to the dictionary attributes.
 
         """
-        return _gen_wfemask_coeff(self, force=force, save=save, **kwargs)
+        return _gen_wfemask_coeff(self, large_grid=large_grid, force=force, save=save, **kwargs)
 
     def calc_psf_from_coeff(self, sp=None, return_oversample=True, 
         wfe_drift=None, coord_vals=None, coord_frame='tel', **kwargs):
@@ -1332,7 +1349,6 @@ def _init_inst(self, filter=None, pupil_mask=None, image_mask=None,
         self.pupil_mask_list = self.pupil_mask_list + ['GRISM0', 'GRISM90', 'GRISMC', 'GRISMR']
     elif self.name=='NIRISS':
         self.pupil_mask_list = self.pupil_mask_list + ['GR150C', 'GR150R']
-    self.pupil_mask_list
 
     if filter is not None:
         self.filter = filter
@@ -1356,7 +1372,8 @@ def _init_inst(self, filter=None, pupil_mask=None, image_mask=None,
     # Default odd for normal imaging, even for coronagraphy
     # TODO: Do these even/odd settings make sense?
     if fov_pix is None:
-        fov_pix = 128 if self.is_coron else 129
+        # fov_pix = 128 if self.is_coron else 129
+        fov_pix = 257
     self._fov_pix = fov_pix
     self._oversample = oversample
     
@@ -2423,7 +2440,8 @@ def _gen_wfefield_coeff(self, force=False, save=True, return_results=False, retu
         self._psf_coeff_mod['si_field_apname'] = apname
 
 
-def _gen_wfemask_coeff(self, force=False, save=True, return_results=False, return_raw=False, **kwargs):
+def _gen_wfemask_coeff(self, force=False, save=True, large_grid=False,
+                       return_results=False, return_raw=False, **kwargs):
 
     if (not self.is_coron):
         _log.info("Skipping WFE mask dependence...")
@@ -2445,7 +2463,8 @@ def _gen_wfemask_coeff(self, force=False, save=True, return_results=False, retur
 
     # Name to save array of oversampled coefficients
     save_dir = self.save_dir
-    save_name = os.path.splitext(self.save_name)[0] + '_wfemask.npz'
+    file_ext = '_large_grid_wfemask.npz' if large_grid else '_wfemask.npz'
+    save_name = os.path.splitext(self.save_name)[0] + file_ext
     outname = save_dir + save_name
 
     # Load file if it already exists
@@ -2480,90 +2499,124 @@ def _gen_wfemask_coeff(self, force=False, save=True, return_results=False, retur
         # Negative shifts will place source in upper right quadrant
         # Depend on PSF symmetries for other three quadrants
         if 'FQPM' in self.image_mask:
-            xy_offsets = -1 * np.array([0, 0.005, 0.01, 0.08, 0.10, 0.2, 0.5, 1, 5, 11])
+            if large_grid:
+                xy_offsets = -1 * np.array([0, 0.005, 0.01, 0.08, 0.10, 0.2, 0.5, 1, 5, 11])
+            else:
+                xy_offsets = -1 * np.array([0, 0.01, 0.10, 1, 10])
+            xy_offsets[0] = 0
         elif 'LYOT' in self.image_mask:
             # TODO: Update offsets to optimize for Lyot mask
-            xy_offsets = -1 * np.array([0, 0.01, 0.1, 0.36, 0.5, 1, 2.1, 5, 11])
+            if large_grid:
+                xy_offsets = -1 * np.array([0, 0.01, 0.1, 0.36, 0.5, 1, 2.1, 5, 11])
+            else:
+                xy_offsets = -1 * np.array([0, 0.01, 0.10, 1, 10])
+            xy_offsets[0] = 0
         else:
             raise NotImplementedError(f'{self.name} with {self.image_mask} not implemented.')
 
-        xy_offsets[0] = 0
-        xy_offsets = xy_offsets[::-1] # Ascending order
-        x_offsets = y_offsets = xy_offsets
+        x_offsets = y_offsets = np.sort(xy_offsets) # Ascending order
         grid_vals = np.array(np.meshgrid(y_offsets,x_offsets))
         xy_list = [(x,y) for x,y in grid_vals.reshape([2,-1]).transpose()]
         xoff, yoff = np.array(xy_list).transpose()
 
         # Small grid dithers indices
+        # Always calculate these explicitly
         ind_zero = (np.abs(xoff)==0) & (np.abs(yoff)==0)
-        ind_sgd = (np.abs(xoff)<=0.01) & (np.abs(yoff)<=0.01) & ~ind_zero
+        iwa = 0.01
+        ind_sgd = (np.abs(xoff)<=iwa) & (np.abs(yoff)<=iwa) & ~ind_zero
     elif self.name=='NIRCam':
+        # Turn off ND square calculations
+        # Such PSFs will be attenuated later
         nd_squares_orig = self.options.get('nd_squares', True)
         self.options['nd_squares'] = False
+
+        # Build position offsets
         if self.image_mask[-1]=='R': # Round masks
-            # Include SGD points
-            xy_inner = np.array([0, 0.015, 0.02, 0.05, 0.1])
-            # M430R sampling; scale others
-            xy_mid = np.array([0.6, 1.2, 2, 2.5])
-            if '210R' in self.image_mask:
-                xy_mid *= 0.488
-            elif '335R' in self.image_mask:
-                xy_mid *= 0.779
-            xy_outer = np.array([5.0, 8.0])
-            xy_offsets = -1 * np.concatenate((xy_inner, xy_mid, xy_outer))
+            if large_grid:
+                # Include SGD points
+                xy_inner = np.array([0.015, 0.02, 0.05, 0.1])
+                # M430R sampling; scale others
+                xy_mid = np.array([0.6, 1.2, 2, 2.5])
+                if '210R' in self.image_mask:
+                    xy_mid *= 0.488
+                elif '335R' in self.image_mask:
+                    xy_mid *= 0.779
+                xy_outer = np.array([5.0, 8.0])
 
-            xy_offsets[0] = 0
-            xy_offsets = xy_offsets[::-1] # Ascending order
-            x_offsets = y_offsets = xy_offsets
+                # Sort offsets [-], 0, [+]
+                xy_pos = np.concatenate((xy_inner, xy_mid, xy_outer))
+                xy_neg = -1 * xy_pos[::-1]
+                xy_offsets = np.concatenate((xy_neg, [0], xy_pos))
+            else:
+                # Assume symmetries for round mask
+                xy_offsets = np.array([-8, -1.5, -0.1, -0.01, 0])
+
+            # Create grid spacing
+            x_offsets = y_offsets = np.sort(xy_offsets)
             grid_vals = np.array(np.meshgrid(x_offsets,y_offsets))
             xy_list = [(x,y) for x,y in grid_vals.reshape([2,-1]).transpose()]
             xoff, yoff = np.array(xy_list).transpose()
 
-            # Small grid dithers indices
+            # Small grid dithers indices and close IWA
+            # Always calculate these explicitly
+            # Exclude x,y=(0,0) since we want to calc this early
             ind_zero = (np.abs(xoff)==0) & (np.abs(yoff)==0)
-            ind_sgd = (np.abs(xoff)<=0.02) & (np.abs(yoff)<=0.02) & ~ind_zero
+            iwa = 0.1
+            ind_sgd = (np.abs(xoff)<=iwa) & (np.abs(yoff)<=iwa) & ~ind_zero
         else: # Bar masks
-            # LWB sampling of wedge gradient
-            # Include SGD points
-            y_inner = np.array([0, 0.01, 0.02, 0.05, 0.1])
-            y_mid = np.array([0.6, 1.2, 2, 2.5])
-            if 'SW' in self.image_mask:
-                y_mid *= 0.488
-            y_outer = np.array([5,8])
-            y_offsets = np.concatenate([y_inner, y_mid, y_outer])
-            x_offsets = np.array([-8, -6, -4, -2, 0, 2, 4, 6, 8], dtype='float')
+            if large_grid:
+                # Include SGD points
+                y_inner = np.array([0, 0.01, 0.02, 0.05, 0.1])
+                # LWB sampling of wedge gradient
+                y_mid = np.array([0.6, 1.2, 2, 2.5])
+                if 'SW' in self.image_mask:
+                    y_mid *= 0.488
+                y_outer = np.array([5,8])
+                y_offsets = np.concatenate([y_inner, y_mid, y_outer])
+                x_offsets = np.array([-8, -6, -4, -2, 0, 2, 4, 6, 8], dtype='float')
 
-            # Mask offset values in ascending order
-            x_offsets = -1*x_offsets[::-1]
-            y_offsets = -1*y_offsets[::-1]
+                # Mask offset values in ascending order
+                x_offsets = np.sort(-1*x_offsets)
+                y_offsets = np.sort(-1*y_offsets)
+            else:
+                y_offsets = np.array([-8, -1.5, -0.1, -0.01, 0, 0.01, 0.1, 1.5, 8])
+                x_offsets = np.array([-8, -5, -2, 0, 2, 5, 8], dtype='float')
             grid_vals = np.array(np.meshgrid(x_offsets,y_offsets))
             xy_list = [(x,y) for x,y in grid_vals.reshape([2,-1]).transpose()]
             xoff, yoff = np.array(xy_list).transpose()
 
-            # Small grid dithers indices
+            # SSmall grid dithers indices and close IWA
+            # Always calculate these explicitly
             ind_zero = np.abs(yoff)==0
-            ind_sgd = (np.abs(yoff) <= 0.02) & ~ind_zero
+            iwa = 0.1
+            ind_sgd = (np.abs(yoff)<=iwa) & ~ind_zero
 
     # Get PSF coefficients for each specified position
     log_prev = conf.logging_level
     setup_logging('WARN', verbose=False)
     cf_all = []
     npos = len(xoff)
+    fov_pix_over = self.fov_pix * self.oversample
+    cf_all = np.zeros([npos, self.ndeg+1, fov_pix_over, fov_pix_over], dtype='float')
     for i in trange(npos, leave=False, desc="Mask Offsets"):
-        self.options['coron_shift_x'] = xoff[i]
-        self.options['coron_shift_y'] = yoff[i]
+        xv, yv = (xoff[i], yoff[i])
+
+        self.options['coron_shift_x'] = xv
+        self.options['coron_shift_y'] = yv
 
         # Pixel offset information
         field_rot = 0 if self._rotation is None else self._rotation
-        xyoff_pix = np.array(xy_rot(-1*xoff[i], -1*yoff[i], -field_rot)) / self.pixelscale
+        xyoff_pix = np.array(xy_rot(-1*xv, -1*yv, -field_rot)) / self.pixelscale
         self.detector_position = np.array(detector_position_orig) + xyoff_pix
 
-        if ind_sgd[i]==True:
-            # Add just a set of 0s for SGD positions
-            cf = np.zeros(self.psf_coeff.shape)
-        else:
+        # Skip SGD locations until later
+        if ind_sgd[i]==False:
             cf, _ = self.gen_psf_coeff(return_results=True, force=True, save=False, **kwargs)
-        cf_all.append(cf)
+            cf_all[i] = cf
+            # Save central coefficient to it's own variable
+            if (xv==0) and (yv==0):
+                coeff0 = cf
+
     setup_logging(log_prev, verbose=False)
 
     # Return raw results for further analysis
@@ -2578,12 +2631,13 @@ def _gen_wfemask_coeff(self, force=False, save=True, return_results=False, retur
             self.options['nd_squares'] = nd_squares_orig
             self.options['bar_offset'] = bar_offset_orig
 
-        return np.array(cf_all), xoff, yoff
+        return cf_all, xoff, yoff
 
     # Get residuals
-    coeff0 = cf_all[-1] # (0,0) is in final position
-    cf_resid = np.array(cf_all) - coeff0
-    del cf_all
+    cf_all -= coeff0
+    cf_resid = cf_all
+    # cf_resid = cf_all - coeff0
+    # del cf_all
 
     # Reshape into cf_resid into [nypos, nxpos, ncf, nypix, nxpix]
     nxpos = len(x_offsets)
@@ -2595,10 +2649,12 @@ def _gen_wfemask_coeff(self, force=False, save=True, return_results=False, retur
     ncf, nypix, nxpix = cf_resid.shape[-3:]
 
     # MIRI quadrant symmetries 
-    # Also works for NIRCam round masks
-    if (self.name=='MIRI') or (self.name=='NIRCam' and self.image_mask[-1]=='R'):
+    # This doesn't work for NIRCam, because of chromatic PSF shifts in y-direction
+    if self.name=='MIRI':
 
         field_rot = 0 if self._rotation is None else 2*self._rotation
+
+        # Assuming that x=y=0 are in the final index (i=-1)
 
         # Add same x, but -1*y
         x_negy  = xoff[:-1,:]
@@ -2625,6 +2681,7 @@ def _gen_wfemask_coeff(self, force=False, save=True, return_results=False, retur
         y_negxy  = -1*yoff[:-1,:-1][::-1,::-1]
         cf_negxy = cf_resid[:-1,:-1][::-1,::-1]
         # Flip the PSF coeff image in both x-axis and y-axis
+        # No rotation necessary
         cf_negxy = cf_negxy[:,:,:,::-1,::-1]        
 
         # Combine quadrants
@@ -2636,17 +2693,116 @@ def _gen_wfemask_coeff(self, force=False, save=True, return_results=False, retur
         yoff2 = np.concatenate((y_negx, y_negxy), axis=0)
         yoff_all = np.concatenate((yoff1, yoff2), axis=1)
 
+        # Get rid of unnecessary and potentially large arrays
+        del xoff1, xoff2, yoff1, yoff2
+
         cf1 = np.concatenate((cf_resid, cf_negy), axis=0)
+        del cf_resid, cf_negy
         cf2 = np.concatenate((cf_negx, cf_negxy), axis=0)
+        del cf_negx, cf_negxy
         cf_resid_all = np.concatenate((cf1, cf2), axis=1)
+        del cf1, cf2
 
         # Get all SGD positions now that we've combined all x/y positions
         # For SGD regions, we want to calculate actual PSFs, not take
         # the shortcuts that were done above
         ind_zero = (np.abs(xoff_all)==0) & (np.abs(yoff_all)==0)
-        ind_sgd = (np.abs(xoff_all)<=0.02) & (np.abs(yoff_all)<=0.02) & ~ind_zero
+        ind_sgd = (np.abs(xoff_all)<=iwa) & (np.abs(yoff_all)<=iwa) & ~ind_zero
 
-    elif (self.name=='NIRCam') and (self.image_mask[-1]=='B'): # Bar masks
+    elif (self.name=='NIRCam') and (self.image_mask[-1]=='R') and (large_grid==True):
+        # Round Masks
+        xoff_all = xoff
+        yoff_all = yoff
+        cf_resid_all = cf_resid
+
+        # SGD positions
+        ind_zero = (np.abs(xoff_all)==0) & (np.abs(yoff_all)==0)
+        ind_sgd = (np.abs(xoff_all)<=iwa) & (np.abs(yoff_all)<=iwa) & ~ind_zero
+
+    elif (self.name=='NIRCam') and (self.image_mask[-1]=='B') and (large_grid==True): 
+        # Bar Masks
+        xoff_all = xoff
+        yoff_all = yoff
+        cf_resid_all = cf_resid
+
+        # SGD positions
+        ind_zero = np.abs(yoff_all)==0
+        ind_sgd = (np.abs(xoff_all)<=iwa) & ~ind_zero
+
+    # Short cuts for quicker creation
+    elif (self.name=='NIRCam') and (self.image_mask[-1]=='R') and (large_grid==False):
+
+        # No need to rotate NIRcam, because self._rotation is None
+        field_rot = 0 if self._rotation is None else 2*self._rotation
+
+        # Assuming that x=y=0 are in the final index (i=-1)
+
+        # Add same x, but -1*y
+        x_negy  = xoff[:-1,:]
+        y_negy  = -1*yoff[:-1,:][::-1,:]
+        cf_negy = cf_resid[:-1,:][::-1,:]
+        # Don't Flip the PSF coeff image in the y-axis
+        # No rotation necessary
+
+        # Add same y, but -1*x
+        x_negx  = -1*xoff[:,:-1][:,::-1]
+        y_negx  = yoff[:,:-1]
+        cf_negx = cf_resid[:,:-1][:,::-1]
+        # Flip the PSF coeff image in the x-axis and rotate
+        cf_negx = cf_negx[:,:,:,:,::-1]
+        if np.abs(field_rot) < 0.01:
+            sh_ret  = cf_negx.shape
+            cf_negx = cf_negx.reshape([-1,nypix,nxpix])
+            cf_negx = rotate_offset(cf_negx, field_rot, reshape=False, order=2, mode='mirror')
+            cf_negx = cf_negx.reshape(sh_ret)
+
+        # Add -1*y, -1*x; exclude all x=0 and y=0 coords
+        x_negxy  = -1*xoff[:-1,:-1][::-1,::-1]
+        y_negxy  = -1*yoff[:-1,:-1][::-1,::-1]
+        cf_negxy = cf_resid[:-1,:-1][::-1,::-1]
+        # Flip the PSF coeff image only along x-axis
+        # Rotate if necessary
+        cf_negxy = cf_negxy[:,:,:,:,::-1]
+        if np.abs(field_rot) < 0.01:
+            sh_ret   = cf_negxy.shape
+            cf_negxy = cf_negxy.reshape([-1,nypix,nxpix])
+            cf_negxy = rotate_offset(cf_negxy, field_rot, reshape=False, order=2, mode='mirror')
+            cf_negxy = cf_negxy.reshape(sh_ret)
+
+        # Combine quadrants
+        xoff1 = np.concatenate((xoff, x_negy), axis=0)
+        xoff2 = np.concatenate((x_negx, x_negxy), axis=0)
+        xoff_all = np.concatenate((xoff1, xoff2), axis=1)
+
+        yoff1 = np.concatenate((yoff, y_negy), axis=0)
+        yoff2 = np.concatenate((y_negx, y_negxy), axis=0)
+        yoff_all = np.concatenate((yoff1, yoff2), axis=1)
+
+        # Get rid of unnecessary and potentially large arrays
+        del xoff1, xoff2, yoff1, yoff2
+
+        cf1 = np.concatenate((cf_resid, cf_negy), axis=0)
+        del cf_resid, cf_negy
+        cf2 = np.concatenate((cf_negx, cf_negxy), axis=0)
+        del cf_negx, cf_negxy
+        cf_resid_all = np.concatenate((cf1, cf2), axis=1)
+        del cf1, cf2
+
+        # Get all SGD positions now that we've combined all x/y positions
+        # For SGD regions, we want to calculate actual PSFs, not take
+        # the shortcuts that were done above
+        ind_zero = (np.abs(xoff_all)==0) & (np.abs(yoff_all)==0)
+        ind_sgd = (np.abs(xoff_all)<=iwa) & (np.abs(yoff_all)<=iwa) & ~ind_zero
+
+    # Short cuts for quicker creation
+    elif (self.name=='NIRCam') and (self.image_mask[-1]=='B') and (large_grid==False): 
+        # Bar masks
+
+        # No need to rotate NIRcam, because self._rotation is None
+        field_rot = 0 if self._rotation is None else 2*self._rotation
+
+        # Assuming that y=0 are in the final index (i=-1)
+
         # Add same x, but -1*y
         x_negy  = xoff[:-1,:]
         y_negy  = -1*yoff[:-1,:][::-1,:]
@@ -2654,16 +2810,25 @@ def _gen_wfemask_coeff(self, force=False, save=True, return_results=False, retur
         # Flip the PSF coeff image in the y-axis
         cf_negy = cf_negy[:,:,:,::-1,:]
 
+        # Rotation
+        if np.abs(field_rot) < 0.01:
+            sh_ret  = cf_negy.shape
+            cf_negy = cf_negy.reshape([-1,nypix,nxpix])
+            cf_negy = rotate_offset(cf_negy, field_rot, reshape=False, order=2, mode='mirror')
+            cf_negy = cf_negy.reshape(sh_ret)
+
         # Combine halves
         xoff_all = np.concatenate((xoff, x_negy), axis=0)
         yoff_all = np.concatenate((yoff, y_negy), axis=0)
         cf_resid_all = np.concatenate((cf_resid, cf_negy), axis=0)
+        # Get rid of unnecessary and potentially large arrays
+        del xoff, x_negy, yoff, y_negy, cf_resid, cf_negy
 
         # Get all SGD positions now that we've combined all x/y positions
         # For SGD regions, we want to calculate actual PSFs, not take
         # the shortcuts that were done above
         ind_zero = np.abs(yoff_all)==0
-        ind_sgd = (np.abs(xoff_all)<=0.02) & ~ind_zero
+        ind_sgd = (np.abs(xoff_all)<=iwa) & ~ind_zero
     else:
         msg = f'{self.name} not implemented for different WFE mask modifications.'
         raise NotImplementedError(msg)
@@ -2674,18 +2839,20 @@ def _gen_wfemask_coeff(self, force=False, save=True, return_results=False, retur
     # Set to fov calculation size
     xsgd, ysgd = (xoff_all[ind_sgd], yoff_all[ind_sgd])
     nsgd = len(xsgd)
-    for xv, yv in tqdm(zip(xsgd, ysgd), total=nsgd, desc='SGD'):
-        self.options['coron_shift_x'] = xv
-        self.options['coron_shift_y'] = yv
+    if nsgd>0:
+        for xv, yv in tqdm(zip(xsgd, ysgd), total=nsgd, desc='SGD'):
+            self.options['coron_shift_x'] = xv
+            self.options['coron_shift_y'] = yv
 
-        # Pixel offset information
-        field_rot = 0 if self._rotation is None else self._rotation
-        xyoff_pix = np.array(xy_rot(-1*xv, -1*yv, -field_rot)) / self.pixelscale
-        self.detector_position = np.array(detector_position_orig) + xyoff_pix
+            # Pixel offset information
+            field_rot = 0 if self._rotation is None else self._rotation
+            xyoff_pix = np.array(xy_rot(-1*xv, -1*yv, -field_rot)) / self.pixelscale
+            self.detector_position = np.array(detector_position_orig) + xyoff_pix
 
-        cf, _ = self.gen_psf_coeff(return_results=True, force=True, save=False, **kwargs)
-        ind = (xoff_all==xv) & (yoff_all==yv)
-        cf_resid_all[ind] = cf - coeff0
+            cf, _ = self.gen_psf_coeff(return_results=True, force=True, save=False, **kwargs)
+            ind = (xoff_all==xv) & (yoff_all==yv)
+            cf_resid_all[ind] = cf - coeff0
+
     setup_logging(log_prev, verbose=False)
 
     # Return to previous values
