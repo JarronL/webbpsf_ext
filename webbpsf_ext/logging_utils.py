@@ -7,6 +7,8 @@ from . import conf
 
 _DISABLE_FILE_LOGGING_VALUE = 'none'
 
+import warnings
+warnings.filterwarnings('ignore')
 
 ### Helper routines for logging: ###
 
