@@ -1631,7 +1631,7 @@ def _drift_opd(self, wfe_drift, opd=None,
     opd_str  = opd_dict['opd_str']
     opd      = deepcopy(opd_dict['pupilopd'])
         
-    # If there is wfe_drift, create a OTE Linear Model
+    # Apply drift components
     wfe_dict = {'therm':0, 'frill':0, 'iec':0, 'opd':opd}
     if (wfe_therm is not None) or (wfe_frill is not None) or (wfe_iec is not None):
         wfe_therm = 0 if wfe_therm is None else wfe_therm
@@ -1696,7 +1696,7 @@ def _drift_opd(self, wfe_drift, opd=None,
         wfe_dict['frill'] = wfe_frill
         wfe_dict['iec']   = wfe_iec
         wfe_dict['opd']   = opd
-    else:
+    else: # No drift
         # Apply IEC
         opd.apply_iec_drift(amplitude=0, delay_update=True)
         # Apply frill
@@ -1709,9 +1709,7 @@ def _drift_opd(self, wfe_drift, opd=None,
 
 
 def _inst_copy(self):
-    """
-    Create a copy of the instrument class that has just been initialized.
-    """
+    """ Return a copy of the current instrument class. """
 
     # Change log levels to WARNING for pyNRC, WebbPSF, and POPPY
     log_prev = conf.logging_level
@@ -1764,6 +1762,7 @@ def _inst_copy(self):
     except: pass
 
     setup_logging(log_prev, verbose=False)
+
     return inst
 
 
