@@ -1758,15 +1758,15 @@ def _update_mask_shifts(self):
     pixscale = self.pixelscale
     xv_pix = int(xv / pixscale) * pixscale
     yv_pix = int(yv / pixscale) * pixscale
-    self.options['coron_shift_x'] = xv_pix
-    self.options['coron_shift_y'] = yv_pix
+    self.options['coron_shift_x'] = xv_pix # arcsec
+    self.options['coron_shift_y'] = yv_pix # arcsec
 
     # Subpixel residuals
     xv_subpix = xv - xv_pix
     yv_subpix = yv - yv_pix
 
     rotation = 0 if self._rotation is None else -1*self._rotation
-    # Source offsetting
+    # Equivalent source offsetting
     xoff_sub, yoff_sub = xy_rot(-1*xv_subpix, -1*yv_subpix, rotation)
     # Get initial values if they exist
     r0 = self.options.get('source_offset_r', 0)
