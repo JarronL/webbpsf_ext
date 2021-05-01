@@ -1,8 +1,10 @@
 # Import libraries
+from astropy.units.equivalencies import pixel_scale
 import numpy as np
 
 import time
 import os, six
+from numpy.lib.function_base import rot90
 from numpy.lib.arraypad import pad
 import multiprocessing as mp
 import traceback
@@ -20,8 +22,8 @@ from .psfs import make_coeff_resid_grid, field_coeff_func
 from .opds import OPDFile_to_HDUList
 
 # Coordinates and image manipulation
-from .coords import NIRCam_V2V3_limits, xy_rot, gen_sgd_offsets
-from .image_manip import pad_or_cut_to_size, rotate_offset
+from .coords import NIRCam_V2V3_limits, rtheta_to_xy, xy_rot, gen_sgd_offsets, xy_to_rtheta
+from .image_manip import fshift, pad_or_cut_to_size, rotate_offset
 
 # Polynomial fitting routines
 from .maths import jl_poly, jl_poly_fit
@@ -738,13 +740,28 @@ class NIRCam_ext(webbpsf_NIRCam):
         # Automatically use already defined properties
         add_distortion = self.include_distortions if add_distortion is None else add_distortion
         fov_pixels = self.fov_pix if fov_pixels is None else fov_pixels
-        oversample = self.oversample if oversample is None else oversample
 
         kwargs['add_distortion'] = add_distortion
         kwargs['fov_pixels'] = fov_pixels
+
+        # Figure out sampling (always want >=4 for coronagraphy)
+        if self.is_coron:
+            if oversample is None:
+                if self.oversample>=4: # we're good!
+                    oversample = self.oversample
+                else: # different oversample and detector_oversample
+                    _log.info(f'For coronagraphy, setting oversample=4 and detector_oversample={oversample}')
+                    kwargs['detector_oversample'] = self.oversample
+                    oversample = 4
+            elif oversample<4: # no changes, but send informational message
+                _log.warn('oversample={oversample} may produce imprecise results for coronagraphy. Suggest >=4.')
+        else:
+            oversample = self.oversample if oversample is None else oversample
+
         kwargs['oversample'] = oversample
 
-        return super(NIRCam_ext, self).calc_psf(**kwargs) 
+        calc_psf_func = super(NIRCam_ext, self).calc_psf
+        return _calc_psf_with_shifts(self, calc_psf_func, **kwargs)
 
     # def calc_sgd(self, xoff_asec, yoff_asec, use_coeff=True, 
     #     return_oversample=True, **kwargs):
@@ -1285,13 +1302,28 @@ class MIRI_ext(webbpsf_MIRI):
         # Automatically use already defined properties
         add_distortion = self.include_distortions if add_distortion is None else add_distortion
         fov_pixels = self.fov_pix if fov_pixels is None else fov_pixels
-        oversample = self.oversample if oversample is None else oversample
 
         kwargs['add_distortion'] = add_distortion
         kwargs['fov_pixels'] = fov_pixels
+
+        # Figure out sampling (always want >=4 for coronagraphy)
+        if self.is_coron:
+            if oversample is None:
+                if self.oversample>=4: # we're good!
+                    oversample = self.oversample
+                else: # different oversample and detector_oversample
+                    _log.info(f'For coronagraphy, setting oversample=4 and detector_oversample={oversample}')
+                    kwargs['detector_oversample'] = self.oversample
+                    oversample = 4
+            elif oversample<4: # no changes, but send informational message
+                _log.warn('oversample={oversample} may produce imprecise results for coronagraphy. Suggest >=4.')
+        else:
+            oversample = self.oversample if oversample is None else oversample
+        # Add oversample keyword
         kwargs['oversample'] = oversample
 
-        return super(MIRI_ext, self).calc_psf(**kwargs) 
+        calc_psf_func = super(MIRI_ext, self).calc_psf
+        return _calc_psf_with_shifts(self, calc_psf_func, **kwargs)
 
 
 #############################################################
@@ -1707,6 +1739,83 @@ def _drift_opd(self, wfe_drift, opd=None,
 
     return wfe_dict
 
+def _update_mask_shifts(self):
+    """ 
+    Restrict mask offsets to whole pixel shifts. Update source_offset_r/theta
+    to accommodate sub-pixel shifts. Save sub-pixel shift values to temporary 
+    source_offset_xsub/ysub keys in the options dict.
+    """
+
+    # Restrict mask offsets to whole pixel shifts
+    # Subpixel offsets should be handled with source offsets
+    xv = self.options.get('coron_shift_x', 0)
+    yv = self.options.get('coron_shift_y', 0)
+
+    if (not self.is_coron) or (xv==yv==0):
+        return
+        
+    # Whole pixel offsets
+    pixscale = self.pixelscale
+    xv_pix = int(xv / pixscale) * pixscale
+    yv_pix = int(yv / pixscale) * pixscale
+    self.options['coron_shift_x'] = xv_pix
+    self.options['coron_shift_y'] = yv_pix
+
+    # Subpixel residuals
+    xv_subpix = xv - xv_pix
+    yv_subpix = yv - yv_pix
+
+    rotation = 0 if self._rotation is None else -1*self._rotation
+    # Source offsetting
+    xoff_sub, yoff_sub = xy_rot(-1*xv_subpix, -1*yv_subpix, rotation)
+    # Get initial values if they exist
+    r0 = self.options.get('source_offset_r', 0)
+    th0 = self.options.get('source_offset_theta', 0)
+    x0, y0 = rtheta_to_xy(r0, th0)
+
+    # Update (r, th) offsets
+    r, th = xy_to_rtheta(x0+xoff_sub, y0+yoff_sub)
+    self.options['source_offset_r'] = r
+    self.options['source_offset_theta'] = th
+
+    # Store the xsub and ysub to back out later
+    self.options['source_offset_xsub'] = xoff_sub
+    self.options['source_offset_ysub'] = yoff_sub
+
+
+def _calc_psf_with_shifts(self, calc_psf_func, **kwargs):
+    """
+    Mask shifting in webbpsf does not have as high of a precision as source offsetting
+    for a given oversample setting.
+
+    When performing mask shifting, coron_shift_x/y should be detector pixel integers. 
+    Sub-pixel shifting should occur using source_offset_r/theta, but we must shift 
+    the final images in the opposite direction in order to reposition the PSF at the
+    proper source location. If the user already set _r/theta, the PSF is shifted to 
+    that position using temporary source_offset_xsub/ysub keys in the options dict.
+    """
+
+    # Only shift coronagraphic masks by pixel integers
+    # sub-pixels shifts are handled by source offsetting
+    if self.is_coron:
+        options_orig = self.options.copy()
+        _update_mask_shifts(self)
+
+    # Perform PSF calculation
+    hdul = calc_psf_func(**kwargs) 
+
+    # Perform sub-pixel shifting to reposition PSF at requested source location
+    if self.is_coron:
+        for hdu in hdul:
+            xoff_pix = self.options.get('source_offset_xsub',0) / hdu.header['PIXELSCL']
+            yoff_pix = self.options.get('source_offset_ysub',0) / hdu.header['PIXELSCL']
+            hdu.data = fshift(hdu.data, -1*xoff_pix, -1*yoff_pix)
+
+        # Return to previous values
+        self.options = options_orig
+
+    return hdul
+
 
 def _inst_copy(self):
     """ Return a copy of the current instrument class. """
@@ -1777,7 +1886,8 @@ def _wrap_coeff_for_mp(args):
     mp_prev = poppy.conf.use_multiprocessing
     poppy.conf.use_multiprocessing = False
 
-    inst,w = args
+    inst, w = args
+
     try:
         hdu_list = inst.calc_psf(monochromatic=w*1e-6, crop_psf=True)
     except Exception as e:
@@ -1796,9 +1906,11 @@ def _wrap_coeff_for_mp(args):
 
     # Return distorted PSF
     if inst.include_distortions:
-        return hdu_list[2]
+        hdu = hdu_list[2]
     else:
-        return hdu_list[0]
+        hdu = hdu_list[0]
+
+    return hdu
 
 def _gen_psf_coeff(self, nproc=None, wfe_drift=0, force=False, save=True, 
                    return_results=False, return_extras=False, **kwargs):
@@ -1932,6 +2044,7 @@ def _gen_psf_coeff(self, nproc=None, wfe_drift=0, force=False, save=True,
         else:
             _log.info('Closing multiprocess pool.')
 
+        del inst_copy, worker_arguments
     else:
         # Pass arguments to the helper function
         hdu_arr = []
@@ -1942,7 +2055,6 @@ def _gen_psf_coeff(self, nproc=None, wfe_drift=0, force=False, save=True,
             hdu_arr.append(hdu)
     t1 = time.time()
 
-    del inst_copy, worker_arguments
     
     # Reset pupils
     self.pupilopd = pupilopd_orig
@@ -1965,7 +2077,7 @@ def _gen_psf_coeff(self, nproc=None, wfe_drift=0, force=False, save=True,
     use_legendre = self.use_legendre
     ndeg = self.ndeg
     coeff_all = jl_poly_fit(waves, images, deg=ndeg, use_legendre=use_legendre, lxmap=[w1,w2])
-    
+
     ################################
     # Create HDU and header
     ################################
@@ -2584,7 +2696,7 @@ def _gen_wfemask_coeff(self, force=False, save=True, large_grid=False,
             xy_list = [(x,y) for x,y in grid_vals.reshape([2,-1]).transpose()]
             xoff, yoff = np.array(xy_list).transpose()
 
-            # SSmall grid dithers indices and close IWA
+            # Small grid dithers indices and close IWA
             # Always calculate these explicitly
             ind_zero = np.abs(yoff)==0
             iwa = 0.1
@@ -2596,6 +2708,7 @@ def _gen_wfemask_coeff(self, force=False, save=True, large_grid=False,
     cf_all = []
     npos = len(xoff)
     fov_pix_over = self.fov_pix * self.oversample
+    pixscale = self.pixelscale
     cf_all = np.zeros([npos, self.ndeg+1, fov_pix_over, fov_pix_over], dtype='float')
     for i in trange(npos, leave=False, desc="Mask Offsets"):
         xv, yv = (xoff[i], yoff[i])
@@ -2839,7 +2952,7 @@ def _gen_wfemask_coeff(self, force=False, save=True, large_grid=False,
     xsgd, ysgd = (xoff_all[ind_sgd], yoff_all[ind_sgd])
     nsgd = len(xsgd)
     if nsgd>0:
-        for xv, yv in tqdm(zip(xsgd, ysgd), total=nsgd, desc='SGD'):
+        for xv, yv in tqdm(zip(xsgd, ysgd), total=nsgd, desc='SGD', leave=False):
             self.options['coron_shift_x'] = xv
             self.options['coron_shift_y'] = yv
 
@@ -3344,8 +3457,7 @@ def _calc_sgd(self, xoff_asec, yoff_asec, use_coeff=True, return_oversample=True
 
             xyshift = np.array([xoff,yoff]) / self.pixelscale
             self.detector_position = np.array(detector_position_orig) + xyshift
-            res = self.calc_psf(fov_pixels=self.fov_pix, oversample=self.oversample, 
-                                add_distortion=self.include_distortions, crop_psf=True)
+            res = self.calc_psf()
             hdu = res[0] if return_oversample else res[1]
             # hdul.append(fits.ImageHDU(data=hdu.data, header=hdu.hdr))
             hdul_sgd.append(hdu)
