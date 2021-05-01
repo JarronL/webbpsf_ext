@@ -300,7 +300,8 @@ def ap_radec(ap_obs, ap_ref, coord_ref, pa, base_off=(0,0), dith_off=(0,0),
         return
 
 
-def radec_to_v2v3(coord_objs, siaf_ref_name, coord_ref, pa_ref, base_off=(0,0), dith_off=(0,0)):
+def radec_to_v2v3(coord_objs, siaf_ref_name, coord_ref, pa_ref, frame_out='tel',
+                  base_off=(0,0), dith_off=(0,0)):
     """RA/Dec to V2/V3
     
     Convert a series of RA/Dec positions to telescope V2/V3 coordinates (in arcsec).
@@ -318,6 +319,8 @@ def radec_to_v2v3(coord_objs, siaf_ref_name, coord_ref, pa_ref, base_off=(0,0), 
         
     Keywords
     --------
+    frame_out : str
+        One of 'tel', 'sci', or 'det'.    
     base_off : list or tuple
         X/Y offset of overall aperture offset (see APT pointing file)
     dither_off : list or tuple
@@ -347,7 +350,10 @@ def radec_to_v2v3(coord_objs, siaf_ref_name, coord_ref, pa_ref, base_off=(0,0), 
     # Convert all RA/Dec coordinates into V2/V3 positions for objects
     v2_obj, v3_obj = pysiaf.utils.rotations.getv2v3(att, ra_obj, dec_obj)
 
-    return (v2_obj, v3_obj)
+    if frame_out=='tel':
+        return (v2_obj, v3_obj)
+    else:
+        return siaf_ap.convert(v2_obj, v3_obj, 'tel', frame_out)
 
 
 def v2v3_to_pixel(ap_obs, v2_obj, v3_obj, frame='sci'):
@@ -470,7 +476,7 @@ def get_idl_offset(base_offset=(0,0), dith_offset=(0,0), base_std=0, use_ta=True
     base_offset : array-like
         Corresponds to (BaseX, BaseY) columns in .pointing file (arcsec).
     dith_offset : array-like
-        Corresponds to (DithX, DithY ) columns in .pointing file (arcsec). 
+        Corresponds to (DithX, DithY) columns in .pointing file (arcsec). 
     base_std : float or array-like or None
         The 1-sigma pointing uncertainty per axis for telescope slew. 
         If None, then standard deviation is chosen to be either 5 mas 
