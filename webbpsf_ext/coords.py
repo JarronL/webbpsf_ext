@@ -137,7 +137,6 @@ def get_NRC_v2v3_limits(pupil=None, border=10, return_corners=False, **kwargs):
         Otherwise, values are chosen to be a square in V2/V3.
     """
     
-    import pysiaf
     siaf = pysiaf.Siaf('NIRCam')
     siaf.generate_toc()
 
@@ -404,7 +403,7 @@ def gen_sgd_offsets(sgd_type, slew_std=5, fsm_std=2.5):
     sgd_type : str
         Small grid dither pattern. Valid types are
         '9circle', '5box', '5diamond', '3bar', '5miri', and '9miri'
-        where the first four refer to NIRCam coronagraphyic dither
+        where the first four refer to NIRCam coronagraphic dither
         positions and the last two are for MIRI coronagraphy.
     fsm_std : float
         One-sigma accuracy per axis of fine steering mirror positions.

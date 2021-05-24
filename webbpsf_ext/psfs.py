@@ -132,7 +132,6 @@ def gen_image_from_coeff(inst, coeff, coeff_hdr, sp_norm=None, nwaves=None,
     coeff : ndarray
         A cube of polynomial coefficients for generating PSFs. This is
         generally oversampled with a shape (fov_pix*oversamp, fov_pix*oversamp, deg).
-        If not set, this will be calculated using the :func:`gen_psf_coeff` function.
     coeff_hdr : FITS header
         Header information saved while generating coefficients.
     sp_norm : :mod:`pysynphot.spectrum`
@@ -151,7 +150,7 @@ def gen_image_from_coeff(inst, coeff, coeff_hdr, sp_norm=None, nwaves=None,
         so may wants to keep a grism PSF (for instance) at native resolution
         rather than blurred with the bandpass waveset. TODO: Test.  
     return_oversample: bool
-        If True, then also returns the oversampled version of the PSF.
+        If True, then instead returns the oversampled version of the PSF.
 
     Keyword Args
     ------------

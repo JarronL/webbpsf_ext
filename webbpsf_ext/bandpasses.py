@@ -16,8 +16,8 @@ def read_filter(self, *args, **kwargs):
         return miri_filter(*args, **kwargs)
     elif self.inst_name=='NIRCam':
         return nircam_filter(*args, **kwargs)
-
-    print(self.inst_name)
+    else:
+        raise NotImplementedError(f"{self.inst_name} does not have a read bandpass function.")
 
 
 def bp_igood(bp, min_trans=0.001, fext=0.05):

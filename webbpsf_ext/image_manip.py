@@ -1,3 +1,4 @@
+from astropy.io.fits import hdu
 import numpy as np
 import multiprocessing as mp
 import six
@@ -1207,28 +1208,89 @@ def make_disk_image(inst, disk_params, sp_star=None, pixscale_out=None, dist_out
         
     return hdul_disk_image
 
-def rotate_shift_image(hdul, PA_offset=0, delx_asec=0, dely_asec=0):
+def rotate_shift_image(hdul, index=0, PA_offset=0, delx_asec=0, dely_asec=0, 
+                       shift_func=fshift, **kwargs):
     """ Rotate/Shift image
     
-    Rotate 
+    Rotate then offset image by some amount.
     
+    Parameters
+    ==========
+    hdul : HDUList
+        Input HDUList
+    index : int
+        Specify HDU index, usually 0
     PA_offset : float
         Rotate entire scene by some position angle. 
         Positive values are counter-clockwise.
+    delx_asec : float
+        Offset in x direction (specified in arcsec). 
+        Pixel scale should be included in header keyword 'PIXELSCL'.
+    dely_asec : float
+        Offset in x direction (specified in arcsec). 
+        Pixel scale should be included in header keyword 'PIXELSCL'.
+    shift_func : function
+        Function to use for shifting. Usually either `fshift` or `fourier_imshift`.
+
+    Keyword Args
+    ============
+    order : int, optional
+        The order of the spline interpolation, default is 3.
+        The order has to be in the range 0-5.
+    mode : {'reflect', 'constant', 'nearest', 'mirror', 'wrap'}, optional
+        The `mode` parameter determines how the input array is extended
+        beyond its boundaries. Default is 'constant'. Behavior for each valid
+        value is as follows:
+
+        'reflect' (`d c b a | a b c d | d c b a`)
+            The input is extended by reflecting about the edge of the last
+            pixel.
+
+        'constant' (`k k k k | a b c d | k k k k`)
+            The input is extended by filling all values beyond the edge with
+            the same constant value, defined by the `cval` parameter.
+
+        'nearest' (`a a a a | a b c d | d d d d`)
+            The input is extended by replicating the last pixel.
+
+        'mirror' (`d c b | a b c d | c b a`)
+            The input is extended by reflecting about the center of the last
+            pixel.
+
+        'wrap' (`a b c d | a b c d | a b c d`)
+            The input is extended by wrapping around to the opposite edge.
+    cval : scalar, optional
+        Value to fill past edges of input if `mode` is 'constant'. Default
+        is 0.0.
+    prefilter : bool, optional
+        Determines if the input array is prefiltered with `spline_filter`
+        before interpolation. The default is True, which will create a
+        temporary `float64` array of filtered values if `order > 1`. If
+        setting this to False, the output will be slightly blurred if
+        `order > 1`, unless the input is prefiltered, i.e. it is the result
+        of calling `spline_filter` on the original input.
     """
-        
+    
+    # from copy import deepcopy
+
     # Rotate
     if np.abs(PA_offset)!=0:
-        im_rot = rotate(hdul[0].data, -1*PA_offset, reshape=False, order=1)
+        im_rot = rotate(hdul[index].data, -1*PA_offset, reshape=False, **kwargs)
     else:
-        im_rot = hdul[0].data
+        im_rot = hdul[index].data
     delx, dely = np.array([delx_asec, dely_asec]) / hdul[0].header['PIXELSCL']
     
     # Get position offsets
-    im_new = fshift(im_rot, delx, dely, pad=True)
+    im_new = shift_func(im_rot, delx, dely, pad=True)
     
+    # Create new HDU and copy header
     hdu_new = fits.PrimaryHDU(im_new)
-    hdu_new.header = hdul[0].header
-    
+    hdu_new.header = hdul[index].header
     return fits.HDUList(hdu_new)
+
+    # Copy and replace specified index
+    # hdu_new = deepcopy(hdul)
+    # hdu_new[index] = im_new
+    # return hdu_new
+    
 
