@@ -477,3 +477,41 @@ def radial_std(im_diff, pixscale=None, oversample=None, supersample=False, func=
     mask = rr < (arr_size/2)
 
     return rr[mask], stds[mask]
+
+
+def find_closest(A, B):
+    """ Find closest indices
+    
+    Given two arrays, A and B, find the indices in B whose values
+    are closest to those in A. Returns an array with size equal to A.
+    
+    This is much much faster than something like, especially for large arrays:
+        `np.argmin(np.abs(A - B[:, np.newaxis]), axis=0)`
+
+    """
+    
+    # Make sure these are array
+    a = np.asarray(A)
+    b = np.asarray(B)
+    
+    # Flatten a array
+    a_shape = a.shape
+    if len(a_shape)>1:
+        a = a.flatten()
+    
+    # b needs to be sorted
+    isort = np.argsort(B)
+    b = b[isort]
+
+    # Find indices of 
+    arghigh = np.searchsorted(b,a)
+    arglow = np.maximum(arghigh-1,0)
+    arghigh = np.minimum(arghigh,len(b)-1)
+    
+    # Look at deltas and choose closest
+    delta_high = np.abs(b[arghigh]-a)
+    delta_low = np.abs(b[arglow]-a)
+    closest_arg = np.where(delta_high>delta_low,arglow,arghigh)
+        
+    return isort[closest_arg].reshape(a_shape)
+
