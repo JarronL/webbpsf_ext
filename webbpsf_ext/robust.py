@@ -27,7 +27,7 @@ import numpy as np
 from numpy import median
 
 import logging
-_log = logging.getLogger('pynrc')
+_log = logging.getLogger('webbpsf_ext')
 
 __version__ = '0.4'
 __revision__ = '$Rev$'
@@ -820,7 +820,7 @@ def polyfit(inputX, inputY, order, iterMax=25):
         cc = np.polyfit(u, v, order)
         yFit = np.polyval(cc, u)
     else:
-        lsqfit = 0
+        lsqFit = 0
         q = np.argsort(u)
         u = u[q]
         v = v[q]
@@ -848,9 +848,10 @@ def polyfit(inputX, inputY, order, iterMax=25):
         if lsqFit == 0:
             cc = np.polyfit(u, v, order)
             yFit = np.polyval(cc, u)
-            sigma, fracDev, nGood, biweights, scaledResids = checkfit(yp, yFit, __epsilon, __delta)
+            sigma, fracDev, nGood, biweights, scaledResids = checkfit(v, yFit, __epsilon, __delta)
             if nGood == 0:
-                return __processPoly(x0, y0, order, cc)
+                return cc
+                # return __processPoly(x0, y0, order, cc)
             nGood = n - nGood
         if nGood < minPts:
             return 0
