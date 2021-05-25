@@ -78,13 +78,13 @@ class NIRCam_ext(webbpsf_NIRCam):
     """
 
     def __init__(self, filter=None, pupil_mask=None, image_mask=None, 
-                 fov_pix=None, oversample=None, auto_gen_coeffs=False):
+                 fov_pix=None, oversample=None, auto_gen_coeffs=False, **kwargs):
         
         webbpsf_NIRCam.__init__(self)
 
         # Initialize script
         _init_inst(self, filter=filter, pupil_mask=pupil_mask, image_mask=image_mask,
-                   fov_pix=fov_pix, oversample=oversample)
+                   fov_pix=fov_pix, oversample=oversample, **kwargs)
 
         # By default, WebbPSF has wavelength limits depending on the channel
         # which can interfere with coefficient calculations, so set these to 
@@ -100,6 +100,12 @@ class NIRCam_ext(webbpsf_NIRCam):
 
         # Option to use 1st or 2nd order for grism bandpasses
         self._grism_order = 1
+
+        # Specify ice and nvr scalings
+        self._ice_scale = kwargs['ice_scale'] if 'ice_scale' in kwargs.keys() else None
+        self._nvr_scale = kwargs['nvr_scale'] if 'nvr_scale' in kwargs.keys() else None
+        self._ote_scale = kwargs['ote_scale'] if 'ote_scale' in kwargs.keys() else None
+        self._nc_scale  = kwargs['nc_scale']  if 'nc_scale'  in kwargs.keys() else None
 
         # Option to calculate ND acquisition for coronagraphic obs
         self._ND_acq = False
@@ -183,7 +189,7 @@ class NIRCam_ext(webbpsf_NIRCam):
     @property
     def oversample(self):
         if self._oversample is None:
-            oversample = 2 if self.is_lyot else 4
+            oversample = 4
         else:
             oversample = self._oversample
         return oversample
@@ -315,39 +321,18 @@ class NIRCam_ext(webbpsf_NIRCam):
         return slowaxis
 
     @property
-    def bandpass(self, **kwargs):
-        """ Return bandpass throughput
-
-        Keyword Arguments
-        -----------------
-        ice_scale : float
-            Add in additional OTE H2O absorption. This is a scale factor
-            relative to 0.0131 um thickness. Also includes about 0.0150 um of
-            photolyzed Carbon.
-        nvr_scale : float
-            Modify NIRCam non-volatile residue. This is a scale factor relative 
-            to 0.280 um thickness already built into filter throughput curves. 
-            If set to None, then assumes a scale factor of 1.0. 
-            Setting nvr_scale=0 will remove these contributions.
-        ote_scale : float
-            Scale factor of OTE contaminants relative to End of Life model. 
-            This is the same as setting ice_scale. Will override ice_scale value.
-        nc_scale : float
-            Scale factor for NIRCam contaminants relative to End of Life model.
-            This model assumes 0.189 um of NVR and 0.050 um of water ice on
-            the NIRCam optical elements. Setting this keyword will remove all
-            NVR contributions built into the NIRCam filter curves.
-            Overrides nvr_scale value.
-
-        Returns
-        -------
-        :mod:`pysynphot.obsbandpass`
-            A Pysynphot bandpass object.
-
-        """
+    def bandpass(self):
+        """ Return bandpass throughput """
+        kwargs = {
+            'ice_scale': self._ice_scale,
+            'nvr_scale': self._nvr_scale,
+            'ote_scale': self._ote_scale,
+            'nc_scale' : self._nc_scale,
+        }
         bp = nircam_filter(self.filter, pupil=self.pupil_mask, mask=self.image_mask,
                            module=self.module, grism_order=self._grism_order,
-                           ND_acq=self.ND_acq, coron_substrate=self.coron_substrate, **kwargs)
+                           ND_acq=self.ND_acq, coron_substrate=self.coron_substrate, 
+                           **kwargs)
         return bp
 
     def get_bar_offset(self):
@@ -358,7 +343,7 @@ class NIRCam_ext(webbpsf_NIRCam):
 
         from webbpsf.optics import NIRCam_BandLimitedCoron
 
-        if (self.image_mask is not None) and (self.image_mask[-1:]=='B'):
+        if (self.is_coron) and (self.image_mask[-1:]=='B'):
             # Determine bar offset for Wedge masks either based on filter 
             # or explicit specification
             bar_offset = self.options.get('bar_offset', None)
@@ -379,7 +364,7 @@ class NIRCam_ext(webbpsf_NIRCam):
         else:
             return None
 
-    def gen_mask_image(self, npix=None, pixelscale=None):
+    def gen_mask_image(self, npix=None, pixelscale=None, bar_offset=None):
         """
         Return an image representation of the focal plane mask.
         Output is in 'sci' coords orientation. If no image mask
@@ -409,10 +394,12 @@ class NIRCam_ext(webbpsf_NIRCam):
             npix = int(npix * osamp + 0.5)
 
         if self.is_coron:
-            bar_offset = self.get_bar_offset()
-            auto_offset = None
+            if self.image_mask[-1:]=='B':
+                bar_offset = self.get_bar_offset() if bar_offset is not None else bar_offset
+            else:
+                bar_offset = None
             mask = NIRCam_BandLimitedCoron(name=self.image_mask, module=self.module, 
-                                           bar_offset=bar_offset, auto_offset=auto_offset, **shifts)
+                                           bar_offset=bar_offset, auto_offset=None, **shifts)
 
             # Create wavefront to pass through mask and obtain transmission image
             wavelength = self.bandpass.avgwave() / 1e10
@@ -685,7 +672,8 @@ class NIRCam_ext(webbpsf_NIRCam):
                                     wfe_drift=wfe_drift, coord_vals=coord_vals, 
                                     coord_frame=coord_frame, **kwargs)
 
-    def calc_psf(self, add_distortion=None, fov_pixels=None, oversample=None, **kwargs):
+    def calc_psf(self, add_distortion=None, fov_pixels=None, oversample=None, 
+        wfe_drift=None, coord_vals=None, coord_frame='tel', **kwargs):
         """ Compute a PSF
 
         Slight modification of inherent WebbPSF `calc_psf` function. If add_distortion, fov_pixels,
@@ -760,8 +748,41 @@ class NIRCam_ext(webbpsf_NIRCam):
 
         kwargs['oversample'] = oversample
 
-        calc_psf_func = super(NIRCam_ext, self).calc_psf
-        return _calc_psf_with_shifts(self, calc_psf_func, **kwargs)
+        # Drift OPD
+        wfe_drift = 0 if wfe_drift is None else wfe_drift
+        if wfe_drift != 0:
+            # Create copies
+            pupilopd_orig = deepcopy(self.pupilopd)
+            pupil_orig    = deepcopy(self.pupil)
+
+            # Get OPD info and convert to OTE LM
+            opd_dict = self.get_opd_info(HDUL_to_OTELM=True)
+            opd      = opd_dict['pupilopd']
+            # Perform OPD drift and store in pupilopd and pupil attributes
+            wfe_dict = self.drift_opd(wfe_drift, opd=opd)
+            self.pupilopd = wfe_dict['opd']
+            self.pupil    = wfe_dict['opd']
+
+        # Get new sci coord
+        if coord_vals is not None:
+            xorig, yorig = self.detector_position
+            xnew, ynew = coord_vals
+            self.detector_position = self.siaf_ap.convert(xnew, ynew, coord_frame, 'sci')
+
+        # Perform PSF calculation
+        calc_psf_func = super().calc_psf
+        res = _calc_psf_with_shifts(self, calc_psf_func, **kwargs)
+
+        # Reset pupil and OPD
+        if wfe_drift != 0:
+            self.pupilopd = pupilopd_orig
+            self.pupil    = pupil_orig
+
+        # Return detector locations
+        if coord_vals is not None:
+            self.detector_position = (xorig, yorig)
+
+        return res
 
     # def calc_sgd(self, xoff_asec, yoff_asec, use_coeff=True, 
     #     return_oversample=True, **kwargs):
@@ -775,11 +796,11 @@ class NIRCam_ext(webbpsf_NIRCam):
 class MIRI_ext(webbpsf_MIRI):
     
     def __init__(self, filter=None, pupil_mask=None, image_mask=None, 
-                 fov_pix=None, oversample=None, auto_gen_coeffs=False):
+                 fov_pix=None, oversample=None, auto_gen_coeffs=False, **kwargs):
         
         webbpsf_MIRI.__init__(self)
         _init_inst(self, filter=filter, pupil_mask=pupil_mask, image_mask=image_mask,
-                   fov_pix=fov_pix, oversample=oversample)
+                   fov_pix=fov_pix, oversample=oversample, **kwargs)
 
         if auto_gen_coeffs:
             self.gen_psf_coeff()
@@ -1247,7 +1268,8 @@ class MIRI_ext(webbpsf_MIRI):
                                     wfe_drift=wfe_drift, coord_vals=coord_vals, 
                                     coord_frame=coord_frame, **kwargs)
 
-    def calc_psf(self, add_distortion=None, fov_pixels=None, oversample=None, **kwargs):
+    def calc_psf(self, add_distortion=None, fov_pixels=None, oversample=None, 
+        wfe_drift=None, coord_vals=None, coord_frame='tel', **kwargs):
         """ Compute a PSF
 
         Slight modification of inherent WebbPSF `calc_psf` function. If add_distortion, fov_pixels,
@@ -1322,8 +1344,41 @@ class MIRI_ext(webbpsf_MIRI):
         # Add oversample keyword
         kwargs['oversample'] = oversample
 
-        calc_psf_func = super(MIRI_ext, self).calc_psf
-        return _calc_psf_with_shifts(self, calc_psf_func, **kwargs)
+        # Drift OPD
+        wfe_drift = 0 if wfe_drift is None else wfe_drift
+        if wfe_drift != 0:
+            # Create copies
+            pupilopd_orig = deepcopy(self.pupilopd)
+            pupil_orig    = deepcopy(self.pupil)
+
+            # Get OPD info and convert to OTE LM
+            opd_dict = self.get_opd_info(HDUL_to_OTELM=True)
+            opd      = opd_dict['pupilopd']
+            # Perform OPD drift and store in pupilopd and pupil attributes
+            wfe_dict = self.drift_opd(wfe_drift, opd=opd)
+            self.pupilopd = wfe_dict['opd']
+            self.pupil    = wfe_dict['opd']
+
+        # Get new sci coord
+        if coord_vals is not None:
+            xorig, yorig = self.detector_position
+            xnew, ynew = coord_vals
+            self.detector_position = self.siaf_ap.convert(xnew, ynew, coord_frame, 'sci')
+
+        # Perform PSF calculation
+        calc_psf_func = super().calc_psf
+        res = _calc_psf_with_shifts(self, calc_psf_func, **kwargs)
+
+        # Reset pupil and OPD
+        if wfe_drift != 0:
+            self.pupilopd = pupilopd_orig
+            self.pupil    = pupil_orig
+
+        # Return detector locations
+        if coord_vals is not None:
+            self.detector_position = (xorig, yorig)
+
+        return res
 
 
 #############################################################
@@ -1371,16 +1426,23 @@ def _check_fitsgz(self, opd_file):
     return opd_file
 
 def _init_inst(self, filter=None, pupil_mask=None, image_mask=None, 
-               fov_pix=None, oversample=None):
+               fov_pix=None, oversample=None, **kwargs):
     """
     Setup for specific instrument during init state
     """
 
     # Add grisms as pupil options
     if self.name=='NIRCam':
-        self.pupil_mask_list = self.pupil_mask_list + ['GRISM0', 'GRISM90', 'GRISMC', 'GRISMR']
+        self.pupil_mask_list = self.pupil_mask_list + ['GRISM0', 'GRISM90', 'GRISMC', 'GRISMR', 'FLAT']
     elif self.name=='NIRISS':
         self.pupil_mask_list = self.pupil_mask_list + ['GR150C', 'GR150R']
+
+    # Option to use `pupil` instead of `pupil_mask`
+    if (pupil_mask is None) and (kwargs.get('pupil') is not None):
+        pupil_mask = kwargs.get('pupil')
+    # Option to use `mask` instead of `image_mask`
+    if (image_mask is None) and (kwargs.get('mask') is not None):
+        image_mask = kwargs.get('mask')
 
     if filter is not None:
         self.filter = filter
@@ -1531,7 +1593,7 @@ def _gen_save_name(self, wfe_drift=0):
     opd_dict = self.get_opd_info()
     opd_str = opd_dict['opd_str']
 
-    if wfe_drift>0:
+    if wfe_drift!=0:
         opd_str = '{}-{:.0f}nm'.format(opd_str,wfe_drift)
     
     fname = f'{fmp_str}_pix{fov_pix}_os{osamp}_jsig{jsig_mas:.0f}_{rth_str}{moff_str}{bar_str}_{opd_str}'
@@ -1687,7 +1749,7 @@ def _drift_opd(self, wfe_drift, opd=None,
         wfe_dict['frill'] = wfe_frill
         wfe_dict['iec']   = wfe_iec
         wfe_dict['opd']   = opd
-    elif (wfe_drift > 0):
+    elif (wfe_drift != 0):
         _log.info('Performing WFE drift of {}nm'.format(wfe_drift))
 
         # Apply WFE drift to OTE Linear Model (Amplitude of frill drift)
@@ -2001,7 +2063,7 @@ def _gen_psf_coeff(self, nproc=None, wfe_drift=0, force=False, save=True,
     opd      = opd_dict['pupilopd']
     
     # Drift OPD
-    if wfe_drift>0:
+    if wfe_drift!=0:
         wfe_dict = self.drift_opd(wfe_drift, opd=opd)
     else:
         wfe_dict = {'therm':0, 'frill':0, 'iec':0, 'opd':opd}
@@ -3011,7 +3073,7 @@ def _calc_psf_from_coeff(self, sp=None, return_oversample=True,
     If no spectral dispersers (grisms or DHS), then this returns a single
     image or list of images if sp is a list of spectra. By default, it returns
     only the detector-sampled PSF, but setting return_oversample=True will
-    insted return a set of oversampled images.
+    instead return a set of oversampled images.
 
     Parameters
     ----------
@@ -3046,7 +3108,7 @@ def _calc_psf_from_coeff(self, sp=None, return_oversample=True,
     psf_coeff     = self.psf_coeff
 
     if psf_coeff is None:
-        _log.warning("You must first run `gen_psf_coeff` calculating PSFs.")
+        _log.warning("You must first run `gen_psf_coeff` in order to calculate PSFs.")
         return
 
     # Spectrographic Mode?
@@ -3080,7 +3142,8 @@ def _calc_psf_from_coeff(self, sp=None, return_oversample=True,
     nfield = nfield if nfield_mask is None else nfield_mask
 
     # Modify PSF coefficients based on WFE drift
-    assert wfe_drift>=0, '`wfe_drift should not be negative'
+    # TODO: Allow negative WFE drift, but subtract delta WFE?
+    assert wfe_drift>=0, '`wfe_drift` should not be negative' 
     wfe_drift_keys = _wfe_drift_key(self, coord_vals, coord_frame)
     ukeys = np.unique(wfe_drift_keys)
     nkeys = len(ukeys)
