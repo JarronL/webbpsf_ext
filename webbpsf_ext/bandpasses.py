@@ -1,4 +1,5 @@
 # Import libraries
+from pathlib import Path
 import numpy as np
 from astropy.io import fits, ascii
 
@@ -9,7 +10,7 @@ _log = logging.getLogger('webbpsf_ext')
 
 
 from . import __path__
-_bp_dir = __path__[0] + '/throughputs/'
+_bp_dir = Path(__path__[0]) / '/throughputs/'
 
 def read_filter(self, *args, **kwargs):
     if self.inst_name=='MIRI':
@@ -49,12 +50,12 @@ def miri_filter(filter, **kwargs):
     """
     
     filter = filter.upper()
-    filt_dir = webbpsf.utils.get_webbpsf_data_path() + 'MIRI/filters/'
+    filt_dir = Path(webbpsf.utils.get_webbpsf_data_path()) / 'MIRI/filters/'
     fname = f'{filter}_throughput.fits'
 
     bp_name = filter
 
-    hdulist = fits.open(filt_dir + fname)
+    hdulist = fits.open(filt_dir / fname)
     wtemp = hdulist[1].data['WAVELENGTH']
     ttemp = hdulist[1].data['THROUGHPUT']
 
@@ -228,7 +229,7 @@ def nircam_filter(filter, pupil=None, mask=None, module=None, ND_acq=False,
     # Substrate transmission (off-axis substrate with occulting masks)
     if ((mask  is not None) and ('MASK' in mask)) or coron_substrate or ND_acq:
         # Sapphire mask transmission values for coronagraphic substrate
-        hdulist = fits.open(_bp_dir + 'jwst_nircam_moda_com_substrate_trans.fits')
+        hdulist = fits.open(_bp_dir / 'jwst_nircam_moda_com_substrate_trans.fits')
         wtemp = hdulist[1].data['WAVELENGTH']
         ttemp = hdulist[1].data['THROUGHPUT']
         # Estimates for w<1.5um
@@ -244,7 +245,7 @@ def nircam_filter(filter, pupil=None, mask=None, module=None, ND_acq=False,
         # this option if the user doesn't want to figure out offset positions.
         if ND_acq:
             fname = 'NDspot_ODvsWavelength.txt'
-            path_ND = _bp_dir + fname
+            path_ND = _bp_dir / fname
             data = ascii.read(path_ND)
 
             wdata = data[data.colnames[0]].data # Wavelength (um)
@@ -276,7 +277,7 @@ def nircam_filter(filter, pupil=None, mask=None, module=None, ND_acq=False,
         # Transmission values for wedges in Lyot stop
         if 'SW' in channel:
             fname = 'jwst_nircam_sw-lyot_trans_modmean.fits'
-            hdulist = fits.open(_bp_dir + fname)
+            hdulist = fits.open(_bp_dir / fname)
             wtemp = hdulist[1].data['WAVELENGTH']
             ttemp = hdulist[1].data['THROUGHPUT']
             # Estimates for w<1.5um
@@ -290,7 +291,7 @@ def nircam_filter(filter, pupil=None, mask=None, module=None, ND_acq=False,
 
         elif 'LW' in channel:
             fname = 'jwst_nircam_lw-lyot_trans_modmean.fits'
-            hdulist = fits.open(_bp_dir + fname)
+            hdulist = fits.open(_bp_dir / fname)
             wtemp = hdulist[1].data['WAVELENGTH']
             ttemp = hdulist[1].data['THROUGHPUT']
             ttemp *= 100 # Factors of 100 error in saved values
@@ -329,13 +330,13 @@ def nircam_filter(filter, pupil=None, mask=None, module=None, ND_acq=False,
             wl_name = pupil
 
         # Throughput for WL+4
-        hdulist = fits.open(_bp_dir + 'jwst_nircam_wlp4.fits')
+        hdulist = fits.open(_bp_dir / 'jwst_nircam_wlp4.fits')
         wtemp = hdulist[1].data['WAVELENGTH']
         ttemp = hdulist[1].data['THROUGHPUT']
         th_wl4 = np.interp(bp.wave/1e4, wtemp, ttemp, left=0, right=0)
 
         # Throughput for WL+/-8
-        hdulist = fits.open(_bp_dir + 'jwst_nircam_wlp8.fits')
+        hdulist = fits.open(_bp_dir / 'jwst_nircam_wlp8.fits')
         wtemp = hdulist[1].data['WAVELENGTH']
         ttemp = hdulist[1].data['THROUGHPUT']
         th_wl8 = np.interp(bp.wave/1e4, wtemp, ttemp, left=0, right=0)
@@ -368,7 +369,7 @@ def nircam_filter(filter, pupil=None, mask=None, module=None, ND_acq=False,
         nvr_scale = 0
     # Water ice and NVR additions (for LW channel only)
     if ((ice_scale is not None) or (nvr_scale is not None)) and ('LW' in channel):
-        fname = _bp_dir + 'ote_nc_sim_1.00.txt'
+        fname = _bp_dir / 'ote_nc_sim_1.00.txt'
         names = ['Wave', 't_ice', 't_nvr', 't_sys']
         data  = ascii.read(fname, data_start=1, names=names)
 
@@ -408,8 +409,8 @@ def nircam_filter(filter, pupil=None, mask=None, module=None, ND_acq=False,
             
         if nc_scale is not None:
             names = ['Wave', 'coeff'] # coeff is per um path length
-            data_ice  = ascii.read(_bp_dir + 'h2o_abs.txt', names=names)
-            data_nvr  = ascii.read(_bp_dir + 'nvr_abs.txt', names=names)
+            data_ice  = ascii.read(_bp_dir / 'h2o_abs.txt', names=names)
+            data_nvr  = ascii.read(_bp_dir / 'nvr_abs.txt', names=names)
     
             w_ice = data_ice['Wave']
             a_ice = data_ice['coeff']
@@ -555,7 +556,7 @@ def bp_2mass(filter):
 
     """
 
-    dir = _bp_dir + '2MASS/'
+    dir = _bp_dir / '2MASS/'
     if 'j' in filter.lower():
         file = '2mass_j.txt'
         name = 'J-Band'
@@ -568,7 +569,7 @@ def bp_2mass(filter):
     else:
         raise ValueError('{} not a valid 2MASS filter'.format(filter))
 
-    tbl = ascii.read(dir + file, names=['Wave', 'Throughput'])
+    tbl = ascii.read(dir / file, names=['Wave', 'Throughput'])
     bp = S.ArrayBandpass(tbl['Wave']*1e4, tbl['Throughput'], name=name)
 
     return bp
@@ -591,7 +592,7 @@ def bp_wise(filter):
 
     """
 
-    dir = _bp_dir + 'WISE/'
+    dir = _bp_dir / 'WISE/'
     if 'w1' in filter.lower():
         file = 'RSR-W1.txt'
         name = 'W1'
@@ -607,7 +608,7 @@ def bp_wise(filter):
     else:
         raise ValueError('{} not a valid WISE filter'.format(filter))
 
-    tbl = ascii.read(dir + file, data_start=0)
+    tbl = ascii.read(dir / file, data_start=0)
     bp = S.ArrayBandpass(tbl['col1']*1e4, tbl['col2'], name=name)
 
     return bp
