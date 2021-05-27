@@ -214,11 +214,10 @@ def gen_image_from_coeff(inst, coeff, coeff_hdr, sp_norm=None, nwaves=None,
     # Grism spectroscopy
     if is_grism:
         pupil = inst.pupil_mask
-        # Option for NIRCam GRISMR/C or NIRISS GR150R/C
-        if pupil[-1]=='R':
-            pupil = 'GRISM0'
-        elif pupil[-1]=='C':
-            pupil = 'GRISM90'
+        if 'GRISM0' in pupil:
+            pupil = 'GRISMR'
+        elif 'GRISM90' in pupil:
+            pupil = 'GRISMC'
 
         # spectral resolution in um/pixel
         # res is in pixels per um and dw is inverse
@@ -235,8 +234,8 @@ def gen_image_from_coeff(inst, coeff, coeff_hdr, sp_norm=None, nwaves=None,
         spec_list = []
         spec_list_over = []
         for psf_fit in psf_list:
-            # If GRISM90 (along columns) rotate image by 90 deg CW 
-            if 'GRISM90' in pupil:
+            # If GRISMC (along columns) rotate image by 90 deg CW 
+            if 'GRISMC' in pupil:
                 psf_fit = np.rot90(psf_fit, k=1) 
             elif (inst.name=='NIRCam') and (inst.module=='B'): 
                 # Flip right to left to disperse in correct orientation
@@ -262,7 +261,7 @@ def gen_image_from_coeff(inst, coeff, coeff_hdr, sp_norm=None, nwaves=None,
 
             # Rotate spectrum to its V2/V3 coordinates
             spec_bin = krebin(spec_over, (fov_pix,npix_spec))
-            if 'GRISM90' in pupil: # Rotate image 90 deg CCW
+            if 'GRISMC' in pupil: # Rotate image 90 deg CCW
                 spec_over = np.rot90(spec_over, k=-1)
                 spec_bin = np.rot90(spec_bin, k=-1)
             elif (inst.name=='NIRCam') and (inst.module=='B'): 
@@ -279,7 +278,7 @@ def gen_image_from_coeff(inst, coeff, coeff_hdr, sp_norm=None, nwaves=None,
         w1_spec = w1 - dw_over*fov_pix_over/2
         wspec_over = np.arange(npix_spec_over)*dw_over + w1_spec
         wspec = wspec_over.reshape((npix_spec,-1)).mean(axis=1)
-        if (inst.name=='NIRCam') and ('GRISM0' in pupil) and (inst.module=='B'): 
+        if (inst.name=='NIRCam') and ('GRISMR' in pupil) and (inst.module=='B'): 
             # Flip wavelength for sci coords
             wspec = wspec[::-1]
 

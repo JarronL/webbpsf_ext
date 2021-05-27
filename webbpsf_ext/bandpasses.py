@@ -452,7 +452,7 @@ def nircam_grism_res(pupil='GRISM', module='A', m=1):
     Parameters
     ----------
     pupil : str
-        'GRISM0' or 'GRISM90', otherwise assume res=1000 pix/um.
+        'GRISMC' or 'GRISMR', otherwise assume res=1000 pix/um.
         'GRISM0' is GRISMR; 'GRISM90' is GRISMC
     module : str
         'A' or 'B'
@@ -460,20 +460,20 @@ def nircam_grism_res(pupil='GRISM', module='A', m=1):
         Spectral order (1 or 2).
     """
 
-    # Option for GRISMR/GRISMC
-    if 'GRISMR' in pupil:
-        pupil = 'GRISM0'
-    elif 'GRISMC' in pupil:
-        pupil = 'GRISM90'
+    # Option for GRISM0/GRISM90
+    if 'GRISM0' in pupil:
+        pupil = 'GRISMR'
+    elif 'GRISM90' in pupil:
+        pupil = 'GRISMC'
 
     # Mean spectral dispersion in number of pixels per um
-    if ('GRISM90' in pupil) and (module == 'A'):
+    if ('GRISMC' in pupil) and (module == 'A'):
         res = 1003.12
-    elif ('GRISM0' in pupil)  and (module == 'A'):
+    elif ('GRISMR' in pupil)  and (module == 'A'):
         res = 996.48
-    elif ('GRISM90' in pupil) and (module == 'B'):
+    elif ('GRISMC' in pupil) and (module == 'B'):
         res = 1008.64
-    elif ('GRISM0' in pupil)  and (module == 'B'):
+    elif ('GRISMR' in pupil)  and (module == 'B'):
         res = 1009.13
     else:
         res = 1000.0
@@ -489,20 +489,20 @@ def nircam_grism_res(pupil='GRISM', module='A', m=1):
 def nircam_grism_wref(pupil='GRISM', module='A'):
     """NIRCam Grism undeviated wavelength"""
 
-    # Option for GRISMR/GRISMC
-    if 'GRISMR' in pupil:
-        pupil = 'GRISM0'
-    elif 'GRISMC' in pupil:
-        pupil = 'GRISM90'
+    # Option for GRISM0/GRISM90
+    if 'GRISM0' in pupil:
+        pupil = 'GRISMR'
+    elif 'GRISM90' in pupil:
+        pupil = 'GRISMC'
 
     # Mean spectral dispersion in number of pixels per um
-    if ('GRISM90' in pupil) and (module == 'A'):
+    if ('GRISMC' in pupil) and (module == 'A'):
         wref = 3.978
-    elif ('GRISM0' in pupil)  and (module == 'A'):
+    elif ('GRISMR' in pupil)  and (module == 'A'):
         wref = 3.937
-    elif ('GRISM90' in pupil) and (module == 'B'):
+    elif ('GRISMC' in pupil) and (module == 'B'):
         wref = 3.923
-    elif ('GRISM0' in pupil)  and (module == 'B'):
+    elif ('GRISMR' in pupil)  and (module == 'B'):
         wref = 3.960
     else:
         wref = 3.95

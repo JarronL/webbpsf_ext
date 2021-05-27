@@ -153,6 +153,10 @@ class NIRCam_ext(webbpsf_NIRCam):
     def is_grism(self):
         pupil = self.pupil_mask
         return (pupil is not None) and ('GRISM' in pupil)
+    @property
+    def is_dark(self):
+        pupil = self.pupil_mask
+        return (pupil is not None) and ('FLAT' in pupil)
 
     @property
     def ND_acq(self):
@@ -263,6 +267,17 @@ class NIRCam_ext(webbpsf_NIRCam):
         """Perform quicker coeff calculation over limited bandwidth?"""
         _check_list(value, [True, False], 'quick')
         self._quick = value
+
+    @webbpsf_NIRCam.pupil_mask.setter
+    def pupil_mask(self, name):
+
+        if name != self._pupil_mask:
+            # only apply updates if the value is in fact new
+            if name=='GRISM0':
+                name = 'GRISMR'
+            elif name=='GRISM90':
+                name = 'GRISMC'
+            super(NIRCam_ext, self.__class__).pupil_mask.__set__(self, name)
 
     @property
     def siaf_ap(self):
@@ -497,7 +512,7 @@ class NIRCam_ext(webbpsf_NIRCam):
             returned, otherwise if `return_results=False` then returns everything as a
             3-element tuple (psf_coeff, psf_coeff_header, extras_dict).
         """
-        
+
         # Set to input bar offset value. No effect if not a wedge mask.
         bar_offset_orig = self.options.get('bar_offset', None)
         self.options['bar_offset'] = bar_offset
@@ -1433,7 +1448,7 @@ def _init_inst(self, filter=None, pupil_mask=None, image_mask=None,
 
     # Add grisms as pupil options
     if self.name=='NIRCam':
-        self.pupil_mask_list = self.pupil_mask_list + ['GRISM0', 'GRISM90', 'GRISMC', 'GRISMR', 'FLAT']
+        self.pupil_mask_list = self.pupil_mask_list + ['GRISMC', 'GRISMR', 'FLAT']
     elif self.name=='NIRISS':
         self.pupil_mask_list = self.pupil_mask_list + ['GR150C', 'GR150R']
 
