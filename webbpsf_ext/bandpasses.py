@@ -157,7 +157,7 @@ def nircam_filter(filter, pupil=None, mask=None, module=None, ND_acq=False,
     filt_file = filter + '_nircam_plus_ote_throughput_mod' + mod + '_sorted.txt'
 
     _log.debug('Reading file: '+filt_file)
-    bp = S.FileBandpass(filt_dir+filt_file)
+    bp = S.FileBandpass(filt_dir / filt_file)
     bp_name = filter
 
     # Select channel (SW or LW) for minor decisions later on
