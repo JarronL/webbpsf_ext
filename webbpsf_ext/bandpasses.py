@@ -154,7 +154,7 @@ def nircam_filter(filter, pupil=None, mask=None, module=None, ND_acq=False,
     filter = filter.upper()
     mod = module.lower()
     filt_dir = _bp_dir
-    filt_file = filter + '_nircam_plus_ote_throughput_mod' + mod + '_sorted.txt'
+    filt_file = f'{filter}_nircam_plus_ote_throughput_mod{mod}_sorted.txt'
 
     _log.debug('Reading file: '+filt_file)
     bp = S.FileBandpass(filt_dir / filt_file)
