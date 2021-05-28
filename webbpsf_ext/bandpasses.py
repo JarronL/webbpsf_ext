@@ -10,7 +10,7 @@ _log = logging.getLogger('webbpsf_ext')
 
 
 from . import __path__
-_bp_dir = Path(__path__[0]) / '/throughputs/'
+_bp_dir = Path(__path__[0]) / 'throughputs'
 
 def read_filter(self, *args, **kwargs):
     if self.inst_name=='MIRI':
@@ -157,7 +157,7 @@ def nircam_filter(filter, pupil=None, mask=None, module=None, ND_acq=False,
     filt_file = f'{filter}_nircam_plus_ote_throughput_mod{mod}_sorted.txt'
 
     _log.debug('Reading file: '+filt_file)
-    bp = S.FileBandpass(filt_dir / filt_file)
+    bp = S.FileBandpass(str(filt_dir / filt_file))
     bp_name = filter
 
     # Select channel (SW or LW) for minor decisions later on
