@@ -4,6 +4,8 @@ import numpy as np
 
 import time
 import os, six
+from pathlib import Path
+
 from numpy.lib.function_base import rot90
 from numpy.lib.arraypad import pad
 import multiprocessing as mp
@@ -124,13 +126,17 @@ class NIRCam_ext(webbpsf_NIRCam):
     @save_dir.setter
     def save_dir(self, value):
         self._save_dir = value
+    def _erase_save_dir(self):
+        """Erase all instrument coefficients"""
+        _clear_coeffs_dir(self)
 
     @property
     def save_name(self):
         """Coefficient file name"""
-        save_name = self._save_name
-        save_name = self.gen_save_name() if save_name is None else save_name
-        return save_name
+        if self._save_name is None:
+            return self.gen_save_name()
+        else:
+            return self._save_name
     @save_name.setter
     def save_name(self, value):
         self._save_name = value
@@ -829,13 +835,17 @@ class MIRI_ext(webbpsf_MIRI):
     @save_dir.setter
     def save_dir(self, value):
         self._save_dir = value
-        
+    def _erase_save_dir(self):
+        """Erase all instrument coefficients"""
+        _clear_coeffs_dir(self)
+
     @property
     def save_name(self):
         """Coefficient file name"""
-        save_name = self._save_name
-        save_name = self.gen_save_name() if save_name is None else save_name
-        return save_name
+        if self._save_name is None:
+            return self.gen_save_name()
+        else:
+            return self._save_name
     @save_name.setter
     def save_name(self, value):
         self._save_name = value
@@ -1535,12 +1545,16 @@ def _gen_save_dir(self):
     If the directory doesn't exist, try to create it.
     """
     if self._save_dir is None:
-        base_dir = conf.WEBBPSF_EXT_PATH + f'psf_coeffs/'
+        base_dir = Path(conf.WEBBPSF_EXT_PATH) / 'psf_coeffs/'
         # Name to save array of oversampled coefficients
         inst_name = self.name
-        save_dir = base_dir + f'{inst_name}/'
+        save_dir = base_dir / f'{inst_name}/'
     else:
         save_dir = self._save_dir
+
+    if isinstance(save_dir, str):
+        save_dir = Path(save_dir)
+        self._save_dir = save_dir
 
     # Create directory (and all intermediates) if it doesn't already exist
     if not os.path.isdir(save_dir):
@@ -1548,6 +1562,32 @@ def _gen_save_dir(self):
         os.makedirs(save_dir, exist_ok=True)
 
     return save_dir
+
+def _clear_coeffs_dir(self):
+    """
+    Remove contents of a instrument coefficient directory.
+    """
+
+    import shutil
+
+    # Should be a pathlib.Path object
+    save_dir = self.save_dir
+    if isinstance(save_dir, str):
+        save_dir = Path(save_dir)
+
+    if save_dir.exists() and save_dir.is_dir():
+        _log.warn(f"Remove contents from '{save_dir}/'??")
+        _log.warn("Type 'Y' to continue...")
+        response = input("")
+        if response=="Y":
+            # Delete directory and contents
+            shutil.rmtree(save_dir)
+            # Recreate empty directory
+            os.makedirs(save_dir, exist_ok=True)
+        else:
+            _log.warn("Process aborted.")
+    else:
+        _log.warn(f"Directory '{save_dir}/' does not exist!")
 
 
 def _gen_save_name(self, wfe_drift=0):
@@ -2034,7 +2074,7 @@ def _gen_psf_coeff(self, nproc=None, wfe_drift=0, force=False, save=True,
     """
 
     save_name = self.save_name
-    outfile = self.save_dir + save_name
+    outfile = str(self.save_dir / save_name)
     # Load data from already saved FITS file
     if os.path.exists(outfile) and (not force):
         if return_extras:
@@ -2337,7 +2377,7 @@ def _gen_wfedrift_coeff(self, force=False, save=True, wfe_list=[0,1,2,5,10,20,40
     # Name to save array of oversampled coefficients
     save_dir = self.save_dir
     save_name = os.path.splitext(self.save_name)[0] + '_wfedrift.npz'
-    outname = save_dir + save_name
+    outname = str(save_dir / save_name)
 
     # Load file if it already exists
     if (not force) and os.path.exists(outname):
@@ -2489,7 +2529,7 @@ def _gen_wfefield_coeff(self, force=False, save=True, return_results=False, retu
     # Name to save array of oversampled coefficients
     save_dir = self.save_dir
     save_name = os.path.splitext(self.save_name)[0] + '_wfefields.npz'
-    outname = save_dir + save_name
+    outname = str(save_dir / save_name)
 
     # Load file if it already exists
     if (not force) and os.path.exists(outname):
@@ -2653,7 +2693,7 @@ def _gen_wfemask_coeff(self, force=False, save=True, large_grid=False,
     save_dir = self.save_dir
     file_ext = '_large_grid_wfemask.npz' if large_grid else '_wfemask.npz'
     save_name = os.path.splitext(self.save_name)[0] + file_ext
-    outname = save_dir + save_name
+    outname = str(save_dir / save_name)
 
     # Load file if it already exists
     if (not force) and os.path.exists(outname):
