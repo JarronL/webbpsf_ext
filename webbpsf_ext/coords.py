@@ -458,10 +458,9 @@ def gen_sgd_offsets(sgd_type, slew_std=5, fsm_std=2.5):
 def get_idl_offset(base_offset=(0,0), dith_offset=(0,0), base_std=0, use_ta=True, 
                    dith_std=0, use_sgd=True, **kwargs):
     """
-    Calculate pointing offsets in 'idl' coordinates. Inputs come from the
-    APT's .pointing file. For a sequence of dithers, make sure to only
-    calculate the base offset once, and all dithers independently. For
-    instance:
+    Calculate pointing offsets in 'idl' coordinates with errors. Inputs come from the
+    APT's .pointing file. For a sequence of dithers, make sure to only calculate the 
+    base offset once, and all dithers independently. For instance:
     
         >>> base_offset = get_idl_offset(base_std=None)
         >>> dith0 = get_idl_offset(base_offset, dith_offset=(0,0), dith_std=None)
