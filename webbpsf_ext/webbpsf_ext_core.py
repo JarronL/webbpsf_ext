@@ -2628,7 +2628,11 @@ def _gen_wfefield_coeff(self, force=False, save=True, return_results=False, retu
 
     # Calculate new coefficients at each position
     cf_fields = []
-    for xsci, ysci in tqdm(zip(xsci_all, ysci_all), total=npos, desc='Field Points'):
+    # Create progress bar object
+    pbar = tqdm(zip(xsci_all, ysci_all), total=npos, desc='Field Points')
+    for xsci, ysci in pbar:
+        # Update progress bar description
+        pbar.set_description(f"xsci, ysci = ({xsci:.0f}, {ysci:.0f})")
         # Update saved detector position and calculate PSF coeff
         self.detector_position = (xsci, ysci)
         cf, _ = self.gen_psf_coeff(force=True, save=False, return_results=True, **kwargs)
@@ -2832,8 +2836,12 @@ def _gen_wfemask_coeff(self, force=False, save=True, large_grid=False,
     fov_pix_over = self.fov_pix * self.oversample
     pixscale = self.pixelscale
     cf_all = np.zeros([npos, self.ndeg+1, fov_pix_over, fov_pix_over], dtype='float')
-    for i in trange(npos, leave=False, desc="Mask Offsets"):
+    # Create progress bar object
+    pbar = trange(npos, leave=False, desc="Mask Offsets")
+    for i in pbar:
         xv, yv = (xoff[i], yoff[i])
+        # Update descriptive label
+        pbar.set_description(f"xoff,yoff=({xv:.2f}, {yv:.2f})")
 
         self.options['coron_shift_x'] = xv
         self.options['coron_shift_y'] = yv
@@ -3074,7 +3082,12 @@ def _gen_wfemask_coeff(self, force=False, save=True, large_grid=False,
     xsgd, ysgd = (xoff_all[ind_sgd], yoff_all[ind_sgd])
     nsgd = len(xsgd)
     if nsgd>0:
-        for xv, yv in tqdm(zip(xsgd, ysgd), total=nsgd, desc='SGD', leave=False):
+        # Create progress bar object
+        pbar = tqdm(zip(xsgd, ysgd), total=nsgd, desc='SGD', leave=False)
+        for xv, yv in pbar:
+            # Update descriptive label
+            pbar.set_description(f"xsgd,ysgd=({xv:.2f}, {yv:.2f})")
+
             self.options['coron_shift_x'] = xv
             self.options['coron_shift_y'] = yv
 
