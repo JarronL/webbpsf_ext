@@ -411,7 +411,7 @@ def make_coeff_resid_grid(xin, yin, cf_resid, xgrid, ygrid):
     return cf_resid_grid
 
 
-def field_coeff_func(v2grid, v3grid, cf_fields, v2_new, v3_new):
+def field_coeff_func(v2grid, v3grid, cf_fields, v2_new, v3_new, method='linear'):
     """Interpolation function for PSF coefficient residuals
 
     Uses `RegularGridInterpolator` to quickly determine new coefficient
@@ -432,7 +432,7 @@ def field_coeff_func(v2grid, v3grid, cf_fields, v2_new, v3_new):
         New V3 point(s) to interpolate on. Same units as v3grid.
     """
 
-    func = RegularGridInterpolator((v3grid, v2grid), cf_fields, method='linear', 
+    func = RegularGridInterpolator((v3grid, v2grid), cf_fields, method=method, 
                                    bounds_error=False, fill_value=None)
 
     pts = np.array([v3_new,v2_new]).transpose()
