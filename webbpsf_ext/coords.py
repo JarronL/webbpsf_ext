@@ -396,23 +396,24 @@ def gen_sgd_offsets(sgd_type, slew_std=5, fsm_std=2.5):
     Create a series of x and y position offsets for a SGD pattern.
     This includes the central position as the first in the series.
     By default, will also add random movement errors using the
-    `slew_std` and `fsm_std` keywords.
+    `slew_std` and `fsm_std` keywords. Returned values in arcsec.
     
     Parameters
     ==========
     sgd_type : str
         Small grid dither pattern. Valid types are
-        '9circle', '5box', '5diamond', '3bar', '5miri', and '9miri'
+        '9circle', '5box', '5diamond', '3bar', '5bar', '5miri', and '9miri'
         where the first four refer to NIRCam coronagraphic dither
         positions and the last two are for MIRI coronagraphy.
     fsm_std : float
         One-sigma accuracy per axis of fine steering mirror positions.
         This provides randomness to each position relative to the nominal 
-        central position. Ignored for central position. Values are in mas. 
+        central position. Ignored for central position.
+        Values should be in units of mas. 
     slew_std : float
         One-sigma accuracy per axis of the initial slew. This is applied
         to all positions and gives a baseline offset relative to the
-        desired mask center. Values are in mas.
+        desired mask center. Values should be in units of mas. 
     """
     
     if sgd_type=='9circle':
