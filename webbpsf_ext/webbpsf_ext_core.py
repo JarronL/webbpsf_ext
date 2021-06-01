@@ -818,7 +818,8 @@ class NIRCam_ext(webbpsf_NIRCam):
 
         # Perform PSF calculation
         calc_psf_func = super().calc_psf
-        res = _calc_psf_with_shifts(self, calc_psf_func, **kwargs)
+        return_hdul = kwargs.pop('return_hdul', True)
+        hdul = _calc_psf_with_shifts(self, calc_psf_func, **kwargs)
 
         # Reset pupil and OPD
         if wfe_drift != 0:
@@ -830,6 +831,16 @@ class NIRCam_ext(webbpsf_NIRCam):
             self.detector_position = (xorig, yorig)
             self.options['coron_shift_x'] = coron_shift_x_orig
             self.options['coron_shift_y'] = coron_shift_y_orig
+
+        # Check if we set return_hdul=False
+        if return_hdul:
+            res = hdul
+        else:
+            # If just returning a single image, determine oversample and distortion
+            if kwargs.get('return_oversample', True):
+                res = hdul[0] if len(hdul)==2 else hdul[2]
+            else:
+                res = hdul[1] if len(hdul)==2 else hdul[3]
 
         return res
 
@@ -1444,6 +1455,7 @@ class MIRI_ext(webbpsf_MIRI):
 
         # Perform PSF calculation
         calc_psf_func = super().calc_psf
+        return_hdul = kwargs.pop('return_hdul', True)
         hdul = _calc_psf_with_shifts(self, calc_psf_func, **kwargs)
 
         # Reset pupil and OPD
@@ -1458,7 +1470,7 @@ class MIRI_ext(webbpsf_MIRI):
             self.options['coron_shift_y'] = coron_shift_y_orig
 
         # Check if we set return_hdul=False
-        if kwargs.get('return_hdul', True):
+        if return_hdul:
             res = hdul
         else:
             # If just returning a single image, determine oversample and distortion
@@ -1998,7 +2010,7 @@ def _calc_psf_with_shifts(self, calc_psf_func, **kwargs):
         _update_mask_shifts(self)
 
     # Perform PSF calculation
-    hdul = calc_psf_func(**kwargs) 
+    hdul = calc_psf_func(**kwargs)
 
     # Perform sub-pixel shifting to reposition PSF at requested source location
     if self.is_coron:
@@ -2845,13 +2857,15 @@ def _gen_wfemask_coeff(self, force=False, save=True, large_grid=False,
         if self.image_mask[-1]=='R': # Round masks
             if large_grid:
                 # Include SGD points
-                xy_inner = np.array([0.015, 0.05, 0.1])
+                xy_inner = np.array([0.015, 0.02, 0.05, 0.1])
                 # M430R sampling; scale others
+                # xy_mid = np.array([0.6, 1.2, 2, 2.5])
                 xy_mid = np.array([0.6, 1.2, 2.5])
                 if '210R' in self.image_mask:
                     xy_mid *= 0.488
                 elif '335R' in self.image_mask:
                     xy_mid *= 0.779
+                # xy_outer = np.array([5.0, 8.0])
                 xy_outer = np.array([8.0])
 
                 # Sort offsets [-], 0, [+]
@@ -3620,7 +3634,7 @@ def _coeff_mod_wfe_mask(self, coord_vals, coord_frame):
 
         if (self.name=='NIRCam') and (np.any(np.abs(xoff_asec)>12) or np.any(np.abs(yoff_asec)>12)):
             _log.warn("Some values outside mask FoV (beyond 12 asec offset)!")
-
+            
         cf_mod = field_coeff_func(xgrid, ygrid, cf_fit, xoff, yoff)
 
         # Pad cf_mod array with 0s if undersized
