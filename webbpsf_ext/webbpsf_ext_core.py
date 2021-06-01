@@ -1576,7 +1576,7 @@ def _clear_coeffs_dir(self):
         save_dir = Path(save_dir)
 
     if save_dir.exists() and save_dir.is_dir():
-        _log.warn(f"Remove contents from '{save_dir}/'??")
+        _log.warn(f"Remove contents from '{save_dir}/'?")
         _log.warn("Type 'Y' to continue...")
         response = input("")
         if response=="Y":
@@ -1584,6 +1584,7 @@ def _clear_coeffs_dir(self):
             shutil.rmtree(save_dir)
             # Recreate empty directory
             os.makedirs(save_dir, exist_ok=True)
+            _log.warn("Directory emptied.")
         else:
             _log.warn("Process aborted.")
     else:
@@ -1598,8 +1599,12 @@ def _gen_save_name(self, wfe_drift=0):
     # Prepend filter name if using quick keyword
     fstr = '{}_'.format(self.filter) if self.quick else ''
     # Mask and pupil names
-    mstr = 'NONE' if self.image_mask is None else self.image_mask
     pstr = 'CLEAR' if self.pupil_mask is None else self.pupil_mask
+    mstr = 'NONE' if self.image_mask is None else self.image_mask
+    # Check for coron subtraste if image mask is None
+    if (mstr == 'NONE') and self.coron_substrate:
+        mstr = 'CORONSUB'
+
     fmp_str = f'{fstr}{pstr}_{mstr}'
 
     # PSF image size and sampling
