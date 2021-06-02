@@ -423,8 +423,8 @@ def gen_sgd_offsets(sgd_type, slew_std=5, fsm_std=2.5):
         xoff_msec = np.array([0.0,+15,-15,-15,+15])
         yoff_msec = np.array([0.0,+15,+15,-15,-15])
     elif sgd_type=='5diamond':
-        xoff_msec = np.array([0.0,  0,  0,  0,  0])
-        yoff_msec = np.array([0.0,+20,-20,+20,-20])
+        xoff_msec = np.array([0.0,  0,  0,+20,-20])
+        yoff_msec = np.array([0.0,+20,-20,  0,  0])
     elif sgd_type=='5bar':
         xoff_msec = np.array([0.0,  0,  0,  0,  0])
         yoff_msec = np.array([0.0,+20,+10,-10,-20])
