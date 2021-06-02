@@ -205,7 +205,7 @@ def jl_poly_fit(x, yvals, deg=1, QR=True, robust_fit=False, niter=25, use_legend
         # Normalize x values to closer to 1 for numerical stability with large inputs
         xnorm = np.mean(x)
         x = x / xnorm
-        a = np.array([x**num for num in range(deg+1)], dtype='float')
+        a = np.asarray([x**num for num in range(deg+1)], dtype='float')
     b = yvals.reshape([orig_shape[0],-1])
 
     # Fast method, but numerically unstable for overdetermined systems

@@ -850,6 +850,15 @@ class NIRCam_ext(webbpsf_NIRCam):
         Convenience function to calculation a series of SGD PSFs. This is
         essentially a wrapper around the `calc_psf_from_coeff` and `calc_psf`
         functions. Only valid for coronagraphic observations.
+
+        Parameters
+        ==========
+        xoff_asec : float or array-like
+            Offsets in x-direction (in 'idl' coordinates).
+        yoff_asec : float or array-like
+            Offsets in y-direction (in 'idl' coordinates).
+        use_coeff : bool
+            If True, uses `calc_psf_from_coeff`, other WebbPSF's built-in `calc_psf`.
         """
 
         res = _calc_psfs_sgd(self, xoff_asec, yoff_asec, use_coeff=use_coeff, **kwargs)
@@ -1487,6 +1496,15 @@ class MIRI_ext(webbpsf_MIRI):
         Convenience function to calculation a series of SGD PSFs. This is
         essentially a wrapper around the `calc_psf_from_coeff` and `calc_psf`
         functions. Only valid for coronagraphic observations.
+
+        Parameters
+        ==========
+        xoff_asec : float or array-like
+            Offsets in x-direction (in 'idl' coordinates).
+        yoff_asec : float or array-like
+            Offsets in y-direction (in 'idl' coordinates).
+        use_coeff : bool
+            If True, uses `calc_psf_from_coeff`, other WebbPSF's built-in `calc_psf`.
         """
 
         res = _calc_psfs_sgd(self, xoff_asec, yoff_asec, use_coeff=use_coeff, **kwargs)
@@ -2279,7 +2297,7 @@ def _gen_psf_coeff(self, nproc=None, wfe_drift=0, force=False, save=True,
         images.append(hdu.data)
 
     # Turn results into an numpy array (npsf,ny,nx)
-    images = np.array(images)
+    images = np.asarray(images)
 
     # Simultaneous polynomial fits to all pixels using linear least squares
     use_legendre = self.use_legendre
@@ -2512,7 +2530,7 @@ def _gen_wfedrift_coeff(self, force=False, save=True, wfe_list=[0,1,2,5,10,20,40
     for wfe_drift in tqdm(wfe_list, leave=False, desc='WFE Drift'):
         cf, _ = self.gen_psf_coeff(wfe_drift=wfe_drift, force=True, save=False, return_results=True, **kwargs)
         cf_wfe.append(cf)
-    cf_wfe = np.array(cf_wfe)
+    cf_wfe = np.asarray(cf_wfe)
 
     # For coronagraphic observations, produce an offset PSF by turning off mask
     cf_fit_off = cf_wfe_off = None
@@ -2524,7 +2542,7 @@ def _gen_wfedrift_coeff(self, force=False, save=True, wfe_list=[0,1,2,5,10,20,40
         for wfe_drift in tqdm(wfe_list, leave=False, desc="Off-Axis"):
             cf, _ = self.gen_psf_coeff(wfe_drift=wfe_drift, force=True, save=False, return_results=True, **kwargs)
             cf_wfe_off.append(cf)
-        cf_wfe_off = np.array(cf_wfe_off)
+        cf_wfe_off = np.asarray(cf_wfe_off)
         self.image_mask = image_mask_orig
 
         # Return fov_pix to original size
@@ -2723,7 +2741,7 @@ def _gen_wfefield_coeff(self, force=False, save=True, return_results=False, retu
         self.detector_position = (xsci, ysci)
         cf, _ = self.gen_psf_coeff(force=True, save=False, return_results=True, **kwargs)
         cf_fields.append(cf)
-    cf_fields = np.array(cf_fields)
+    cf_fields = np.asarray(cf_fields)
 
     # Reset to initial values
     self.detector_position = (x0,y0)
@@ -2737,7 +2755,7 @@ def _gen_wfefield_coeff(self, force=False, save=True, return_results=False, retu
     # Get residuals
     new_shape = cf_fields.shape[-2:]
     if coeff0.shape[-2:] != new_shape:
-        coeff0_resize = np.array([pad_or_cut_to_size(im, new_shape) for im in coeff0])
+        coeff0_resize = np.asarray([pad_or_cut_to_size(im, new_shape) for im in coeff0])
         coeff0 = coeff0_resize
 
     cf_fields_resid = cf_fields - coeff0
@@ -3364,6 +3382,7 @@ def _calc_psf_from_coeff(self, sp=None, return_oversample=True,
                 hdul.append(fits.ImageHDU(data=wave, name='Wavelengths'))
             output = hdul
         else:
+            psf_all = np.asarray(psf_all)
             output = (wave, psf_all) if is_spec else psf_all
     else:
         res = gen_image_from_coeff(self, psf_coeff, psf_coeff_hdr, sp_norm=sp,
@@ -3496,7 +3515,7 @@ def _coeff_mod_wfe_drift(self, wfe_drift, key='wfe_drift'):
         # Pad cf_mod array with 0s if undersized
         if not np.allclose(psf_coeff.shape, cf_mod.shape):
             new_shape = psf_coeff.shape[1:]
-            cf_mod_resize = np.array([pad_or_cut_to_size(im, new_shape) for im in cf_mod])
+            cf_mod_resize = np.asarray([pad_or_cut_to_size(im, new_shape) for im in cf_mod])
             cf_mod = cf_mod_resize
     
     return cf_mod
@@ -3555,7 +3574,7 @@ def _coeff_mod_wfe_field(self, coord_vals, coord_frame):
         psf_cf_dim = len(psf_coeff.shape)
         if not np.allclose(psf_coeff.shape, cf_mod.shape[-psf_cf_dim:]):
             new_shape = psf_coeff.shape[1:]
-            cf_mod_resize = np.array([pad_or_cut_to_size(im, new_shape) for im in cf_mod])
+            cf_mod_resize = np.asarray([pad_or_cut_to_size(im, new_shape) for im in cf_mod])
             cf_mod = cf_mod_resize
 
     return cf_mod, nfield
@@ -3641,7 +3660,7 @@ def _coeff_mod_wfe_mask(self, coord_vals, coord_frame):
         psf_cf_dim = len(psf_coeff.shape)
         if not np.allclose(psf_coeff.shape, cf_mod.shape[-psf_cf_dim:]):
             new_shape = psf_coeff.shape[1:]
-            cf_mod_resize = np.array([pad_or_cut_to_size(im, new_shape) for im in cf_mod])
+            cf_mod_resize = np.asarray([pad_or_cut_to_size(im, new_shape) for im in cf_mod])
             cf_mod = cf_mod_resize
 
     return cf_mod, nfield
@@ -3678,7 +3697,7 @@ def _calc_psfs_sgd(self, xoff_asec, yoff_asec, use_coeff=True, return_oversample
                 res = self.calc_psf(coord_frame='idl', coord_vals=(xoff,yoff), 
                                     return_oversample=return_oversample, **kwargs)
                 result.append(res)
-            result = np.array(result)
+            result = np.asarray(result)
 
         setup_logging(log_prev, verbose=False)
 

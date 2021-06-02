@@ -446,7 +446,7 @@ def rotate_offset(data, angle, cen=None, cval=0.0, order=1,
         im_pad = pad_or_cut_to_size(im, new_shape, fill_val=cval)
         im_new = fshift(im_pad, delx, dely, cval=cval)
         images_shift.append(im_new)
-    images_shift = np.array(images_shift)
+    images_shift = np.asarray(images_shift)
     
     # Remove additional dimension in the case of single image
     #images_shift = images_shift.squeeze()
@@ -466,13 +466,13 @@ def rotate_offset(data, angle, cen=None, cval=0.0, order=1,
             for im in images_shrot:
                 im_new = fshift(im, -delx, -dely, pad=True, cval=cval)
                 images_rot.append(im_new)
-            images_rot = np.array(images_rot)
+            images_rot = np.asarray(images_rot)
     
         images_fin = []
         for im in images_rot:
             im_new = pad_or_cut_to_size(im, (ny,nx))
             images_fin.append(im_new)
-        images_fin = np.array(images_fin)
+        images_fin = np.asarray(images_fin)
     
         return images_fin.squeeze()
 
@@ -850,6 +850,7 @@ def model_to_hdulist(args_model, sp_star, bandpass):
 
     hdulist[0].header['UNITS']    = 'photons/sec'
     hdulist[0].header['PIXELSCL'] = (scale0, 'arcsec/pixel')
+    hdulist[0].header['PIXSCALE'] = (scale0, 'arcsec/pixel') # Alternate keyword
     hdulist[0].header['DISTANCE'] = (dist0, 'parsecs')
 
     return hdulist
@@ -1126,9 +1127,9 @@ def convolve_image(hdul_sci_image, hdul_psfs, aper=None):
         else:
             print('Closing multiprocess pool.')
 
-        im_conv = np.array(im_conv).sum(axis=0)
+        im_conv = np.asarray(im_conv).sum(axis=0)
     else:
-        im_conv = np.sum(np.array([_convolve_psfs_for_mp(wa) for wa in tqdm(worker_args)]), axis=0)
+        im_conv = np.sum(np.asarray([_convolve_psfs_for_mp(wa) for wa in tqdm(worker_args)]), axis=0)
 
     return im_conv
 

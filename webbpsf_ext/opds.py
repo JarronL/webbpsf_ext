@@ -197,14 +197,14 @@ class OTE_WFE_Drift_Model(OTE_Linear_Model_WSS):
 
         if segname is None:
             # RMS of whole aperture
-            rms = np.array([rms_im(im) for im in arr])
+            rms = np.asarray([rms_im(im) for im in arr])
         else:
             # RMS of specified segment
             assert (segname in self.segnames)
             iseg = np.where(self.segnames == segname)[0][0] + 1  # segment index from 1 - 18
             seg_mask = self._segment_masks == iseg
             arr_seg = arr[:,seg_mask]
-            rms = np.array([rms_im(im) for im in arr_seg])
+            rms = np.asarray([rms_im(im) for im in arr_seg])
 
         # If single image, remove first dimension
         if nz==1:
