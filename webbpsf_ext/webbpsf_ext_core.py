@@ -838,9 +838,9 @@ class NIRCam_ext(webbpsf_NIRCam):
         else:
             # If just returning a single image, determine oversample and distortion
             if kwargs.get('return_oversample', True):
-                res = hdul[0] if len(hdul)==2 else hdul[2]
+                res = hdul[0].data if len(hdul)==2 else hdul[2].data
             else:
-                res = hdul[1] if len(hdul)==2 else hdul[3]
+                res = hdul[1].data if len(hdul)==2 else hdul[3].data
 
         return res
 
@@ -1475,9 +1475,9 @@ class MIRI_ext(webbpsf_MIRI):
         else:
             # If just returning a single image, determine oversample and distortion
             if kwargs.get('return_oversample', True):
-                res = hdul[0] if len(hdul)==2 else hdul[2]
+                res = hdul[0].data if len(hdul)==2 else hdul[2].data
             else:
-                res = hdul[1] if len(hdul)==2 else hdul[3]
+                res = hdul[1].data if len(hdul)==2 else hdul[3].data
 
         return res
 
