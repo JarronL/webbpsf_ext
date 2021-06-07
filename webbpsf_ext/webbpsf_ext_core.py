@@ -32,7 +32,7 @@ from .maths import jl_poly, jl_poly_fit
 #from numpy.polynomial import legendre
 
 # Logging info
-from .utils import conf, setup_logging
+from . import conf, setup_logging
 import logging
 _log = logging.getLogger('webbpsf_ext')
 
@@ -1637,7 +1637,8 @@ def _init_inst(self, filter=None, pupil_mask=None, image_mask=None,
     self._psf_coeff_mod = {
         'wfe_drift': None, 'wfe_drift_off': None, 'wfe_drift_lxmap': None,
         'si_field': None, 'si_field_v2grid': None, 'si_field_v3grid': None, 'si_field_apname': None,
-        'si_mask': None, 'si_mask_xgrid': None, 'si_mask_ygrid': None, 'si_mask_apname': None
+        'si_mask': None, 'si_mask_xgrid': None, 'si_mask_ygrid': None, 'si_mask_apname': None,
+        'si_mask_large': False
     }
     if self.image_mask is not None:
         self.options['coron_shift_x'] = 0
@@ -2199,6 +2200,7 @@ def _gen_psf_coeff(self, nproc=None, wfe_drift=0, force=False, save=True,
         if return_results:
             return data, hdr
         else:
+            del self.psf_coeff, self.psf_coeff_header
             self.psf_coeff = data
             self.psf_coeff_header = hdr
             return
@@ -2408,6 +2410,7 @@ def _gen_psf_coeff(self, nproc=None, wfe_drift=0, force=False, save=True,
             hdu.writeto(outfile, overwrite=True)
 
     if return_results==False:
+        del self.psf_coeff, self.psf_coeff_header
         self.psf_coeff = coeff_all
         self.psf_coeff_header = hdr
     extras_dict = {'images' : images, 'waves': waves}
@@ -2627,7 +2630,17 @@ def _gen_wfefield_coeff(self, force=False, save=True, return_results=False, retu
             _log.info("   `include_si_wfe` attribute is set to False.")
         if self.is_coron:
             _log.info(f"   {self.name} coronagraphic image mask is in place.")
+        del self._psf_coeff_mod['si_field'] # Delete potentially large array
+        self._psf_coeff_mod['si_field'] = None
+        self._psf_coeff_mod['si_field_v2grid'] = None
+        self._psf_coeff_mod['si_field_v3grid'] = None
+        self._psf_coeff_mod['si_field_apname'] = None
+
         return
+
+    # Delete potentially large array
+    if (not return_raw) and (not return_results):
+        del self._psf_coeff_mod['si_field'] 
 
     # fov_pix should not be more than some size to preserve memory
     fov_max = self._fovmax_wfefield if self.oversample<=4 else self._fovmax_wfefield / 2 
@@ -2781,14 +2794,24 @@ def _gen_wfefield_coeff(self, force=False, save=True, return_results=False, retu
         self._psf_coeff_mod['si_field_apname'] = apname
 
 
-def _gen_wfemask_coeff(self, force=False, save=True, large_grid=False,
+def _gen_wfemask_coeff(self, force=False, save=True, large_grid=None,
                        return_results=False, return_raw=False, **kwargs):
 
     if (not self.is_coron):
         _log.info("Skipping WFE mask dependence...")
-        if not self.is_coron:
-            _log.info("   Coronagraphic image mask not in place")
+        _log.info("   Coronagraphic image mask not in place")
+        del self._psf_coeff_mod['si_mask'] # Delete potentially large array
+        self._psf_coeff_mod['si_mask'] = None
+        self._psf_coeff_mod['si_mask_xgrid'] = None
+        self._psf_coeff_mod['si_mask_ygrid'] = None
+        self._psf_coeff_mod['si_mask_apname'] = None
         return
+
+    # Delete potentially large array
+    if (not return_raw) and (not return_results):
+        del self._psf_coeff_mod['si_mask'] 
+
+    large_grid = self._psf_coeff_mod['si_mask_large'] if large_grid is None else large_grid
 
     # fov_pix should not be more than some size to preserve memory
     fov_max = self._fovmax_wfemask if self.oversample<=4 else self._fovmax_wfemask / 2 
@@ -2824,6 +2847,7 @@ def _gen_wfemask_coeff(self, force=False, save=True, large_grid=False,
             self._psf_coeff_mod['si_mask_xgrid'] = out['arr_1']
             self._psf_coeff_mod['si_mask_ygrid'] = out['arr_2']
             self._psf_coeff_mod['si_mask_apname'] = out['arr_3'].flatten()[0]
+            self._psf_coeff_mod['si_mask_large'] = large_grid
             return
 
     _log.warn('Generating mask position-dependent coefficients. This may take some time...')
@@ -3237,6 +3261,7 @@ def _gen_wfemask_coeff(self, force=False, save=True, large_grid=False,
         self._psf_coeff_mod['si_mask_xgrid'] = xvals
         self._psf_coeff_mod['si_mask_ygrid'] = yvals
         self._psf_coeff_mod['si_mask_apname'] = apname
+        self._psf_coeff_mod['si_mask_large'] = large_grid
 
 
 
