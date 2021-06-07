@@ -1719,17 +1719,21 @@ def _trim_nan_array(xgrid, ygrid, zgrid):
 
 def companion_spec(bandpass, model='SB12', atmo='hy3s', mass=10, age=100, entropy=10,
     dist=10, accr=False, mmdot=None, mdot=None, accr_rin=2, truncated=False,
-    sptype=None, Av=0, renorm_args=None, **kwargs):
+    sptype=None, renorm_args=None, Av=0, **kwargs):
     """ Determine flux (ph/sec) of a companion 
 
     Add exoplanet information that will be used to generate a point
     source image using a spectrum from Spiegel & Burrows (2012).
-    Use self.kill_planets() to delete them.
 
     Coordinate convention is for +N up and +E to left.
 
     Parameters
     ----------
+    bandpass : :mod:`pysynphot.obsbandpass`
+        A Pysynphot bandpass object.
+    model : str
+        Exoplanet model to use ('sb12', 'bex', 'cond') or
+        stellar spectrum model ('bosz', 'ck04models', 'phoenix').
     atmo : str
         A string consisting of one of four atmosphere types:
         ['hy1s', 'hy3s', 'cf1s', 'cf3s'].
@@ -1747,6 +1751,8 @@ def companion_spec(bandpass, model='SB12', atmo='hy3s', mass=10, age=100, entrop
         very specific luminosity in some bandpass.
         Includes (value, units, bandpass).
 
+    dist : float
+        Distance in pc.
     Av : float
         Extinction magnitude (assumes Rv=4.0) of the companion
         (e.g., due to being embedded in a disk).
@@ -1811,7 +1817,7 @@ def companion_spec(bandpass, model='SB12', atmo='hy3s', mass=10, age=100, entrop
                                         fluxunits=sp.fluxunits)
             obs_accr = S.Observation(sp_new, bandpass, binset=bandpass.wave)
             del_mag -= obs_accr.effstim('vegamag')
-            # Make new spectrum to continue using
+            # Make new spectrum 
             sp = planet.export_pysynphot()
 
         # Add extinction from the disk

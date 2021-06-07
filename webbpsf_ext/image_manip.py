@@ -43,7 +43,7 @@ def pad_or_cut_to_size(array, new_shape, fill_val=0.0, offset_vals=None):
         Value to pad borders. Default is 0.0
     offset_vals : tuple
         Option to perform image shift in the (xpix) direction for 1D, 
-        or (ypix,xpix) direction for 2D/3D.
+        or (ypix,xpix) direction for 2D/3D prior to cropping or expansion.
 
     Returns
     -------
@@ -657,23 +657,22 @@ def image_rescale(HDUlist_or_filename, pixscale_out, pixscale_in=None,
         Input either an HDUList or file name.
     pixscale_out : float
         Desired pixel scale (asec/pix) of returned image. Will be saved in header info.
-    dist_out : float
-        Output distance (parsec) of object in image. Will be saved in header info.
     
     Keyword Args
     ============
     pixscale_in : float or None
         Input image pixel scale. If None, then tries to grab info from the header.
-    args_in : tuple
-        Two parameters consisting of the input image pixel scale and distance
-        assumed to be in units of arcsec/pixel and parsecs, respectively
-    args_out : tuple
-        Same as args_in, but the new desired outputs.
+    dist_in : float
+        Input distance (parsec) of original object. If not set, then we look for 
+        the header keywords 'DISTANCE' or 'DIST'.
+    dist_out : float
+        Output distance (parsec) of object in image. Will be saved in header info.
+        If not set, then assumed to be same as input distance.
     cen_star : bool
         Is the star placed in the central pixel? If so, then the stellar flux is 
         assumed to be a single pixel that is equal to the maximum flux in the
         image. Rather than rebinning that pixel, the total flux is pulled out
-        and readded to the central pixel of the final image.
+        and re-added to the central pixel of the final image.
     shape_out : tuple, int, or None
         Desired size for the output array (ny,nx). If a single value, then will 
         create a 2-element tuple of the same value.
@@ -749,6 +748,7 @@ def image_rescale(HDUlist_or_filename, pixscale_out, pixscale_in=None,
     hdu_new.header = hdulist[0].header.copy()
     hdulist_new = fits.HDUList([hdu_new])
     hdulist_new[0].header['PIXELSCL'] = (pixscale_out, 'arcsec/pixel')
+    hdulist_new[0].header['PIXSCALE'] = (pixscale_out, 'arcsec/pixel')
     hdulist_new[0].header['DISTANCE'] = (dist_out, 'parsecs')
 
     return hdulist_new
@@ -1055,6 +1055,20 @@ def _convolve_psfs_for_mp(arg_vals):
 def convolve_image(hdul_sci_image, hdul_psfs, aper=None):
     """ Convolve image with various PSFs
 
+    Takes an extended image, breaks it up into subsections, then
+    convolves each subsection with the nearest neighbor PSF. The
+    subsection sizes and locations are determined from PSF 'sci'
+    positions.
+
+    Parameters
+    ==========
+    hdul_sci_image : HDUList
+        Disk model. Requires header keyword 'PIXELSCL'.
+    hdul_psfs : HDUList
+        Multi-extension FITS. Each HDU element is a different PSF for
+        some location within the corongraphic field of view. 
+    aper : :mod:`pysiaf.aperture.JwstAperture`
+        Option to specify the reference SIAF aperture.
     """
     
     import pysiaf
@@ -1153,7 +1167,7 @@ def make_disk_image(inst, disk_params, sp_star=None, pixscale_out=None, dist_out
             - 'dist'       : Assumed model distance in parsecs.
             - 'wavelength' : Wavelength of observation in microns.
             - 'units'      : String of assumed flux units (ie., MJy/arcsec^2 or muJy/pixel)
-            - 'cen_star'   : True/False. Is the star placed in the central pixel? 
+            - 'cen_star'   : True/False. Is a star already placed in the central pixel? 
         Will Convert from [M,m,u,n]Jy/[arcsec^2,pixel] to photons/sec/pixel
 
     Keyword Args
@@ -1162,7 +1176,8 @@ def make_disk_image(inst, disk_params, sp_star=None, pixscale_out=None, dist_out
         A pysynphot spectrum of central star. Used to adjust observed
         photon flux if filter differs from model input
     pixscale_out : float
-        Desired pixelscale of returned image.
+        Desired pixelscale of returned image. If None, then use instrument's
+        oversampled pixel scale.
     dist_out : float
         Distance to place disk at. Flux is scaled appropriately relative to
         the input distance specified in `disk_params`.

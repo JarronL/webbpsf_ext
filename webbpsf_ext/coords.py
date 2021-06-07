@@ -556,8 +556,7 @@ def radec_offset(ra, dec, dist, pos_ang):
 class jwst_point(object):    
     
     def __init__(self, ap_obs_name, ap_ref_name, ra_ref, dec_ref, pos_ang=0, 
-                 base_offset=(0,0), dith_offsets = [(0,0)],
-                 base_std=None, dith_std=None):
+        base_offset=(0,0), dith_offsets = [(0,0)], base_std=None, dith_std=None):
         
         # SIAF objects configuration
         si_match = {'NRC': 'nircam', 'NIS': 'niriss', 'MIR': 'miri', 'NRS': 'nirspec', 'FGS': 'fgs'}
@@ -584,7 +583,7 @@ class jwst_point(object):
         self.dith_offsets = dith_offsets
         
         # Include randomized pointing offsets?
-        self._base_std = base_std # Intitial telescope pointing uncertainty (mas)
+        self._base_std = base_std # Initial telescope pointing uncertainty (mas)
         self._dith_std = dith_std # Dither uncertainty value
         self.use_ta  = True   # Do we employ target acquisition to reduce pointing uncertainty?
         self.use_sgd = True   # True for small grid dithers, otherwise small angle maneuver
