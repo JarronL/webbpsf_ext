@@ -16,6 +16,7 @@ class FilterLevelRange(object):
     def __init__(self, min_level, max_level):
         self.min_level = min_level
         self.max_level = max_level
+
     def filter(self, record):
         if record.levelno >= self.min_level and record.levelno <= self.max_level:
             return 1
@@ -42,11 +43,11 @@ def restart_logging(verbose=True):
     root_logger = logging.getLogger()
     root_logger.handlers = []
 
-    if level in ['DEBUG', 'INFO', 'WARN', 'WARNING', 'ERROR', 'CRITICAL']:
+    if level in ['DEBUG', 'INFO', 'WARN', 'ERROR', 'CRITICAL']:
         level_id = getattr(logging, level)  # obtain one of the DEBUG, INFO, WARN,
                                             # or ERROR constants
         if verbose:
-            print("webbpsf_ext log messages of level {0} and above will be shown.".format(level))
+            print(f"webbpsf_ext log messages of level {level} and above will be shown.")
     elif level == 'NONE':
         root_logger.handlers = []  # n.b. this will clear any handlers other libs/users configured
         return
@@ -142,5 +143,3 @@ def setup_logging(level='INFO', filename=None, verbose=True):
         # Use the string 'none' as a sentinel value for astropy.config
         filename = _DISABLE_FILE_LOGGING_VALUE
 
-    conf.logging_filename = filename
-    restart_logging(verbose=verbose)

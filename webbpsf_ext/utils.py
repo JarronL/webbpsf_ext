@@ -23,8 +23,7 @@ if not on_rtd:
     cmap_pri, cmap_alt = ('viridis', 'gist_heat')
     matplotlib.rcParams['image.cmap'] = cmap_pri if cmap_pri in plt.colormaps() else cmap_alt
 
-from . import conf
-from .logging_utils import setup_logging
+from .logging_utils import conf, setup_logging
 
 import logging
 _log = logging.getLogger('webbpsf_ext')
