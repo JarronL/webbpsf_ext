@@ -597,7 +597,7 @@ class NIRCam_ext(webbpsf_NIRCam):
         large_grid : bool
             Use a large number (high-density) of grid points to create coefficients.
             If True, then a higher fidelity PSF variations across the FoV, but could
-            take hours to genrate on the first pass. Setting to False allows for
+            take hours to generate on the first pass. Setting to False allows for
             quicker coefficient creation with a smaller memory footprint, useful for
             testing and debugging.        
         force : bool
@@ -700,18 +700,19 @@ class NIRCam_ext(webbpsf_NIRCam):
         """ Compute a PSF
 
         Slight modification of inherent WebbPSF `calc_psf` function. If add_distortion, fov_pixels,
-        and oversample are not specified, then we automatically use the associated attributes. Also,
-        add ability to directly specify wfe_drift and coordinate offset values in the same
+        and oversample are not specified, then we automatically use the associated attributes. 
+        Also, add ability to directly specify wfe_drift and coordinate offset values in the same
         fashion as `calc_psf_from_coeff`.
 
         Notes
         -----
-        More advanced PSF computation options (pupil shifts, source positions, jitter, ...)
+        Additional PSF computation options (pupil shifts, source positions, jitter, ...)
         may be set by configuring the `.options` dictionary attribute of this class.
 
         Parameters
         ----------
         source : synphot.spectrum.SourceSpectrum or dict
+            TODO: synphot not yet implemented in webbpsf_ext!!
             specification of source input spectrum. Default is a 5700 K sunlike star.
         nlambda : int
             How many wavelengths to model for broadband?
