@@ -1,4 +1,5 @@
 # Import libraries
+from webbpsf_ext.spectra import stellar_spectrum
 from astropy.units.equivalencies import pixel_scale
 import numpy as np
 
@@ -711,9 +712,11 @@ class NIRCam_ext(webbpsf_NIRCam):
 
         Parameters
         ----------
+        sp : :mod:`pysynphot.spectrum`
+            Source input spectrum. If not specified, the default is flat in phot lam.
+            (equal number of photons per spectral bin).
         source : synphot.spectrum.SourceSpectrum or dict
             TODO: synphot not yet implemented in webbpsf_ext!!
-            specification of source input spectrum. Default is a 5700 K sunlike star.
         nlambda : int
             How many wavelengths to model for broadband?
             The default depends on how wide the filter is: (5,3,1) for types (W,M,N) respectively
@@ -1359,8 +1362,11 @@ class MIRI_ext(webbpsf_MIRI):
 
         Parameters
         ----------
+        sp : :mod:`pysynphot.spectrum`
+            Source input spectrum. If not specified, the default is flat in phot lam.
+            (equal number of photons per spectral bin).
         source : synphot.spectrum.SourceSpectrum or dict
-            specification of source input spectrum. Default is a 5700 K sunlike star.
+            TODO: synphot not yet implemented in webbpsf_ext!!
         nlambda : int
             How many wavelengths to model for broadband?
             The default depends on how wide the filter is: (5,3,1) for types (W,M,N) respectively
@@ -2023,14 +2029,40 @@ def _calc_psf_with_shifts(self, calc_psf_func, **kwargs):
     that position using temporary source_offset_xsub/ysub keys in the options dict.
     """
 
+    from .utils import S
+
     # Only shift coronagraphic masks by pixel integers
     # sub-pixels shifts are handled by source offsetting
     if self.is_coron:
         options_orig = self.options.copy()
         _update_mask_shifts(self)
 
+    # Get spectrum; flat in photlam if not specified
+    sp = kwargs.pop('sp', None)
+    if sp is None:
+        sp = stellar_spectrum('flat')
+        do_counts = False
+    else:
+        do_counts = True
+        
+    # Create source weights
+    bp = self.bandpass
+    obs = S.Observation(sp, bp, binset=bp.wave)
+    obs.convert('photlam')
+    # Decide on wavelengths and weights
+    npsf = self.npsf
+    wave_um = np.linspace(obs.binwave.min(), obs.binwave.max(), npsf) / 1e4
+    weights = np.interp(wave_um, obs.binwave/1e4, obs.binflux)
+    weights /= weights.sum()
+    src = {'wavelengths': wave_um*1e-6, 'weights': weights}
+
     # Perform PSF calculation
-    hdul = calc_psf_func(**kwargs)
+    hdul = calc_psf_func(source=src, **kwargs)
+
+    # Scale PSF by total incident source flux
+    if do_counts:
+        for hdu in hdul:
+            hdu.data *= obs.countrate()
 
     # Perform sub-pixel shifting to reposition PSF at requested source location
     if self.is_coron:
