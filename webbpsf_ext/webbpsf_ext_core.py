@@ -815,11 +815,11 @@ class NIRCam_ext(webbpsf_NIRCam):
                 # Shift mask in opposite direction
                 self.options['coron_shift_x'] = xoff_mask
                 self.options['coron_shift_y'] = yoff_mask
-                print((xoff_mask, yoff_mask))
 
         # Perform PSF calculation
         calc_psf_func = super().calc_psf
         return_hdul = kwargs.pop('return_hdul', True)
+        return_oversample = kwargs.pop('return_oversample', True)
         hdul = _calc_psf_with_shifts(self, calc_psf_func, **kwargs)
 
         # Reset pupil and OPD
@@ -838,7 +838,7 @@ class NIRCam_ext(webbpsf_NIRCam):
             res = hdul
         else:
             # If just returning a single image, determine oversample and distortion
-            if kwargs.get('return_oversample', True):
+            if return_oversample:
                 res = hdul[0].data if len(hdul)==2 else hdul[2].data
             else:
                 res = hdul[1].data if len(hdul)==2 else hdul[3].data
@@ -1461,11 +1461,11 @@ class MIRI_ext(webbpsf_MIRI):
                 # Shift mask in opposite direction
                 self.options['coron_shift_x'] = xoff_mask
                 self.options['coron_shift_y'] = yoff_mask
-                print((xoff_mask, yoff_mask))
 
         # Perform PSF calculation
         calc_psf_func = super().calc_psf
         return_hdul = kwargs.pop('return_hdul', True)
+        return_oversample = kwargs.pop('return_oversample', True)
         hdul = _calc_psf_with_shifts(self, calc_psf_func, **kwargs)
 
         # Reset pupil and OPD
@@ -1484,7 +1484,7 @@ class MIRI_ext(webbpsf_MIRI):
             res = hdul
         else:
             # If just returning a single image, determine oversample and distortion
-            if kwargs.get('return_oversample', True):
+            if return_oversample:
                 res = hdul[0].data if len(hdul)==2 else hdul[2].data
             else:
                 res = hdul[1].data if len(hdul)==2 else hdul[3].data
