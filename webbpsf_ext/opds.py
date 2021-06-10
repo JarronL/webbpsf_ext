@@ -19,7 +19,7 @@ from webbpsf.opds import OTE_Linear_Model_WSS
 from webbpsf.utils import get_webbpsf_data_path
 
 # Logging
-from .utils import conf
+from . import conf
 from .logging_utils import setup_logging
 import logging
 _log = logging.getLogger('webbpsf_ext')

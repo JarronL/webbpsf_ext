@@ -1,9 +1,10 @@
 import sys
 
+import webbpsf, poppy
+from . import conf
+
 import logging
 _log = logging.getLogger('webbpsf_ext')
-
-from . import conf
 
 _DISABLE_FILE_LOGGING_VALUE = 'none'
 
@@ -143,3 +144,5 @@ def setup_logging(level='INFO', filename=None, verbose=True):
         # Use the string 'none' as a sentinel value for astropy.config
         filename = _DISABLE_FILE_LOGGING_VALUE
 
+    conf.logging_filename = filename
+    restart_logging(verbose=verbose)

@@ -69,8 +69,12 @@ class Conf(_config.ConfigNamespace):
     WEBBPSF_EXT_PATH = _config.ConfigItem(path, 'Directory path to data files \
                                     required for webbpsf_ext calculations.')
 
+    autoconfigure_logging = _config.ConfigItem(
+        False,
+        'Should webbpsf_ext configure logging for itself and others?'
+    )
     logging_level = _config.ConfigItem(
-        ['INFO', 'DEBUG', 'WARN', 'WARNING', 'ERROR', 'CRITICAL', 'NONE'],
+        ['INFO', 'DEBUG', 'WARN', 'ERROR', 'CRITICAL', 'NONE'],
         'Desired logging level for webbpsf_ext.'
     )
     default_logging_level = _config.ConfigItem('INFO', 

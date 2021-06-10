@@ -10,7 +10,8 @@ import astropy.units as u
 
 from scipy.interpolate import griddata, RegularGridInterpolator, interp1d
 
-from .utils import conf, S
+from . import conf
+from .utils import S
 from .bandpasses import miri_filter, nircam_filter
 from .maths import jl_poly, jl_poly_fit, binned_statistic
 from .robust import medabsdev
@@ -526,12 +527,12 @@ class source_spectrum(object):
     -------
     Generate a source spectrum and fit photometric data
 
-    >>> import pynrc
-    >>> from pynrc.nrc_utils import source_spectrum
+    >>> import webbpsf_ext
+    >>> from webbpsf_ext.spectra import source_spectrum
     >>>
     >>> name = 'HR8799'
     >>> vot = 'votables/{}.vot'.format(name)
-    >>> bp_k = pynrc.bp_2mass('k')
+    >>> bp_k = webbpsf_ext.bp_2mass('k')
     >>>
     >>> # Read in stellar spectrum model and normalize to Ks = 5.24
     >>> src = source_spectrum(name, 'F0V', 5.24, bp_k, vot,

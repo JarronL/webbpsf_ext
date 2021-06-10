@@ -2,7 +2,8 @@
 import numpy as np
 import multiprocessing as mp
 
-from .utils import conf, poppy, S
+from . import conf
+from .utils import poppy, S
 from .maths import jl_poly
 from .image_manip import krebin
 from .bandpasses import nircam_grism_res, niriss_grism_res
