@@ -1,14 +1,12 @@
 # Import libraries
+import scipy
 from webbpsf_ext.spectra import stellar_spectrum
-from astropy.units.equivalencies import pixel_scale
 import numpy as np
 
 import time
 import os, six
 from pathlib import Path
 
-from numpy.lib.function_base import rot90
-from numpy.lib.arraypad import pad
 import multiprocessing as mp
 import traceback
 
@@ -25,22 +23,22 @@ from .psfs import make_coeff_resid_grid, field_coeff_func
 from .opds import OPDFile_to_HDUList
 
 # Coordinates and image manipulation
-from .coords import NIRCam_V2V3_limits, rtheta_to_xy, xy_rot, gen_sgd_offsets, xy_to_rtheta
+from .coords import NIRCam_V2V3_limits, xy_rot, xy_to_rtheta, rtheta_to_xy
 from .image_manip import fshift, pad_or_cut_to_size, rotate_offset
 
 # Polynomial fitting routines
 from .maths import jl_poly, jl_poly_fit
-#from numpy.polynomial import legendre
 
 # Logging info
-from . import conf, setup_logging
+from . import conf
+from .logging_utils import setup_logging
 import logging
 _log = logging.getLogger('webbpsf_ext')
 
 from .version import __version__
 
 # WebbPSF and Poppy stuff
-from .utils import webbpsf, poppy
+from .utils import webbpsf, poppy, S
 from webbpsf import MIRI as webbpsf_MIRI
 from webbpsf import NIRCam as webbpsf_NIRCam
 from webbpsf.opds import OTE_Linear_Model_WSS
@@ -388,7 +386,7 @@ class NIRCam_ext(webbpsf_NIRCam):
         else:
             return None
 
-    def gen_mask_image(self, npix=None, pixelscale=None, bar_offset=None):
+    def gen_mask_image(self, npix=None, pixelscale=None, bar_offset=None, nd_squares=True):
         """
         Return an image representation of the focal plane mask.
         Output is in 'sci' coords orientation. If no image mask
@@ -419,10 +417,10 @@ class NIRCam_ext(webbpsf_NIRCam):
 
         if self.is_coron:
             if self.image_mask[-1:]=='B':
-                bar_offset = self.get_bar_offset() if bar_offset is not None else bar_offset
+                bar_offset = self.get_bar_offset() if bar_offset is None else bar_offset
             else:
                 bar_offset = None
-            mask = NIRCam_BandLimitedCoron(name=self.image_mask, module=self.module, 
+            mask = NIRCam_BandLimitedCoron(name=self.image_mask, module=self.module, nd_squares=nd_squares,
                                            bar_offset=bar_offset, auto_offset=None, **shifts)
 
             # Create wavefront to pass through mask and obtain transmission image
@@ -684,7 +682,7 @@ class NIRCam_ext(webbpsf_NIRCam):
             Type of input coordinates. 
 
                 * 'tel': arcsecs V2,V3
-                * 'sci': pixels, in conventional DMS axes orientation
+                * 'sci': pixels, in DMS axes orientation; aperture-dependent
                 * 'det': pixels, in raw detector read out axes orientation
                 * 'idl': arcsecs relative to aperture reference location.
 
@@ -692,9 +690,56 @@ class NIRCam_ext(webbpsf_NIRCam):
             Return PSFs in an HDUList rather than set of arrays (default: True).
         """        
 
-        return _calc_psf_from_coeff(self, sp=sp, return_oversample=return_oversample, 
-                                    wfe_drift=wfe_drift, coord_vals=coord_vals, 
-                                    coord_frame=coord_frame, **kwargs)
+        res = _calc_psf_from_coeff(self, sp=sp, return_oversample=return_oversample, 
+                                   coord_vals=coord_vals, coord_frame=coord_frame, 
+                                   wfe_drift=wfe_drift, **kwargs)
+
+
+        # Ensure correct scaling for off-axis PSFs
+        if self.is_coron and (coord_vals is not None):
+
+            nfield = np.size(coord_vals[0])
+            psf_sum = _nrc_coron_psf_sums(self, coord_vals, coord_frame)
+            if psf_sum is not None:
+
+                # Scale by spec obs countrate
+                if (sp is not None) and (not isinstance(sp, list)):
+                    nspec = 1
+                    obs = S.Observation(sp, self.bandpass, binset=self.bandpass.wave)
+                    sp_counts = obs.countrate()
+                elif (sp is not None) and (isinstance(sp, list)):
+                    nspec = len(sp)
+                    if nspec==1:
+                        obs = S.Observation(sp[0], self.bandpass, binset=self.bandpass.wave)
+                        sp_counts = obs.countrate()
+                    else:
+                        sp_counts = []
+                        for i, sp_norm in enumerate(sp):
+                            obs = S.Observation(sp_norm, self.bandpass, binset=self.bandpass.wave)
+                            sp_counts.append(obs.countrate())
+                        sp_counts = np.array(sp_counts)
+                else:
+                    nspec = 0
+                    sp_counts = 1
+
+                if nspec>1 and nspec!=nfield:
+                    _log.warn("Number of spectra should be 1 or equal number of field points")
+
+                # Scale by count rate
+                psf_sum *= sp_counts
+
+                # Re-scale PSF by total sums
+                if isinstance(res, fits.HDUList):
+                    for i, hdu in enumerate(res):
+                        hdu.data *= (psf_sum[i] / hdu.data.sum())
+                elif nfield==1:
+                    res *= (psf_sum[0] / res.sum())
+                else:
+                    for i, data in enumerate(res):
+                        data *= (psf_sum[i] / data.sum())
+
+        return res
+
 
     def calc_psf(self, add_distortion=None, fov_pixels=None, oversample=None, 
         wfe_drift=None, coord_vals=None, coord_frame='tel', **kwargs):
@@ -2080,7 +2125,7 @@ def _calc_psf_with_shifts(self, calc_psf_func, **kwargs):
 def _inst_copy(self):
     """ Return a copy of the current instrument class. """
 
-    # Change log levels to WARNING for pyNRC, WebbPSF, and POPPY
+    # Change log levels to WARNING for webbpsf_ext, WebbPSF, and POPPY
     log_prev = conf.logging_level
     setup_logging('WARN', verbose=False)
 
@@ -2241,7 +2286,7 @@ def _gen_psf_coeff(self, nproc=None, wfe_drift=0, force=False, save=True,
     temp_str = 'and saving' if save else 'but not saving'
     _log.info(f'Generating {temp_str} PSF coefficient')
 
-    # Change log levels to WARNING for pyNRC, WebbPSF, and POPPY
+    # Change log levels to WARNING for webbpsf_ext, WebbPSF, and POPPY
     log_prev = conf.logging_level
     setup_logging('WARN', verbose=False)
     
@@ -3661,10 +3706,8 @@ def _coeff_mod_wfe_mask(self, coord_vals, coord_frame):
     psf_coeff_hdr = self.psf_coeff_header
     psf_coeff     = self.psf_coeff
 
-    cf_fit = self._psf_coeff_mod['si_mask'] 
-    xgrid  = self._psf_coeff_mod['si_mask_xgrid']  # arcsec
-    ygrid  = self._psf_coeff_mod['si_mask_ygrid']  # arcsec
-    apname = self._psf_coeff_mod['si_mask_apname']
+    cf_fit = self._psf_coeff_mod.get('si_mask', None) 
+    apname = self._psf_coeff_mod.get('si_mask_apname', None)
     siaf_ap = self.siaf[apname] if apname is not None else None
 
     # Coord values are set, but not coefficients supplied
@@ -3712,6 +3755,8 @@ def _coeff_mod_wfe_mask(self, coord_vals, coord_frame):
         if (self.name=='NIRCam') and (np.any(np.abs(xoff_asec)>12) or np.any(np.abs(yoff_asec)>12)):
             _log.warn("Some values outside mask FoV (beyond 12 asec offset)!")
             
+        xgrid  = self._psf_coeff_mod['si_mask_xgrid']  # arcsec
+        ygrid  = self._psf_coeff_mod['si_mask_ygrid']  # arcsec
         cf_mod = field_coeff_func(xgrid, ygrid, cf_fit, xoff, yoff)
 
         # Pad cf_mod array with 0s if undersized
@@ -3760,3 +3805,93 @@ def _calc_psfs_sgd(self, xoff_asec, yoff_asec, use_coeff=True, return_oversample
         setup_logging(log_prev, verbose=False)
 
     return result
+
+
+def _nrc_coron_psf_sums(self, coord_vals, coord_frame):
+
+    # Ensure correct scaling for off-axis PSFs
+    if not self.is_coron:
+        return None
+
+    apname = self._psf_coeff_mod['si_mask_apname']
+    siaf_ap = self.siaf_ap if apname is None else self.siaf[apname]
+    cx, cy = np.asarray(coord_vals)
+    if coord_frame=='sci':
+        cx_sci, cy_sci = (cx, cy)
+    else:
+        cx_sci, cy_sci = siaf_ap.convert(cx, cy, coord_frame, 'sci')
+    # This reference point should correspond to center of round and bar masks
+    cx_ref, cy_ref = siaf_ap.reference_point('sci')
+
+    # Get mask attenuation
+    # Get mask with bar_offset in 20x20" field
+    im_mask = self.gen_mask_image(pixelscale=self.pixelscale, bar_offset=0, nd_squares=False)
+    ny, nx = im_mask.shape
+
+    # Linear combination of min/max to determine PSF sum
+    # Get a and b values for each coordinat point
+    ix_arr = np.array([cx_sci]).flatten() - cx_ref + nx/2
+    iy_arr = np.array([cy_sci]).flatten() - cy_ref + ny/2
+    ix_arr = ix_arr.astype('int')
+    iy_arr = iy_arr.astype('int')
+    # Place at corner if outside image mask bounds
+    ix_arr[(ix_arr<0) | (ix_arr>=nx)] = 0
+    iy_arr[(iy_arr<0) | (iy_arr>=ny)] = 0
+    avals = im_mask[iy_arr, ix_arr]**2
+    bvals = 1 - avals
+
+    # Store PSF sums for later retrieval
+    try:
+        psf_sums_dict = self._psf_sums
+    except AttributeError:
+        psf_sums_dict = {}
+        self._psf_sums = psf_sums_dict
+
+    # Offset PSF sum
+    psf_off_sum = psf_sums_dict.get('psf_off', None)
+    psf_off_max = psf_sums_dict.get('psf_off_max', None)
+    if (psf_off_sum is None) or (psf_off_max is None):
+        psf = _calc_psf_from_coeff(self, return_oversample=False, return_hdul=False, 
+                                    coord_vals=(10,10), coord_frame='idl')
+        psf_off_sum = psf.sum()
+        psf_sums_dict['psf_off'] = psf_off_sum
+        psf_sums_dict['psf_off_max'] = np.max(pad_or_cut_to_size(psf,10))
+
+    # Central PSF sum(s)
+    if self.image_mask[-1] == 'R':
+        psf_cen_sum = psf_sums_dict.get('psf_cen', None)
+        psf_cen_max = psf_sums_dict.get('psf_cen_max', None)
+        if (psf_cen_sum is None) or (psf_cen_max is None):
+            psf = _calc_psf_from_coeff(self, return_oversample=False, return_hdul=False)
+            psf_cen_sum = psf.sum()
+            psf_sums_dict['psf_cen'] = psf_cen_sum
+            psf_sums_dict['psf_cen_max'] = np.max(pad_or_cut_to_size(psf,10))
+    elif self.image_mask[-1] == 'B':
+        psf_cenm_sum = psf_sums_dict.get('psf_cen_m8', None)
+        psf_cenp_sum = psf_sums_dict.get('psf_cen_p8', None)
+        psf_cenm_max = psf_sums_dict.get('psf_cen_m8_max', None)
+        psf_cenp_max = psf_sums_dict.get('psf_cen_p8_max', None)
+        if (psf_cenm_sum is None) or (psf_cenm_max is None):
+            psf= _calc_psf_from_coeff(self, return_oversample=False, return_hdul=False, 
+                                        coord_vals=(-8,0), coord_frame='idl')
+            psf_cenm_sum = psf.sum()
+            psf_sums_dict['psf_cen_m8'] = psf_cenm_sum
+            psf_sums_dict['psf_cen_m8_max'] = np.max(pad_or_cut_to_size(psf,10))
+        if (psf_cenp_sum is None) or (psf_cenp_max is None):
+            psf= _calc_psf_from_coeff(self, return_oversample=False, return_hdul=False, 
+                                        coord_vals=(+8,0), coord_frame='idl')
+            psf_cenp_sum = psf.sum()
+            psf_sums_dict['psf_cen_p8'] = psf_cenp_sum
+            psf_sums_dict['psf_cen_p8_max'] = np.max(pad_or_cut_to_size(psf,10))
+
+        xasec = (np.array([cx_sci]).flatten() - cx_ref) * self.pixelscale
+        x1, x2 = (-8, 8)
+        y1, y2 = (psf_cenm_sum, psf_cenp_sum)
+        dx, dy = (x2-x1, y2-y1)
+        psf_cen_sum = y1 + (xasec - x1) * (dy / dx)
+    else:
+        _log.warn(f"Image mask not recognized: {self.image_mask}")
+        return None
+        
+    psf_sum = avals * psf_off_sum + bvals * psf_cen_sum
+    return psf_sum
