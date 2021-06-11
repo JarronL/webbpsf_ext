@@ -24,7 +24,7 @@ from .opds import OPDFile_to_HDUList
 
 # Coordinates and image manipulation
 from .coords import NIRCam_V2V3_limits, xy_rot, xy_to_rtheta, rtheta_to_xy
-from .image_manip import fshift, pad_or_cut_to_size, rotate_offset
+from .image_manip import frebin, fshift, pad_or_cut_to_size, rotate_offset
 
 # Polynomial fitting routines
 from .maths import jl_poly, jl_poly_fit
@@ -79,13 +79,16 @@ class NIRCam_ext(webbpsf_NIRCam):
     """
 
     def __init__(self, filter=None, pupil_mask=None, image_mask=None, 
-                 fov_pix=None, oversample=None, auto_gen_coeffs=False, **kwargs):
+                 fov_pix=None, oversample=None, **kwargs):
         
         webbpsf_NIRCam.__init__(self)
 
         # Initialize script
         _init_inst(self, filter=filter, pupil_mask=pupil_mask, image_mask=image_mask,
                    fov_pix=fov_pix, oversample=oversample, **kwargs)
+
+        self.options['jitter'] = 'gaussian'
+        self.options['jitter_sigma'] = 0.005
 
         # By default, WebbPSF has wavelength limits depending on the channel
         # which can interfere with coefficient calculations, so set these to 
@@ -112,11 +115,6 @@ class NIRCam_ext(webbpsf_NIRCam):
         self._ND_acq = False
         # Option to specify that coronagraphic substrate materials is present.
         self._coron_substrate = None
-
-        if auto_gen_coeffs:
-            self.gen_psf_coeff()
-            self.gen_wfedrift_coeff()
-            self.gen_wfefield_coeff()
 
     @property
     def save_dir(self):
@@ -799,97 +797,10 @@ class NIRCam_ext(webbpsf_NIRCam):
             undistorted counterpart. This will only be used for NIRCam, NIRISS, and FGS PSFs.
         """
 
-        # Automatically use already defined properties
-        add_distortion = self.include_distortions if add_distortion is None else add_distortion
-        fov_pixels = self.fov_pix if fov_pixels is None else fov_pixels
-
-        kwargs['add_distortion'] = add_distortion
-        kwargs['fov_pixels'] = fov_pixels
-
-        # Figure out sampling (always want >=4 for coronagraphy)
-        if self.is_coron:
-            if oversample is None:
-                if self.oversample>=4: # we're good!
-                    oversample = self.oversample
-                else: # different oversample and detector_oversample
-                    _log.info(f'For coronagraphy, setting oversample=4 and detector_oversample={oversample}')
-                    kwargs['detector_oversample'] = self.oversample
-                    oversample = 4
-            elif oversample<4: # no changes, but send informational message
-                _log.warn('oversample={oversample} may produce imprecise results for coronagraphy. Suggest >=4.')
-        else:
-            oversample = self.oversample if oversample is None else oversample
-
-        kwargs['oversample'] = oversample
-
-        # Drift OPD
-        wfe_drift = 0 if wfe_drift is None else wfe_drift
-        if wfe_drift != 0:
-            # Create copies
-            pupilopd_orig = deepcopy(self.pupilopd)
-            pupil_orig    = deepcopy(self.pupil)
-
-            # Get OPD info and convert to OTE LM
-            opd_dict = self.get_opd_info(HDUL_to_OTELM=True)
-            opd      = opd_dict['pupilopd']
-            # Perform OPD drift and store in pupilopd and pupil attributes
-            wfe_dict = self.drift_opd(wfe_drift, opd=opd)
-            self.pupilopd = wfe_dict['opd']
-            self.pupil    = wfe_dict['opd']
-
-        # Get new sci coord
-        if coord_vals is not None:
-            siaf_ap = self.siaf_ap
-            xorig, yorig = self.detector_position
-            xnew, ynew = coord_vals
-
-            coron_shift_x_orig = self.options.get('coron_shift_x', 0)
-            coron_shift_y_orig = self.options.get('coron_shift_y', 0)
-
-            xsci, ysci = siaf_ap.convert(xnew, ynew, coord_frame, 'sci')
-            self.detector_position = (xsci, ysci)
-
-            # For coronagraphy, perform mask shift
-            if self.is_coron:
-                # Mask shift information
-
-                field_rot = 0 if self._rotation is None else self._rotation
-
-                # Convert to mask shifts (arcsec)
-                xoff_asec = (xsci - siaf_ap.XSciRef) * siaf_ap.XSciScale  # asec offset from reference
-                yoff_asec = (ysci - siaf_ap.YSciRef) * siaf_ap.YSciScale  # asec offset from reference
-                xoff_mask, yoff_mask = xy_rot(-1*xoff_asec, -1*yoff_asec, field_rot)
-
-                # Shift mask in opposite direction
-                self.options['coron_shift_x'] = xoff_mask
-                self.options['coron_shift_y'] = yoff_mask
-
-        # Perform PSF calculation
         calc_psf_func = super().calc_psf
-        return_hdul = kwargs.pop('return_hdul', True)
-        return_oversample = kwargs.pop('return_oversample', True)
-        hdul = _calc_psf_with_shifts(self, calc_psf_func, **kwargs)
-
-        # Reset pupil and OPD
-        if wfe_drift != 0:
-            self.pupilopd = pupilopd_orig
-            self.pupil    = pupil_orig
-
-        # Return detector locations
-        if coord_vals is not None:
-            self.detector_position = (xorig, yorig)
-            self.options['coron_shift_x'] = coron_shift_x_orig
-            self.options['coron_shift_y'] = coron_shift_y_orig
-
-        # Check if we set return_hdul=False
-        if return_hdul:
-            res = hdul
-        else:
-            # If just returning a single image, determine oversample and distortion
-            if return_oversample:
-                res = hdul[0].data if len(hdul)==2 else hdul[2].data
-            else:
-                res = hdul[1].data if len(hdul)==2 else hdul[3].data
+        res = _calc_psf_webbpsf(self, calc_psf_func, add_distortion=add_distortion, 
+                                fov_pixels=fov_pixels, oversample=oversample, wfe_drift=wfe_drift, 
+                                coord_vals=coord_vals, coord_frame=coord_frame, **kwargs)
 
         return res
 
@@ -917,16 +828,15 @@ class NIRCam_ext(webbpsf_NIRCam):
 class MIRI_ext(webbpsf_MIRI):
     
     def __init__(self, filter=None, pupil_mask=None, image_mask=None, 
-                 fov_pix=None, oversample=None, auto_gen_coeffs=False, **kwargs):
+                 fov_pix=None, oversample=None, **kwargs):
         
         webbpsf_MIRI.__init__(self)
         _init_inst(self, filter=filter, pupil_mask=pupil_mask, image_mask=image_mask,
                    fov_pix=fov_pix, oversample=oversample, **kwargs)
 
-        if auto_gen_coeffs:
-            self.gen_psf_coeff()
-            self.gen_wfedrift_coeff()
-            self.gen_wfefield_coeff()
+        # No jitter for coronagraphy
+        self.options['jitter'] = None if self.is_coron else 'gaussian'
+        self.options['jitter_sigma'] = 0.003
 
     @property
     def save_dir(self):
@@ -1448,97 +1358,10 @@ class MIRI_ext(webbpsf_MIRI):
             plane, the PSF will be cropped so the shape of the distorted PSF will match it's
             undistorted counterpart. This will only be used for NIRCam, NIRISS, and FGS PSFs.
         """
-
-        # Automatically use already defined properties
-        add_distortion = self.include_distortions if add_distortion is None else add_distortion
-        fov_pixels = self.fov_pix if fov_pixels is None else fov_pixels
-
-        kwargs['add_distortion'] = add_distortion
-        kwargs['fov_pixels'] = fov_pixels
-
-        # Figure out sampling (always want >=4 for coronagraphy)
-        if self.is_coron:
-            if oversample is None:
-                if self.oversample>=4: # we're good!
-                    oversample = self.oversample
-                else: # different oversample and detector_oversample
-                    _log.info(f'For coronagraphy, setting oversample=4 and detector_oversample={oversample}')
-                    kwargs['detector_oversample'] = self.oversample
-                    oversample = 4
-            elif oversample<4: # no changes, but send informational message
-                _log.warn('oversample={oversample} may produce imprecise results for coronagraphy. Suggest >=4.')
-        else:
-            oversample = self.oversample if oversample is None else oversample
-        # Add oversample keyword
-        kwargs['oversample'] = oversample
-
-        # Drift OPD
-        wfe_drift = 0 if wfe_drift is None else wfe_drift
-        if wfe_drift != 0:
-            # Create copies
-            pupilopd_orig = deepcopy(self.pupilopd)
-            pupil_orig    = deepcopy(self.pupil)
-
-            # Get OPD info and convert to OTE LM
-            opd_dict = self.get_opd_info(HDUL_to_OTELM=True)
-            opd      = opd_dict['pupilopd']
-            # Perform OPD drift and store in pupilopd and pupil attributes
-            wfe_dict = self.drift_opd(wfe_drift, opd=opd)
-            self.pupilopd = wfe_dict['opd']
-            self.pupil    = wfe_dict['opd']
-
-        # Get new sci coord
-        if coord_vals is not None:
-            siaf_ap = self.siaf_ap
-            xorig, yorig = self.detector_position
-            xnew, ynew = coord_vals
-
-            coron_shift_x_orig = self.options.get('coron_shift_x', 0)
-            coron_shift_y_orig = self.options.get('coron_shift_y', 0)
-
-            xsci, ysci = siaf_ap.convert(xnew, ynew, coord_frame, 'sci')
-            self.detector_position = (xsci, ysci)
-
-            # For coronagraphy, perform mask shift
-            if self.is_coron:
-                # Mask shift information
-                field_rot = 0 if self._rotation is None else self._rotation
-
-                # Convert to mask shifts (arcsec)
-                xoff_asec = (xsci - siaf_ap.XSciRef) * siaf_ap.XSciScale  # asec offset from reference
-                yoff_asec = (ysci - siaf_ap.YSciRef) * siaf_ap.YSciScale  # asec offset from reference
-                xoff_mask, yoff_mask = xy_rot(-1*xoff_asec, -1*yoff_asec, field_rot)
-
-                # Shift mask in opposite direction
-                self.options['coron_shift_x'] = xoff_mask
-                self.options['coron_shift_y'] = yoff_mask
-
-        # Perform PSF calculation
         calc_psf_func = super().calc_psf
-        return_hdul = kwargs.pop('return_hdul', True)
-        return_oversample = kwargs.pop('return_oversample', True)
-        hdul = _calc_psf_with_shifts(self, calc_psf_func, **kwargs)
-
-        # Reset pupil and OPD
-        if wfe_drift != 0:
-            self.pupilopd = pupilopd_orig
-            self.pupil    = pupil_orig
-
-        # Return detector locations
-        if coord_vals is not None:
-            self.detector_position = (xorig, yorig)
-            self.options['coron_shift_x'] = coron_shift_x_orig
-            self.options['coron_shift_y'] = coron_shift_y_orig
-
-        # Check if we set return_hdul=False
-        if return_hdul:
-            res = hdul
-        else:
-            # If just returning a single image, determine oversample and distortion
-            if return_oversample:
-                res = hdul[0].data if len(hdul)==2 else hdul[2].data
-            else:
-                res = hdul[1].data if len(hdul)==2 else hdul[3].data
+        res = _calc_psf_webbpsf(self, calc_psf_func, add_distortion=add_distortion, 
+                                fov_pixels=fov_pixels, oversample=oversample, wfe_drift=wfe_drift, 
+                                coord_vals=coord_vals, coord_frame=coord_frame, **kwargs)
 
         return res
 
@@ -1625,12 +1448,13 @@ def _init_inst(self, filter=None, pupil_mask=None, image_mask=None,
     if (image_mask is None) and (kwargs.get('mask') is not None):
         image_mask = kwargs.get('mask')
 
-    if filter is not None:
-        self.filter = filter
     if pupil_mask is not None:
         self.pupil_mask = pupil_mask
     if image_mask is not None:
         self.image_mask = image_mask
+    # Do filter last
+    if filter is not None:
+        self.filter = filter
         
     # Don't include SI WFE error for coronagraphy
     if self.name=='MIRI':
@@ -1673,10 +1497,6 @@ def _init_inst(self, filter=None, pupil_mask=None, image_mask=None,
     # Name to save array of oversampled coefficients
     self._save_dir = None
     self._save_name = None
-    
-    # No jitter for coronagraphy
-    self.options['jitter'] = None if self.is_coron else 'gaussian'
-    self.options['jitter_sigma'] = 0.003
 
     # Max FoVs for calculating drift and field-dependent coefficient residuals
     # Any pixels beyond this size will be considered to have 0 residual difference
@@ -2057,6 +1877,13 @@ def _update_mask_shifts(self):
     self.options['source_offset_r'] = r
     self.options['source_offset_theta'] = th
 
+    print(xv, yv)
+    print('coron_shift_x: ', xv_pix, 'coron_shift_y: ', yv_pix)
+    print(xv_subpix, yv_subpix, rotation)
+    print(xoff_sub, yoff_sub)
+    print(r0, th0, x0, y0)
+    print('source_offset_r: ', r, 'source_offset_theta: ', th)
+
     # Store the xsub and ysub to back out later
     self.options['source_offset_xsub'] = xoff_sub
     self.options['source_offset_ysub'] = yoff_sub
@@ -2111,15 +1938,131 @@ def _calc_psf_with_shifts(self, calc_psf_func, **kwargs):
 
     # Perform sub-pixel shifting to reposition PSF at requested source location
     if self.is_coron:
+        pix_scale = hdul[0].header['PIXELSCL']
+        xoff_pix = self.options.get('source_offset_xsub',0) / pix_scale
+        yoff_pix = self.options.get('source_offset_ysub',0) / pix_scale
         for hdu in hdul:
-            xoff_pix = self.options.get('source_offset_xsub',0) / hdu.header['PIXELSCL']
-            yoff_pix = self.options.get('source_offset_ysub',0) / hdu.header['PIXELSCL']
             hdu.data = fshift(hdu.data, -1*xoff_pix, -1*yoff_pix)
 
         # Return to previous values
         self.options = options_orig
 
     return hdul
+
+def _calc_psf_webbpsf(self, calc_psf_func, add_distortion=None, fov_pixels=None, oversample=None, 
+        wfe_drift=None, coord_vals=None, coord_frame='tel', **kwargs):
+
+        """ Compute a WebbPSF PSF
+
+        Slight modification of inherent WebbPSF `calc_psf` function. If add_distortion, fov_pixels,
+        and oversample are not specified, then we automatically use the associated attributes.
+        """
+
+
+        # Automatically use already defined properties
+        add_distortion = self.include_distortions if add_distortion is None else add_distortion
+        fov_pixels = self.fov_pix if fov_pixels is None else fov_pixels
+
+        kwargs['add_distortion'] = add_distortion
+        kwargs['fov_pixels'] = fov_pixels
+
+        # Figure out sampling (always want >=4 for coronagraphy)
+        if self.is_coron:
+            if oversample is None:
+                if self.oversample>=4: # we're good!
+                    oversample = self.oversample
+                else: # different oversample and detector_oversample
+                    _log.info(f'For coronagraphy, setting oversample=4 and detector_oversample={oversample}')
+                    kwargs['detector_oversample'] = self.oversample
+                    oversample = 4
+            elif oversample<4: # no changes, but send informational message
+                _log.warn('oversample={oversample} may produce imprecise results for coronagraphy. Suggest >=4.')
+        else:
+            oversample = self.oversample if oversample is None else oversample
+
+        kwargs['oversample'] = oversample
+
+        # Drift OPD
+        wfe_drift = 0 if wfe_drift is None else wfe_drift
+        if wfe_drift != 0:
+            # Create copies
+            pupilopd_orig = deepcopy(self.pupilopd)
+            pupil_orig    = deepcopy(self.pupil)
+
+            # Get OPD info and convert to OTE LM
+            opd_dict = self.get_opd_info(HDUL_to_OTELM=True)
+            opd      = opd_dict['pupilopd']
+            # Perform OPD drift and store in pupilopd and pupil attributes
+            wfe_dict = self.drift_opd(wfe_drift, opd=opd)
+            self.pupilopd = wfe_dict['opd']
+            self.pupil    = wfe_dict['opd']
+
+        # Get new sci coord
+        if coord_vals is not None:
+            siaf_ap = self.siaf_ap
+            xorig, yorig = self.detector_position
+            xnew, ynew = coord_vals
+
+            coron_shift_x_orig = self.options.get('coron_shift_x', 0)
+            coron_shift_y_orig = self.options.get('coron_shift_y', 0)
+            bar_offset_orig = self.options.get('bar_offset', None)
+            self.options['bar_offset'] = 0
+
+            bar_offset_orig = self.options.get('b')
+
+            xidl, yidl = siaf_ap.convert(xnew, ynew, coord_frame, 'idl')
+            xsci, ysci = siaf_ap.convert(xnew, ynew, coord_frame, 'sci')
+            self.detector_position = (xsci, ysci)
+
+            # For coronagraphy, perform mask shift
+            if self.is_coron:
+                # Mask shift information
+
+                field_rot = 0 if self._rotation is None else self._rotation
+
+                # Convert to mask shifts (arcsec)
+                # xoff_asec = (xsci - siaf_ap.XSciRef) * siaf_ap.XSciScale  # asec offset from reference
+                # yoff_asec = (ysci - siaf_ap.YSciRef) * siaf_ap.YSciScale  # asec offset from reference
+                xoff_asec, yoff_asec = (xidl, yidl)
+                xoff_mask, yoff_mask = xy_rot(-1*xoff_asec, -1*yoff_asec, field_rot)
+
+                # print(xnew, ynew, coord_frame)
+                # print(xsci, ysci, siaf_ap.AperName)
+                # print(siaf_ap.XSciRef, siaf_ap.YSciRef)
+                # print(xoff_asec, yoff_asec)
+                # print(xoff_mask, yoff_mask)
+
+                # Shift mask in opposite direction
+                self.options['coron_shift_x'] = xoff_mask
+                self.options['coron_shift_y'] = yoff_mask
+
+        # Perform PSF calculation
+        return_hdul = kwargs.pop('return_hdul', True)
+        return_oversample = kwargs.pop('return_oversample', True)
+        hdul = _calc_psf_with_shifts(self, calc_psf_func, **kwargs)
+
+        # Reset pupil and OPD
+        if wfe_drift != 0:
+            self.pupilopd = pupilopd_orig
+            self.pupil    = pupil_orig
+
+        # Return options
+        if coord_vals is not None:
+            self.detector_position = (xorig, yorig)
+            self.options['coron_shift_x'] = coron_shift_x_orig
+            self.options['coron_shift_y'] = coron_shift_y_orig
+            self.options['bar_offset'] = bar_offset_orig
+
+        # Check if we set return_hdul=False
+        if return_hdul:
+            res = hdul
+        else:
+            # If just returning a single image, determine oversample and distortion
+            res = hdul[2].data if self.include_distortions else hdul[0].data
+            if not return_oversample:
+                res = frebin(res, scale=1/oversample)
+
+        return res
 
 
 def _inst_copy(self):
@@ -3024,7 +2967,7 @@ def _gen_wfemask_coeff(self, force=False, save=True, large_grid=None,
                 x_offsets = np.sort(-1*x_offsets)
                 y_offsets = np.sort(-1*y_offsets)
             else:
-                y_offsets = np.array([-8, -1.5, -0.1, -0.01, 0, 0.01, 0.1, 1.5, 8])
+                y_offsets = np.array([-8, -1.5, -0.1, -0.01, 0])
                 x_offsets = np.array([-8, -5, -2, 0, 2, 5, 8], dtype='float')
             grid_vals = np.array(np.meshgrid(x_offsets,y_offsets))
             xy_list = [(x,y) for x,y in grid_vals.reshape([2,-1]).transpose()]
@@ -3699,7 +3642,7 @@ def _coeff_mod_wfe_mask(self, coord_vals, coord_frame):
             * 'idl': arcsecs relative to aperture reference location.
     """
 
-    xsci = ysci = None
+    xidl = yidl = None
     cf_mod = 0
     nfield = None
 
@@ -3723,38 +3666,55 @@ def _coeff_mod_wfe_mask(self, coord_vals, coord_frame):
             _log.info("`calc_psf_from_coeff` will continue assuming bar_offset=0.")
         else:
             nfield = 1
-            # Get sci coords in pixels
-            bar_offset_pix = bar_offset / siaf_ap.XSciScale
-            xsci = siaf_ap.XSciRef + bar_offset_pix
-            ysci = siaf_ap.YSciRef
+            # Get coords in arcsec
+            xidl = bar_offset
+            yidl = 0
+            # # Get sci coords in pixels
+            # bar_offset_pix = bar_offset / siaf_ap.XSciScale
+            # xsci = siaf_ap.XSciRef + bar_offset_pix
+            # ysci = siaf_ap.YSciRef
     elif (coord_vals is not None):
         # Determine sci coordinates
         cframe = coord_frame.lower()
-        if cframe=='sci':
-            xsci, ysci = coord_vals  # pixels
-        elif cframe in ['det', 'tel', 'idl']:
+        
+        if cframe=='idl':
+            xidl, yidl = coord_vals
+        elif cframe in ['det', 'tel', 'sci']:
             x = np.array(coord_vals[0])
             y = np.array(coord_vals[1])
-            xsci, ysci = siaf_ap.convert(x,y, cframe, 'sci')
+            xidl, yidl = siaf_ap.convert(x,y, cframe, 'idl')
         else:
             _log.warning("coord_frame setting '{}' not recognized.".format(coord_frame))
             _log.warning("`calc_psf_from_coeff` will continue with default PSF.")
 
+        # if cframe=='sci':
+        #     xsci, ysci = coord_vals  # pixels
+        # elif cframe in ['det', 'tel', 'idl']:
+        #     x = np.array(coord_vals[0])
+        #     y = np.array(coord_vals[1])
+        #     xsci, ysci = siaf_ap.convert(x,y, cframe, 'sci')
+        # else:
+        #     _log.warning("coord_frame setting '{}' not recognized.".format(coord_frame))
+        #     _log.warning("`calc_psf_from_coeff` will continue with default PSF.")
+
     # PSF Modifications assuming we successfully found (xsci,ysci)
-    if (xsci is not None):
+    print(xidl, yidl)
+    if (xidl is not None):
         _log.info("Generating mask-dependent modifications...")
         # print(v2,v3)
-        nfield = np.size(xsci)
+        nfield = np.size(xidl)
         field_rot = 0 if self._rotation is None else self._rotation
 
         # Convert to mask shifts (arcsec)
-        xoff_asec = (xsci - siaf_ap.XSciRef) * siaf_ap.XSciScale  # asec offset from reference
-        yoff_asec = (ysci - siaf_ap.YSciRef) * siaf_ap.YSciScale  # asec offset from reference
+        # xoff_asec = (xsci - siaf_ap.XSciRef) * self.pixelscale #siaf_ap.XSciScale  # asec offset from reference
+        # yoff_asec = (ysci - siaf_ap.YSciRef) * self.pixelscale #siaf_ap.YSciScale  # asec offset from reference
+        xoff_asec, yoff_asec = (xidl, yidl)
         xoff, yoff = xy_rot(-1*xoff_asec, -1*yoff_asec, field_rot)
 
         if (self.name=='NIRCam') and (np.any(np.abs(xoff_asec)>12) or np.any(np.abs(yoff_asec)>12)):
             _log.warn("Some values outside mask FoV (beyond 12 asec offset)!")
             
+        print(xoff, yoff)
         xgrid  = self._psf_coeff_mod['si_mask_xgrid']  # arcsec
         ygrid  = self._psf_coeff_mod['si_mask_ygrid']  # arcsec
         cf_mod = field_coeff_func(xgrid, ygrid, cf_fit, xoff, yoff)
@@ -3805,7 +3765,6 @@ def _calc_psfs_sgd(self, xoff_asec, yoff_asec, use_coeff=True, return_oversample
         setup_logging(log_prev, verbose=False)
 
     return result
-
 
 def _nrc_coron_psf_sums(self, coord_vals, coord_frame):
 
