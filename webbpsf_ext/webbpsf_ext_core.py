@@ -1,6 +1,4 @@
 # Import libraries
-import scipy
-from webbpsf_ext.spectra import stellar_spectrum
 import numpy as np
 
 import time
@@ -21,6 +19,7 @@ from .bandpasses import miri_filter, nircam_filter
 from .psfs import nproc_use, gen_image_from_coeff
 from .psfs import make_coeff_resid_grid, field_coeff_func
 from .opds import OPDFile_to_HDUList
+from .spectra import stellar_spectrum
 
 # Coordinates and image manipulation
 from .coords import NIRCam_V2V3_limits, xy_rot, xy_to_rtheta, rtheta_to_xy
@@ -28,6 +27,9 @@ from .image_manip import frebin, fshift, pad_or_cut_to_size, rotate_offset
 
 # Polynomial fitting routines
 from .maths import jl_poly, jl_poly_fit
+import scipy
+from scipy.interpolate import interp1d
+
 
 # Logging info
 from . import conf
@@ -694,7 +696,11 @@ class NIRCam_ext(webbpsf_NIRCam):
 
 
         # Ensure correct scaling for off-axis PSFs
-        if self.is_coron and (coord_vals is not None):
+        # if self.is_coron and (coord_vals is not None):
+        # TODO: Revist this. 
+        #       Other bug fixes may have rendered this unnecessary.
+        #       Always skip for now.
+        if False: # TODO: 
 
             nfield = np.size(coord_vals[0])
             psf_sum = _nrc_coron_psf_sums(self, coord_vals, coord_frame)
@@ -1877,16 +1883,16 @@ def _update_mask_shifts(self):
     self.options['source_offset_r'] = r
     self.options['source_offset_theta'] = th
 
-    print(xv, yv)
-    print('coron_shift_x: ', xv_pix, 'coron_shift_y: ', yv_pix)
-    print(xv_subpix, yv_subpix, rotation)
-    print(xoff_sub, yoff_sub)
-    print(r0, th0, x0, y0)
-    print('source_offset_r: ', r, 'source_offset_theta: ', th)
+    # print(xv, yv)
+    # print('coron_shift_x: ', xv_pix, 'coron_shift_y: ', yv_pix)
+    # print(xv_subpix, yv_subpix, rotation)
+    # print(xoff_sub, yoff_sub)
+    # print(r0, th0, x0, y0)
+    # print('source_offset_r: ', r, 'source_offset_theta: ', th)
 
     # Store the xsub and ysub to back out later
-    self.options['source_offset_xsub'] = xoff_sub
-    self.options['source_offset_ysub'] = yoff_sub
+    self.options['source_offset_xsub'] = xoff_sub # arcsec
+    self.options['source_offset_ysub'] = yoff_sub # arcsec
 
 
 def _calc_psf_with_shifts(self, calc_psf_func, **kwargs):
@@ -1929,7 +1935,18 @@ def _calc_psf_with_shifts(self, calc_psf_func, **kwargs):
     src = {'wavelengths': wave_um*1e-6, 'weights': weights}
 
     # Perform PSF calculation
-    hdul = calc_psf_func(source=src, **kwargs)
+    kw_list = [
+        'nlambda', 'monochromatic',
+        'fov_arcsec', 'fov_pixels', 'oversample',
+        'detector_oversample', 'fft_oversample',
+        'outfile', 'overwrite', 'display',
+        'save_intermediates', 'return_intermediates', 
+        'normalize', 'add_distortion', 'crop_psf'
+        ]
+    kwargs2 = {}
+    for kw in kw_list:
+        if kw in kwargs.keys(): kwargs2[kw] = kwargs[kw]
+    hdul = calc_psf_func(source=src, **kwargs2)
 
     # Scale PSF by total incident source flux
     if do_counts:
@@ -1938,10 +1955,10 @@ def _calc_psf_with_shifts(self, calc_psf_func, **kwargs):
 
     # Perform sub-pixel shifting to reposition PSF at requested source location
     if self.is_coron:
-        pix_scale = hdul[0].header['PIXELSCL']
-        xoff_pix = self.options.get('source_offset_xsub',0) / pix_scale
-        yoff_pix = self.options.get('source_offset_ysub',0) / pix_scale
         for hdu in hdul:
+            pix_scale = hdu.header['PIXELSCL']
+            xoff_pix = self.options.get('source_offset_xsub',0) / pix_scale
+            yoff_pix = self.options.get('source_offset_ysub',0) / pix_scale
             hdu.data = fshift(hdu.data, -1*xoff_pix, -1*yoff_pix)
 
         # Return to previous values
@@ -1980,6 +1997,8 @@ def _calc_psf_webbpsf(self, calc_psf_func, add_distortion=None, fov_pixels=None,
         else:
             oversample = self.oversample if oversample is None else oversample
 
+        # Note: output image oversampling is overriden by 'detector_oversample'
+        # This simply specifies FFT ovesampling
         kwargs['oversample'] = oversample
 
         # Drift OPD
@@ -2060,7 +2079,7 @@ def _calc_psf_webbpsf(self, calc_psf_func, add_distortion=None, fov_pixels=None,
             # If just returning a single image, determine oversample and distortion
             res = hdul[2].data if self.include_distortions else hdul[0].data
             if not return_oversample:
-                res = frebin(res, scale=1/oversample)
+                res = frebin(res, scale=1/self.oversample)
 
         return res
 
@@ -2954,7 +2973,7 @@ def _gen_wfemask_coeff(self, force=False, save=True, large_grid=None,
         else: # Bar masks
             if large_grid:
                 # Include SGD points
-                y_inner = np.array([0, 0.01, 0.02, 0.05, 0.1])
+                y_inner = np.array([0.01, 0.02, 0.05, 0.1])
                 # LWB sampling of wedge gradient
                 y_mid = np.array([0.6, 1.2, 2, 2.5])
                 if 'SW' in self.image_mask:
@@ -2965,6 +2984,7 @@ def _gen_wfemask_coeff(self, force=False, save=True, large_grid=None,
 
                 # Mask offset values in ascending order
                 x_offsets = np.sort(-1*x_offsets)
+                y_offsets = np.concatenate([-1*y_offsets,[0],y_offsets])
                 y_offsets = np.sort(-1*y_offsets)
             else:
                 y_offsets = np.array([-8, -1.5, -0.1, -0.01, 0])
@@ -2975,17 +2995,15 @@ def _gen_wfemask_coeff(self, force=False, save=True, large_grid=None,
 
             # Small grid dithers indices and close IWA
             # Always calculate these explicitly
-            ind_zero = np.abs(yoff)==0
+            ind_zero = (np.abs(xoff)==0) & (np.abs(yoff)==0)
             iwa = 0.1
             ind_sgd = (np.abs(yoff)<=iwa) & ~ind_zero
 
     # Get PSF coefficients for each specified position
     log_prev = conf.logging_level
     setup_logging('WARN', verbose=False)
-    cf_all = []
     npos = len(xoff)
     fov_pix_over = self.fov_pix * self.oversample
-    pixscale = self.pixelscale
     cf_all = np.zeros([npos, self.ndeg+1, fov_pix_over, fov_pix_over], dtype='float')
     # Create progress bar object
     pbar = trange(npos, leave=False, desc="Mask Offsets")
@@ -2999,7 +3017,7 @@ def _gen_wfemask_coeff(self, force=False, save=True, large_grid=None,
 
         # Pixel offset information
         field_rot = 0 if self._rotation is None else self._rotation
-        xyoff_pix = np.array(xy_rot(-1*xv, -1*yv, -field_rot)) / self.pixelscale
+        xyoff_pix = np.array(xy_rot(-1*xv, -1*yv, -1*field_rot)) / self.pixelscale
         self.detector_position = np.array(detector_position_orig) + xyoff_pix
 
         # Skip SGD locations until later
@@ -3119,8 +3137,8 @@ def _gen_wfemask_coeff(self, force=False, save=True, large_grid=None,
         cf_resid_all = cf_resid
 
         # SGD positions
-        ind_zero = np.abs(yoff_all)==0
-        ind_sgd = (np.abs(xoff_all)<=iwa) & ~ind_zero
+        ind_zero = (np.abs(xoff_all)==0) & (np.abs(yoff_all)==0)
+        ind_sgd = (np.abs(yoff_all)<=iwa) & ~ind_zero
 
     # Short cuts for quicker creation
     elif (self.name=='NIRCam') and (self.image_mask[-1]=='R') and (large_grid==False):
@@ -3220,8 +3238,8 @@ def _gen_wfemask_coeff(self, force=False, save=True, large_grid=None,
         # Get all SGD positions now that we've combined all x/y positions
         # For SGD regions, we want to calculate actual PSFs, not take
         # the shortcuts that were done above
-        ind_zero = np.abs(yoff_all)==0
-        ind_sgd = (np.abs(xoff_all)<=iwa) & ~ind_zero
+        ind_zero = (np.abs(xoff_all)==0) & (np.abs(yoff_all)==0)
+        ind_sgd = (np.abs(yoff_all)<=iwa) & ~ind_zero
     else:
         msg = f'{self.name} not implemented for different WFE mask modifications.'
         raise NotImplementedError(msg)
@@ -3698,7 +3716,7 @@ def _coeff_mod_wfe_mask(self, coord_vals, coord_frame):
         #     _log.warning("`calc_psf_from_coeff` will continue with default PSF.")
 
     # PSF Modifications assuming we successfully found (xsci,ysci)
-    print(xidl, yidl)
+    # print(xidl, yidl)
     if (xidl is not None):
         _log.info("Generating mask-dependent modifications...")
         # print(v2,v3)
@@ -3714,7 +3732,7 @@ def _coeff_mod_wfe_mask(self, coord_vals, coord_frame):
         if (self.name=='NIRCam') and (np.any(np.abs(xoff_asec)>12) or np.any(np.abs(yoff_asec)>12)):
             _log.warn("Some values outside mask FoV (beyond 12 asec offset)!")
             
-        print(xoff, yoff)
+        # print(xoff, yoff)
         xgrid  = self._psf_coeff_mod['si_mask_xgrid']  # arcsec
         ygrid  = self._psf_coeff_mod['si_mask_ygrid']  # arcsec
         cf_mod = field_coeff_func(xgrid, ygrid, cf_fit, xoff, yoff)
@@ -3783,10 +3801,12 @@ def _nrc_coron_psf_sums(self, coord_vals, coord_frame):
     cx_ref, cy_ref = siaf_ap.reference_point('sci')
 
     # Get mask attenuation
-    # Get mask with bar_offset in 20x20" field
+    # Get mask with bar in 20x20" field
     im_mask = self.gen_mask_image(pixelscale=self.pixelscale, bar_offset=0, nd_squares=False)
     ny, nx = im_mask.shape
 
+    # TODO: Use analytical formula for round and bar mask transmission
+    #       rather than discrete indexing of a finitely sampled mask.
     # Linear combination of min/max to determine PSF sum
     # Get a and b values for each coordinat point
     ix_arr = np.array([cx_sci]).flatten() - cx_ref + nx/2
@@ -3798,6 +3818,8 @@ def _nrc_coron_psf_sums(self, coord_vals, coord_frame):
     iy_arr[(iy_arr<0) | (iy_arr>=ny)] = 0
     avals = im_mask[iy_arr, ix_arr]**2
     bvals = 1 - avals
+
+    print(avals, bvals)
 
     # Store PSF sums for later retrieval
     try:
@@ -3826,28 +3848,32 @@ def _nrc_coron_psf_sums(self, coord_vals, coord_frame):
             psf_sums_dict['psf_cen'] = psf_cen_sum
             psf_sums_dict['psf_cen_max'] = np.max(pad_or_cut_to_size(psf,10))
     elif self.image_mask[-1] == 'B':
-        psf_cenm_sum = psf_sums_dict.get('psf_cen_m8', None)
-        psf_cenp_sum = psf_sums_dict.get('psf_cen_p8', None)
-        psf_cenm_max = psf_sums_dict.get('psf_cen_m8_max', None)
-        psf_cenp_max = psf_sums_dict.get('psf_cen_p8_max', None)
-        if (psf_cenm_sum is None) or (psf_cenm_max is None):
-            psf= _calc_psf_from_coeff(self, return_oversample=False, return_hdul=False, 
-                                        coord_vals=(-8,0), coord_frame='idl')
-            psf_cenm_sum = psf.sum()
-            psf_sums_dict['psf_cen_m8'] = psf_cenm_sum
-            psf_sums_dict['psf_cen_m8_max'] = np.max(pad_or_cut_to_size(psf,10))
-        if (psf_cenp_sum is None) or (psf_cenp_max is None):
-            psf= _calc_psf_from_coeff(self, return_oversample=False, return_hdul=False, 
-                                        coord_vals=(+8,0), coord_frame='idl')
-            psf_cenp_sum = psf.sum()
-            psf_sums_dict['psf_cen_p8'] = psf_cenp_sum
-            psf_sums_dict['psf_cen_p8_max'] = np.max(pad_or_cut_to_size(psf,10))
+        # Build a list of bar offsets to interpolate scale factors
+        xvals = psf_sums_dict.get('psf_cen_xvals', None)
+        psf_cen_sum_arr = psf_sums_dict.get('psf_cen_sum_arr', None)
+        psf_cen_max_arr = psf_sums_dict.get('psf_cen_max_arr', None)
+
+        if (psf_cen_sum_arr is None) or (psf_cen_max_arr is None):
+            xvals = np.linspace(-8,8,5)
+            psf_sums_dict['psf_cen_xvals'] = xvals
+
+            psf_cen_sum_arr = []
+            psf_cen_max_arr = []
+            for xv in xvals:
+                psf= _calc_psf_from_coeff(self, return_oversample=False, return_hdul=False, 
+                                          coord_vals=(xv,0), coord_frame='idl')
+                psf_cen_sum_arr.append(psf.sum())
+                psf_cen_max_arr.append(np.max(pad_or_cut_to_size(psf,10)))
+            psf_cen_sum_arr = np.array(psf_cen_sum_arr)
+            psf_cen_max_arr = np.array(psf_cen_max_arr)
+            psf_sums_dict['psf_cen_sum_arr'] = psf_cen_sum_arr
+            psf_sums_dict['psf_cen_max_arr'] = psf_cen_max_arr
 
         xasec = (np.array([cx_sci]).flatten() - cx_ref) * self.pixelscale
-        x1, x2 = (-8, 8)
-        y1, y2 = (psf_cenm_sum, psf_cenp_sum)
-        dx, dy = (x2-x1, y2-y1)
-        psf_cen_sum = y1 + (xasec - x1) * (dy / dx)
+        # Interpolation function
+        finterp = interp1d(xvals, psf_cen_sum_arr, kind='linear', fill_value='extrapolate')
+        psf_cen_sum = finterp(xasec)
+        print(xasec, psf_cen_sum)
     else:
         _log.warn(f"Image mask not recognized: {self.image_mask}")
         return None
