@@ -619,7 +619,7 @@ class NIRCam_ext(webbpsf_NIRCam):
         """
         return _gen_wfemask_coeff(self, large_grid=large_grid, force=force, save=save, **kwargs)
 
-    def gen_wfefield_coeff(self, large_grid=False, force=False, save=True, **kwargs):
+    def gen_wfefield_coeff(self, force=False, save=True, **kwargs):
         """ Fit WFE field-dependent coefficients
 
         Find a relationship between field position and PSF coefficients for
@@ -647,8 +647,8 @@ class NIRCam_ext(webbpsf_NIRCam):
         return _gen_wfefield_coeff(self, force=force, save=save, **kwargs)
 
 
-    def calc_psf_from_coeff(self, sp=None, return_oversample=True, 
-        wfe_drift=None, coord_vals=None, coord_frame='tel', **kwargs):
+    def calc_psf_from_coeff(self, sp=None, return_oversample=True, wfe_drift=None, 
+        coord_vals=None, coord_frame='tel', coron_rescale=False, **kwargs):
         """ Create PSF image from polynomial coefficients
         
         Create a PSF image from instrument settings. The image is noiseless and
@@ -694,53 +694,9 @@ class NIRCam_ext(webbpsf_NIRCam):
                                    coord_vals=coord_vals, coord_frame=coord_frame, 
                                    wfe_drift=wfe_drift, **kwargs)
 
-
         # Ensure correct scaling for off-axis PSFs
-        # if self.is_coron and (coord_vals is not None):
-        # TODO: Revist this. 
-        #       Other bug fixes may have rendered this unnecessary.
-        #       Always skip for now.
-        if False: # TODO: 
-
-            nfield = np.size(coord_vals[0])
-            psf_sum = _nrc_coron_psf_sums(self, coord_vals, coord_frame)
-            if psf_sum is not None:
-
-                # Scale by spec obs countrate
-                if (sp is not None) and (not isinstance(sp, list)):
-                    nspec = 1
-                    obs = S.Observation(sp, self.bandpass, binset=self.bandpass.wave)
-                    sp_counts = obs.countrate()
-                elif (sp is not None) and (isinstance(sp, list)):
-                    nspec = len(sp)
-                    if nspec==1:
-                        obs = S.Observation(sp[0], self.bandpass, binset=self.bandpass.wave)
-                        sp_counts = obs.countrate()
-                    else:
-                        sp_counts = []
-                        for i, sp_norm in enumerate(sp):
-                            obs = S.Observation(sp_norm, self.bandpass, binset=self.bandpass.wave)
-                            sp_counts.append(obs.countrate())
-                        sp_counts = np.array(sp_counts)
-                else:
-                    nspec = 0
-                    sp_counts = 1
-
-                if nspec>1 and nspec!=nfield:
-                    _log.warn("Number of spectra should be 1 or equal number of field points")
-
-                # Scale by count rate
-                psf_sum *= sp_counts
-
-                # Re-scale PSF by total sums
-                if isinstance(res, fits.HDUList):
-                    for i, hdu in enumerate(res):
-                        hdu.data *= (psf_sum[i] / hdu.data.sum())
-                elif nfield==1:
-                    res *= (psf_sum[0] / res.sum())
-                else:
-                    for i, data in enumerate(res):
-                        data *= (psf_sum[i] / data.sum())
+        if self.is_coron and coron_rescale and (coord_vals is not None):
+            res = _nrc_coron_rescale(self, res, coord_vals, coord_frame, sp=sp)
 
         return res
 
@@ -3537,6 +3493,11 @@ def _wfe_drift_key(self, coord_vals, coord_frame):
         yoff_asec = (ysci - siaf_ap.YSciRef) * siaf_ap.YSciScale
         xoff, yoff = xy_rot(-1*xoff_asec, -1*yoff_asec, field_rot)
         roff = np.sqrt(xoff**2 + yoff**2)
+
+        # For bar masks, evaluate based on vertical distance
+        if self.is_coron and self.image_mask[-1]=='B':
+            roff = np.abs(yoff)
+
         if nfield==1:
             roff = [roff]
 
@@ -3784,7 +3745,12 @@ def _calc_psfs_sgd(self, xoff_asec, yoff_asec, use_coeff=True, return_oversample
 
     return result
 
-def _nrc_coron_psf_sums(self, coord_vals, coord_frame):
+def _nrc_coron_psf_sums(self, coord_vals, coord_frame, return_max=False):
+    """
+    Function to analytically determine the sum and max value 
+    of a NIRCam off-axis coronagraphic PSF while partially
+    occulted by the coronagrpahic mask.
+    """
 
     # Ensure correct scaling for off-axis PSFs
     if not self.is_coron:
@@ -3793,33 +3759,19 @@ def _nrc_coron_psf_sums(self, coord_vals, coord_frame):
     apname = self._psf_coeff_mod['si_mask_apname']
     siaf_ap = self.siaf_ap if apname is None else self.siaf[apname]
     cx, cy = np.asarray(coord_vals)
-    if coord_frame=='sci':
-        cx_sci, cy_sci = (cx, cy)
+    if coord_frame=='idl':
+        cx_idl, cy_idl = (cx, cy)
     else:
-        cx_sci, cy_sci = siaf_ap.convert(cx, cy, coord_frame, 'sci')
-    # This reference point should correspond to center of round and bar masks
-    cx_ref, cy_ref = siaf_ap.reference_point('sci')
+        cx_idl, cy_idl = siaf_ap.convert(cx, cy, coord_frame, 'idl')
 
-    # Get mask attenuation
-    # Get mask with bar in 20x20" field
-    im_mask = self.gen_mask_image(pixelscale=self.pixelscale, bar_offset=0, nd_squares=False)
-    ny, nx = im_mask.shape
-
-    # TODO: Use analytical formula for round and bar mask transmission
-    #       rather than discrete indexing of a finitely sampled mask.
+    # Get mask transmission
+    trans = nrc_mask_trans(self.image_mask, cx_idl, cy_idl)
     # Linear combination of min/max to determine PSF sum
-    # Get a and b values for each coordinat point
-    ix_arr = np.array([cx_sci]).flatten() - cx_ref + nx/2
-    iy_arr = np.array([cy_sci]).flatten() - cy_ref + ny/2
-    ix_arr = ix_arr.astype('int')
-    iy_arr = iy_arr.astype('int')
-    # Place at corner if outside image mask bounds
-    ix_arr[(ix_arr<0) | (ix_arr>=nx)] = 0
-    iy_arr[(iy_arr<0) | (iy_arr>=ny)] = 0
-    avals = im_mask[iy_arr, ix_arr]**2
+    # Get a and b values for each position
+    avals = trans**2
     bvals = 1 - avals
 
-    print(avals, bvals)
+    # print(avals, bvals)
 
     # Store PSF sums for later retrieval
     try:
@@ -3835,8 +3787,9 @@ def _nrc_coron_psf_sums(self, coord_vals, coord_frame):
         psf = _calc_psf_from_coeff(self, return_oversample=False, return_hdul=False, 
                                     coord_vals=(10,10), coord_frame='idl')
         psf_off_sum = psf.sum()
+        psf_off_max = np.max(pad_or_cut_to_size(psf,10))
         psf_sums_dict['psf_off'] = psf_off_sum
-        psf_sums_dict['psf_off_max'] = np.max(pad_or_cut_to_size(psf,10))
+        psf_sums_dict['psf_off_max'] = psf_off_max
 
     # Central PSF sum(s)
     if self.image_mask[-1] == 'R':
@@ -3854,7 +3807,7 @@ def _nrc_coron_psf_sums(self, coord_vals, coord_frame):
         psf_cen_max_arr = psf_sums_dict.get('psf_cen_max_arr', None)
 
         if (psf_cen_sum_arr is None) or (psf_cen_max_arr is None):
-            xvals = np.linspace(-8,8,5)
+            xvals = np.linspace(-8,8,9)
             psf_sums_dict['psf_cen_xvals'] = xvals
 
             psf_cen_sum_arr = []
@@ -3869,14 +3822,134 @@ def _nrc_coron_psf_sums(self, coord_vals, coord_frame):
             psf_sums_dict['psf_cen_sum_arr'] = psf_cen_sum_arr
             psf_sums_dict['psf_cen_max_arr'] = psf_cen_max_arr
 
-        xasec = (np.array([cx_sci]).flatten() - cx_ref) * self.pixelscale
         # Interpolation function
         finterp = interp1d(xvals, psf_cen_sum_arr, kind='linear', fill_value='extrapolate')
-        psf_cen_sum = finterp(xasec)
-        print(xasec, psf_cen_sum)
+        psf_cen_sum = finterp(cx_idl)
+        finterp = interp1d(xvals, psf_cen_max_arr, kind='linear', fill_value='extrapolate')
+        psf_cen_max = finterp(cx_idl)
     else:
         _log.warn(f"Image mask not recognized: {self.image_mask}")
         return None
         
-    psf_sum = avals * psf_off_sum + bvals * psf_cen_sum
-    return psf_sum
+    if return_max:
+        psf_max = avals * psf_off_max + bvals * psf_cen_max
+        return psf_max
+    else:
+        psf_sum = avals * psf_off_sum + bvals * psf_cen_sum
+        return psf_sum
+
+
+def _nrc_coron_rescale(self, res, coord_vals, coord_frame, sp=None):
+    """
+    Function for better scaling of NIRCam coronagraphic output for sources
+    that overlap the image masks. 
+    """
+
+    if coord_vals is None:
+        return res
+
+    nfield = np.size(coord_vals[0])
+    psf_sum = _nrc_coron_psf_sums(self, coord_vals, coord_frame)
+    if psf_sum is None:
+        return res
+
+    # Scale by spec obs countrate
+    if (sp is not None) and (not isinstance(sp, list)):
+        nspec = 1
+        obs = S.Observation(sp, self.bandpass, binset=self.bandpass.wave)
+        sp_counts = obs.countrate()
+    elif (sp is not None) and (isinstance(sp, list)):
+        nspec = len(sp)
+        if nspec==1:
+            obs = S.Observation(sp[0], self.bandpass, binset=self.bandpass.wave)
+            sp_counts = obs.countrate()
+        else:
+            sp_counts = []
+            for i, sp_norm in enumerate(sp):
+                obs = S.Observation(sp_norm, self.bandpass, binset=self.bandpass.wave)
+                sp_counts.append(obs.countrate())
+            sp_counts = np.array(sp_counts)
+    else:
+        nspec = 0
+        sp_counts = 1
+
+    if nspec>1 and nspec!=nfield:
+        _log.warn("Number of spectra should be 1 or equal number of field points")
+
+    # Scale by count rate
+    psf_sum *= sp_counts
+
+    # Re-scale PSF by total sums
+    if isinstance(res, fits.HDUList):
+        for i, hdu in enumerate(res):
+            hdu.data *= (psf_sum[i] / hdu.data.sum())
+    elif nfield==1:
+        res *= (psf_sum[0] / res.sum())
+    else:
+        for i, data in enumerate(res):
+            data *= (psf_sum[i] / data.sum())
+
+    return res
+
+
+def nrc_mask_trans(image_mask, x, y):
+
+    import scipy
+
+    if not isinstance(x, np.ndarray):
+        x = np.asarray([x]).flatten()
+        y = np.asarray([y]).flatten()
+
+    if image_mask[-1]=='R':
+
+        r = poppy.accel_math._r(x, y)
+        if image_mask == 'MASK210R':
+            sigma = 5.253
+        elif image_mask == 'MASK335R':
+            sigma = 3.2927866
+        elif image_mask == 'MASK430R':
+            sigma = 2.58832
+
+        sigmar = sigma * r
+
+        # clip sigma: The minimum is to avoid divide by zero
+        #             the maximum truncates after the first sidelobe to match the hardware
+        bessel_j1_zero2 = scipy.special.jn_zeros(1, 2)[1]
+        sigmar.clip(np.finfo(sigmar.dtype).tiny, bessel_j1_zero2, out=sigmar)  # avoid divide by zero -> NaNs
+        transmission = (1 - (2 * scipy.special.j1(sigmar) / sigmar) ** 2)
+        transmission[r == 0] = 0  # special case center point (value based on L'Hopital's rule)
+
+    if image_mask[-1]=='B':
+        # This is hard-coded to the wedge-plus-flat-regions shape for NIRCAM
+
+        # the scale fact should depend on X coord in arcsec, scaling across a 20 arcsec FOV.
+        # map flat regions to 2.5 arcsec each
+        # map -7.5 to 2, +7.5 to 6. slope is 4/15, offset is +9.5
+        wedgesign = 1 if image_mask == 'MASKSWB' else -1  # wide ends opposite for SW and LW
+
+        scalefact = (2 + (x * wedgesign + 7.5) * 4 / 15).clip(2, 6)
+
+        # Working out the sigma parameter vs. wavelength to get that wedge pattern is non trivial
+        # This is NOT a linear relationship. See calc_blc_wedge helper fn below.
+
+        if image_mask == 'MASKSWB':  
+            polyfitcoeffs = np.array([2.01210737e-04, -7.18758337e-03, 1.12381516e-01,
+                                        -1.00877701e+00, 5.72538509e+00, -2.12943497e+01,
+                                        5.18745152e+01, -7.97815606e+01, 7.02728734e+01])
+        elif image_mask == 'MASKLWB':  
+            polyfitcoeffs = np.array([9.16195583e-05, -3.27354831e-03, 5.11960734e-02,
+                                        -4.59674047e-01, 2.60963397e+00, -9.70881273e+00,
+                                        2.36585911e+01, -3.63978587e+01, 3.20703511e+01])
+        else:
+            raise NotImplementedError(f"{image_mask} not a valid name for NIRCam wedge occulter")
+
+        sigmas = scipy.poly1d(polyfitcoeffs)(scalefact)
+
+        sigmar = sigmas * np.abs(y)
+        # clip sigma: The minimum is to avoid divide by zero
+        #             the maximum truncates after the first sidelobe to match the hardware
+        sigmar.clip(min=np.finfo(sigmar.dtype).tiny, max=2 * np.pi, out=sigmar)
+        transmission = (1 - (np.sin(sigmar) / sigmar) ** 2)
+        transmission[y == 0] = 0 
+
+    return transmission
