@@ -23,7 +23,8 @@ from .spectra import stellar_spectrum
 
 # Coordinates and image manipulation
 from .coords import NIRCam_V2V3_limits, xy_rot, xy_to_rtheta, rtheta_to_xy
-from .image_manip import frebin, fshift, pad_or_cut_to_size, rotate_offset
+from .image_manip import frebin, pad_or_cut_to_size, rotate_offset
+from .image_manip import fourier_imshift, fshift
 
 # Polynomial fitting routines
 from .maths import jl_poly, jl_poly_fit
@@ -757,6 +758,14 @@ class NIRCam_ext(webbpsf_NIRCam):
             If True, when the PSF is rotated to match the detector's rotation in the focal
             plane, the PSF will be cropped so the shape of the distorted PSF will match it's
             undistorted counterpart. This will only be used for NIRCam, NIRISS, and FGS PSFs.
+
+        Keyword Args
+        ------------
+        return_hdul : bool
+            Return PSFs in an HDUList rather than set of arrays (default: True).
+        return_oversample : bool
+            Returns the oversampled version of the PSF instead of detector-sampled PSF.
+            Only valid for `reaturn_hdul=False`, otherwise full HDUList returned. Default: True.
         """
 
         calc_psf_func = super().calc_psf
@@ -1319,6 +1328,14 @@ class MIRI_ext(webbpsf_MIRI):
             If True, when the PSF is rotated to match the detector's rotation in the focal
             plane, the PSF will be cropped so the shape of the distorted PSF will match it's
             undistorted counterpart. This will only be used for NIRCam, NIRISS, and FGS PSFs.
+
+        Keyword Args
+        ------------
+        return_hdul : bool
+            Return PSFs in an HDUList rather than set of arrays (default: True).
+        return_oversample : bool
+            Returns the oversampled version of the PSF instead of detector-sampled PSF.
+            Only valid for `reaturn_hdul=False`, otherwise full HDUList returned. Default: True.
         """
         calc_psf_func = super().calc_psf
         res = _calc_psf_webbpsf(self, calc_psf_func, add_distortion=add_distortion, 
@@ -1571,7 +1588,7 @@ def _gen_save_name(self, wfe_drift=0):
     
     # Source positioning
     offset_r = self.options.get('source_offset_r', 0)
-    offset_theta = self.options.get('offset_theta', 0)
+    offset_theta = self.options.get('source_offset_theta', 0)
     if offset_r is None: 
         offset_r = 0
     if offset_theta is None: 
@@ -1904,6 +1921,14 @@ def _calc_psf_with_shifts(self, calc_psf_func, **kwargs):
         if kw in kwargs.keys(): kwargs2[kw] = kwargs[kw]
     hdul = calc_psf_func(source=src, **kwargs2)
 
+    # Specify image oversampling relative to detector sampling
+    for hdu in hdul:
+        if 'DET' in hdu.header['EXTNAME']:
+            osamp = 1
+        else:
+            osamp = hdu.header['DET_SAMP']
+        hdu.header['OSAMP'] = (osamp, 'Image oversample vs det')
+
     # Scale PSF by total incident source flux
     if do_counts:
         for hdu in hdul:
@@ -1915,7 +1940,8 @@ def _calc_psf_with_shifts(self, calc_psf_func, **kwargs):
             pix_scale = hdu.header['PIXELSCL']
             xoff_pix = self.options.get('source_offset_xsub',0) / pix_scale
             yoff_pix = self.options.get('source_offset_ysub',0) / pix_scale
-            hdu.data = fshift(hdu.data, -1*xoff_pix, -1*yoff_pix)
+            # hdu.data = fshift(hdu.data, -1*xoff_pix, -1*yoff_pix)
+            hdu.data = fourier_imshift(hdu.data, -1*xoff_pix, -1*yoff_pix)
 
         # Return to previous values
         self.options = options_orig
@@ -1939,8 +1965,8 @@ def _calc_psf_webbpsf(self, calc_psf_func, add_distortion=None, fov_pixels=None,
         kwargs['add_distortion'] = add_distortion
         kwargs['fov_pixels'] = fov_pixels
 
-        # Figure out sampling (always want >=4 for coronagraphy)
-        if self.is_coron:
+        # Figure out sampling (always want >=4 for Lyot/coronagraphy)
+        if self.is_lyot or self.is_coron:
             if oversample is None:
                 if self.oversample>=4: # we're good!
                     oversample = self.oversample
@@ -2133,6 +2159,8 @@ def _wrap_coeff_for_mp(args):
     else:
         hdu = hdu_list[0]
 
+    # Rather than storing 
+    hdu.header['OSAMP'] = (inst.oversample, 'Image oversample vs det')
     return hdu
 
 def _gen_psf_coeff(self, nproc=None, wfe_drift=0, force=False, save=True, 
@@ -2314,7 +2342,7 @@ def _gen_psf_coeff(self, nproc=None, wfe_drift=0, force=False, save=True,
     hdr['NWAVES']   = (npsf, 'Number of wavelengths used in calculation')
 
     copy_keys = [
-        'EXTNAME', 'OVERSAMP', 'DET_SAMP', 'PIXELSCL', 'FOV',     
+        'EXTNAME', 'OSAMP', 'OVERSAMP', 'DET_SAMP', 'PIXELSCL', 'FOV',     
         'INSTRUME', 'FILTER', 'PUPIL', 'CORONMSK',
         'WAVELEN', 'DIFFLMT', 'APERNAME', 'MODULE', 'CHANNEL', 'PILIN',
         'DET_NAME', 'DET_X', 'DET_Y', 'DET_V2', 'DET_V3',  
@@ -2337,7 +2365,7 @@ def _gen_psf_coeff(self, nproc=None, wfe_drift=0, force=False, save=True,
 
     # Source positioning
     offset_r = self.options.get('source_offset_r', 'None')
-    offset_theta = self.options.get('offset_theta', 'None')
+    offset_theta = self.options.get('source_offset_theta', 'None')
     
     # Mask offsetting
     coron_shift_x = self.options.get('coron_shift_x', 'None')
@@ -2350,7 +2378,6 @@ def _gen_psf_coeff(self, nproc=None, wfe_drift=0, force=False, save=True,
             
     # gen_psf_coeff() Keyword Values
     hdr['FOVPIX'] = (fov_pix, 'WebbPSF pixel FoV')
-    hdr['OSAMP']  = (oversample, 'WebbPSF pixel oversample')
     hdr['NPSF']   = (npsf, 'Number of wavelengths to calc')
     hdr['NDEG']   = (ndeg, 'Polynomial fit degree')
     hdr['WAVE1']  = (w1, 'First wavelength in calc')
@@ -3390,7 +3417,14 @@ def _calc_psf_from_coeff(self, sp=None, return_oversample=True,
             hdul = fits.HDUList()
             for ii, psf in enumerate(psf_all):
                 hdr = psf_coeff_hdr.copy()
-                hdr['EXTNAME'] = 'OVERSAMP' if return_oversample else 'DETSAMP'
+                if return_oversample:
+                    hdr['EXTNAME'] = ('OVERDIST', 'This extension is oversampled')
+                    hdr['OSAMP'] = (self.oversample, 'Image oversampling rel to det')
+                else:
+                    hdr['EXTNAME'] = ('DET_DIST', 'This extension is detector sampled')
+                    hdr['OSAMP'] = (1, 'Image oversampling rel to det')
+                    hdr['PIXELSCL'] = self.pixelscale
+
                 cunits = 'pixels' if ('sci' in coord_frame) or ('det' in coord_frame) else 'arcsec'
                 hdr['XVAL']     = (xvals[ii], f'[{cunits}] Input X coordinate')
                 hdr['YVAL']     = (yvals[ii], f'[{cunits}] Input Y coordinate')
@@ -3413,9 +3447,15 @@ def _calc_psf_from_coeff(self, sp=None, return_oversample=True,
             wave, psf = res if is_spec else (None, res)
 
             hdr = psf_coeff_hdr.copy()
-            hdr['WFEDRIFT'] = (wfe_drift, '[nm] WFE drift amplitude')
+            if return_oversample:
+                hdr['EXTNAME'] = ('OVERDIST', 'This extension is oversampled')
+                hdr['OSAMP'] = (self.oversample, 'Image oversampling rel to det')
+            else:
+                hdr['EXTNAME'] = ('DET_DIST', 'This extension is detector sampled')
+                hdr['OSAMP'] = (1, 'Image oversampling rel to det')
+                hdr['PIXELSCL'] = self.pixelscale
+                
             if coord_vals is not None:
-                hdr['EXTNAME'] = 'OVERSAMP' if return_oversample else 'DETSAMP'
                 cunits = 'pixels' if ('sci' in coord_frame) or ('det' in coord_frame) else 'arcsec'
                 hdr['XVAL']   = (coord_vals[0], f'[{cunits}] Input X coordinate')
                 hdr['YVAL']   = (coord_vals[1], f'[{cunits}] Input Y coordinate')
@@ -3425,6 +3465,7 @@ def _calc_psf_from_coeff(self, sp=None, return_oversample=True,
                 hdr['XVAL']   = (hdr['DET_X'], f'[{cunits}] Input X coordinate')
                 hdr['YVAL']   = (hdr['DET_Y'], f'[{cunits}] Input Y coordinate')
                 hdr['CFRAME'] = ('sci', 'Specified coordinate frame')
+            hdr['WFEDRIFT'] = (wfe_drift, '[nm] WFE drift amplitude')
 
             hdul = fits.HDUList()
             # Append each spectrum
@@ -3634,14 +3675,14 @@ def _coeff_mod_wfe_mask(self, coord_vals, coord_frame):
 
     # Coord values are set, but not coefficients supplied
     if (coord_vals is not None) and (cf_fit is None):
-        _log.info("You must run `gen_wfemask_coeff` first before setting the coord_vals parameter for masked focal planes.")
+        _log.warning("You must run `gen_wfemask_coeff` first before setting the coord_vals parameter for masked focal planes.")
         _log.info("`calc_psf_from_coeff` will continue without mask field dependency.")
     # No coord values, but NIRCam bar/wedge mask in place
     elif (coord_vals is None) and (self.name=='NIRCam') and (self.image_mask[-1]=='B'):
         # Determine desired location along bar
         bar_offset = self.get_bar_offset()
         if (bar_offset != 0) and (cf_fit is None):
-            _log.info("You must run `gen_wfemask_coeff` to obtain bar offset PSFs.")
+            _log.warning("You must run `gen_wfemask_coeff` to obtain PSFs offset along bar mask.")
             _log.info("`calc_psf_from_coeff` will continue assuming bar_offset=0.")
         else:
             nfield = 1

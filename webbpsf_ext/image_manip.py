@@ -25,7 +25,216 @@ _log = logging.getLogger('webbpsf_ext')
 #    Image manipulation
 ###########################################################################
 
-def pad_or_cut_to_size(array, new_shape, fill_val=0.0, offset_vals=None):
+def fshift(inarr, delx=0, dely=0, pad=False, cval=0.0, interp='linear', **kwargs):
+    """ Fractional image shift
+    
+    Ported from IDL function fshift.pro.
+    Routine to shift an image by non-integer values.
+
+    Parameters
+    ----------
+    inarr: ndarray
+        1D, 2D, or 3D array to be shifted. 
+        Image cubes assume shape of [nz,ny,nx].
+    delx : float
+        shift in x (same direction as IDL SHIFT function)
+    dely: float
+        shift in y
+    pad : bool
+        Should we pad the array before shifting, then truncate?
+        Otherwise, the image is wrapped.
+    cval : sequence or float, optional
+        The values to set the padded values for each axis. Default is 0.
+        ((before_1, after_1), ... (before_N, after_N)) unique pad constants for each axis.
+        ((before, after),) yields same before and after constants for each axis.
+        (constant,) or int is a shortcut for before = after = constant for all axes.
+    interp : str
+        Type of interpolation to use during the sub-pixel shift. Valid values are
+        'linear', 'cubic', and 'quintic'.
+
+        
+    Returns
+    -------
+    ndarray
+        Shifted image
+    """
+    
+    from scipy.interpolate import interp1d, interp2d
+
+    ndim = len(inarr.shape)
+    
+    if ndim == 1:
+        # Return if delx is 0
+        if np.isclose(delx, 0, atol=1e-5):
+            return inarr
+
+        # separate shift into an integer and fraction shift
+        intx = np.int(delx)
+        fracx = delx - intx
+        if fracx < 0:
+            fracx += 1
+            intx -= 1
+
+        # Pad ends with constant value
+        if pad:
+            padx = np.abs(intx) + 5
+            out = np.pad(inarr,np.abs(intx),'constant',constant_values=cval)
+        else:
+            padx = 0
+            out = inarr.copy()
+
+        # shift by integer portion
+        out = np.roll(out, intx)
+        # if significant fractional shift...
+        if not np.isclose(fracx, 0, atol=1e-5):
+            if interp=='linear':
+                out = out * (1.-fracx) + np.roll(out,1) * fracx
+            elif interp=='cubic':
+                xvals = np.arange(len(out))
+                fint = interp1d(xvals, out, kind=interp, bounds_error=False, fill_value='extrapolate')
+                out = fint(xvals+fracx)
+            elif interp=='quintic':
+                xvals = np.arange(len(out))
+                fint = interp1d(xvals, out, kind=5, bounds_error=False, fill_value='extrapolate')
+                out = fint(xvals+fracx)
+            else:
+                raise ValueError(f'interp={interp} not recognized.')
+
+        out = out[padx:padx+inarr.size]
+    elif ndim == 2:	
+        # Return if both delx and dely are 0
+        if np.isclose(delx, 0, atol=1e-5) and np.isclose(dely, 0, atol=1e-5):
+            return inarr
+
+        ny, nx = inarr.shape
+
+        # separate shift into an integer and fraction shift
+        intx = np.int(delx)
+        inty = np.int(dely)
+        fracx = delx - intx
+        fracy = dely - inty
+        if fracx < 0:
+            fracx += 1
+            intx -= 1
+        if fracy < 0:
+            fracy += 1
+            inty -= 1
+
+        # Pad ends with constant value
+        if pad:
+            padx = np.abs(intx) + 5
+            pady = np.abs(inty) + 5
+            pad_vals = ([pady]*2,[padx]*2)
+            out = np.pad(inarr,pad_vals,'constant',constant_values=cval)
+        else:
+            padx = 0; pady = 0
+            out = inarr.copy()
+
+        # shift by integer portion
+        out = np.roll(np.roll(out, intx, axis=1), inty, axis=0)
+    
+        # Check if fracx and fracy are effectively 0
+        fxis0 = np.isclose(fracx,0, atol=1e-5)
+        fyis0 = np.isclose(fracy,0, atol=1e-5)
+        # If fractional shifts are significant
+        # use bi-linear interpolation between four pixels
+        
+        if interp=='linear':
+            if not (fxis0 and fyis0):
+                # Break bi-linear interpolation into four parts
+                # to avoid NaNs unnecessarily affecting integer shifted dimensions
+                part1 = out * ((1-fracx)*(1-fracy))
+                part2 = 0 if fyis0 else np.roll(out,1,axis=0)*((1-fracx)*fracy)
+                part3 = 0 if fxis0 else np.roll(out,1,axis=1)*((1-fracy)*fracx)
+                part4 = 0 if (fxis0 or fyis0) else np.roll(np.roll(out, 1, axis=1), 1, axis=0) * fracx*fracy
+
+                out = part1 + part2 + part3 + part4
+        elif interp=='cubic' or interp=='quintic':
+            fracx = 0 if fxis0 else fracx
+            fracy = 0 if fxis0 else fracy
+            
+            y = np.arange(out.shape[0])
+            x = np.arange(out.shape[1])
+            fint = interp2d(x, y, out, kind=interp)
+            out = fint(x-fracx, y-fracy)
+        else:
+            raise ValueError(f'interp={interp} not recognized.')
+    
+        out = out[pady:pady+ny, padx:padx+nx]
+    elif ndim == 3:
+        # Perform shift on each image in succession
+        kwargs['delx'] = delx
+        kwargs['dely'] = dely
+        kwargs['pad'] = pad
+        kwargs['cval'] = cval
+        kwargs['interp'] = interp
+        out = np.array([fshift(im, **kwargs) for im in inarr])
+
+    else:
+        raise ValueError(f'Found {ndim} dimensions. Only up to 3 dimensions allowed.')
+
+    return out
+
+                          
+def fourier_imshift(image, xshift, yshift, pad=False, cval=0.0, **kwargs):
+    """Fourier shift image
+    
+    Shift an image by use of Fourier shift theorem
+
+    Parameters
+    ----------
+    image : ndarray
+        2D or 3D array [nz,ny,nx].
+    xshift : float
+        Number of pixels to shift image in the x direction
+    yshift : float
+        Number of pixels to shift image in the y direction
+    pad : bool
+        Should we pad the array before shifting, then truncate?
+        Otherwise, the image is wrapped.
+    cval : sequence or float, optional
+        The values to set the padded values for each axis. Default is 0.
+        ((before_1, after_1), ... (before_N, after_N)) unique pad constants for each axis.
+        ((before, after),) yields same before and after constants for each axis.
+        (constant,) or int is a shortcut for before = after = constant for all axes.
+
+    Returns
+    -------
+    ndarray
+        Shifted image
+    """
+
+    ndim = len(image.shape)
+
+    if ndim==2:
+
+        ny, nx = image.shape
+    
+        # Pad ends with zeros
+        if pad:
+            padx = np.abs(np.int(xshift)) + 5
+            pady = np.abs(np.int(yshift)) + 5
+            pad_vals = ([pady]*2,[padx]*2)
+            im = np.pad(image,pad_vals,'constant',constant_values=cval)
+        else:
+            padx = 0; pady = 0
+            im = image
+        
+        offset = fourier_shift( np.fft.fft2(im), (yshift,xshift) )
+        offset = np.fft.ifft2(offset).real
+        
+        offset = offset[pady:pady+ny, padx:padx+nx]
+    elif ndim==3:
+        kwargs['pad'] = pad
+        kwargs['cval'] = cval
+        offset = np.array([fourier_imshift(im, xshift, yshift, **kwargs) for im in image])
+    else:
+        raise ValueError(f'Found {ndim} dimensions. Only up 2 or 3 dimensions allowed.')
+    
+    return offset
+    
+def pad_or_cut_to_size(array, new_shape, fill_val=0.0, offset_vals=None,
+    shift_func=fshift, **kwargs):
     """
     Resize an array to a new shape by either padding with zeros
     or trimming off rows and/or columns. The output shape can
@@ -44,6 +253,8 @@ def pad_or_cut_to_size(array, new_shape, fill_val=0.0, offset_vals=None):
     offset_vals : tuple
         Option to perform image shift in the (xpix) direction for 1D, 
         or (ypix,xpix) direction for 2D/3D prior to cropping or expansion.
+    shift_func : function
+        Function to use for shifting. Usually either `fshift` or `fourier_imshift`.
 
     Returns
     -------
@@ -144,13 +355,13 @@ def pad_or_cut_to_size(array, new_shape, fill_val=0.0, offset_vals=None):
         #print('Case 1')
         output[:,m0:m1,n0:n1] = array.copy()
         for i, im in enumerate(output):
-            output[i] = fshift(im, delx=nx_off, dely=ny_off, pad=True, cval=fill_val)
+            output[i] = shift_func(im, nx_off, ny_off, pad=True, cval=fill_val, **kwargs)
     elif (nx_new<=nx) and (ny_new<=ny):
         #print('Case 2')
         if (nx_off!=0) or (ny_off!=0):
             array_temp = array.copy()
             for i, im in enumerate(array_temp):
-                array_temp[i] = fshift(im, delx=nx_off, dely=ny_off, pad=True, cval=fill_val)
+                array_temp[i] = shift_func(im, nx_off, ny_off, pad=True, cval=fill_val, **kwargs)
             output = array_temp[:,m0:m1,n0:n1]
         else:
             output = array[:,m0:m1,n0:n1]
@@ -159,23 +370,23 @@ def pad_or_cut_to_size(array, new_shape, fill_val=0.0, offset_vals=None):
         if nx_off!=0:
             array_temp = array.copy()
             for i, im in enumerate(array_temp):
-                array_temp[i] = fshift(im, delx=nx_off, pad=True, cval=fill_val)
+                array_temp[i] = shift_func(im, nx_off, 0, pad=True, cval=fill_val, **kwargs)
             output[:,m0:m1,:] = array_temp[:,:,n0:n1]
         else:
             output[:,m0:m1,:] = array[:,:,n0:n1]
         for i, im in enumerate(output):
-            output[i] = fshift(im, dely=ny_off, pad=True, cval=fill_val)
+            output[i] = shift_func(im, 0, ny_off, pad=True, cval=fill_val, **kwargs)
     elif (nx_new>=nx) and (ny_new<=ny):
         #print('Case 4')
         if ny_off!=0:
             array_temp = array.copy()
             for i, im in enumerate(array_temp):
-                array_temp[i] = fshift(im, dely=ny_off, pad=True, cval=fill_val)
+                array_temp[i] = shift_func(im, 0, ny_off, pad=True, cval=fill_val, **kwargs)
             output[:,:,n0:n1] = array_temp[:,m0:m1,:]
         else:
             output[:,:,n0:n1] = array[:,m0:m1,:]
         for i, im in enumerate(output):
-            output[i] = fshift(im, delx=nx_off, pad=True, cval=fill_val)
+            output[i] = shift_func(im, nx_off, 0, pad=True, cval=fill_val, **kwargs)
         
     # Flatten if input and output arrays are 1D
     if (ndim==1) and (ny_new==1):
@@ -185,178 +396,9 @@ def pad_or_cut_to_size(array, new_shape, fill_val=0.0, offset_vals=None):
 
     return output
 
-def fshift(image, delx=0, dely=0, pad=False, cval=0.0):
-    """ Fractional image shift
-    
-    Ported from IDL function fshift.pro.
-    Routine to shift an image by non-integer values.
-
-    Parameters
-    ----------
-    image: ndarray
-        1D or 2D array to be shifted
-    delx : float
-        shift in x (same direction as IDL SHIFT function)
-    dely: float
-        shift in y
-    pad : bool
-        Should we pad the array before shifting, then truncate?
-        Otherwise, the image is wrapped.
-    cval : sequence or float, optional
-        The values to set the padded values for each axis. Default is 0.
-        ((before_1, after_1), ... (before_N, after_N)) unique pad constants for each axis.
-        ((before, after),) yields same before and after constants for each axis.
-        (constant,) or int is a shortcut for before = after = constant for all axes.
-
-        
-    Returns
-    -------
-    ndarray
-        Shifted image
-    """
-    
-    
-    if len(image.shape) == 1:
-        # Return if delx is 0
-        if np.isclose(delx, 0, atol=1e-5):
-            return image
-
-        # separate shift into an integer and fraction shift
-        intx = np.int(delx)
-        fracx = delx - intx
-        if fracx < 0:
-            fracx += 1
-            intx -= 1
-
-        # Pad ends with constant value
-        if pad:
-            padx = np.abs(intx) + 1
-            out = np.pad(image,np.abs(intx),'constant',constant_values=cval)
-        else:
-            padx = 0
-            out = image.copy()
-
-        # shift by integer portion
-        out = np.roll(out, intx)
-        # if significant fractional shift...
-        if not np.isclose(fracx, 0, atol=1e-5):
-            out = out * (1.-fracx) + np.roll(out,1) * fracx
-
-        out = out[padx:padx+image.size]
-        return out
-
-    elif len(image.shape) == 2:	
-        # Return if both delx and dely are 0
-        if np.isclose(delx, 0, atol=1e-5) and np.isclose(dely, 0, atol=1e-5):
-            return image
-
-        # separate shift into an integer and fraction shift
-        intx = np.int(delx)
-        inty = np.int(dely)
-        fracx = delx - intx
-        fracy = dely - inty
-        if fracx < 0:
-            fracx += 1
-            intx -= 1
-        if fracy < 0:
-            fracy += 1
-            inty -= 1
-
-        # Pad ends with constant value
-        if pad:
-            padx = np.abs(intx) + 1
-            pady = np.abs(inty) + 1
-            pad_vals = ([pady]*2,[padx]*2)
-            out = np.pad(image,pad_vals,'constant',constant_values=cval)
-        else:
-            padx = 0; pady = 0
-            out = image.copy()
-
-        # shift by integer portion
-        out = np.roll(np.roll(out, intx, axis=1), inty, axis=0)
-    
-        # Check if fracx and fracy are effectively 0
-        fxis0 = np.isclose(fracx,0, atol=1e-5)
-        fyis0 = np.isclose(fracy,0, atol=1e-5)
-        # If fractional shifts are significant
-        # use bi-linear interpolation between four pixels
-        if not (fxis0 and fyis0):
-            # Break bi-linear interpolation into four parts
-            # to avoid NaNs unnecessarily affecting integer shifted dimensions
-            part1 = out * ((1-fracx)*(1-fracy))
-            part2 = 0 if fyis0 else np.roll(out,1,axis=0)*((1-fracx)*fracy)
-            part3 = 0 if fxis0 else np.roll(out,1,axis=1)*((1-fracy)*fracx)
-            part4 = 0 if (fxis0 or fyis0) else np.roll(np.roll(out, 1, axis=1), 1, axis=0) * fracx*fracy
-    
-            out = part1 + part2 + part3 + part4
-    
-        out = out[pady:pady+image.shape[0], padx:padx+image.shape[1]]
-        return out
-            
-
-        #if not np.allclose([fracx,fracy], 0, atol=1e-5):
-        #	x = x * ((1-fracx)*(1-fracy)) + \
-        #		np.roll(x,1,axis=0) * ((1-fracx)*fracy) + \
-        #		np.roll(x,1,axis=1) * (fracx*(1-fracy)) + \
-        #		np.roll(np.roll(x, 1, axis=1), 1, axis=0) * fracx*fracy
-
-        #x = x[pady:pady+image.shape[0], padx:padx+image.shape[1]]
-        #return x
-
-    else:
-        ndim = len(image.shape)
-        raise ValueError(f'Input image can only have 1 or 2 dimensions. Found {ndim} dimensions.')
-
-                          
-def fourier_imshift(image, xshift, yshift, pad=False, cval=0.0):
-    """Fourier shift image
-    
-    Shift an image by use of Fourier shift theorem
-
-    Parameters
-    ----------
-    image : nd array
-        N x K image
-    xshift : float
-        Number of pixels to shift image in the x direction
-    yshift : float
-        Number of pixels to shift image in the y direction
-    pad : bool
-        Should we pad the array before shifting, then truncate?
-        Otherwise, the image is wrapped.
-    cval : sequence or float, optional
-        The values to set the padded values for each axis. Default is 0.
-        ((before_1, after_1), ... (before_N, after_N)) unique pad constants for each axis.
-        ((before, after),) yields same before and after constants for each axis.
-        (constant,) or int is a shortcut for before = after = constant for all axes.
-
-    Returns
-    -------
-    ndarray
-        Shifted image
-    """
-    
-    # Pad ends with zeros
-    if pad:
-        padx = np.abs(np.int(xshift)) + 1
-        pady = np.abs(np.int(yshift)) + 1
-        pad_vals = ([pady]*2,[padx]*2)
-        im = np.pad(image,pad_vals,'constant',constant_values=cval)
-    else:
-        padx = 0; pady = 0
-        im = image
-    
-    offset = fourier_shift( np.fft.fft2(im), (yshift,xshift) )
-    offset = np.fft.ifft2(offset).real
-    
-    offset = offset[pady:pady+image.shape[0], padx:padx+image.shape[1]]
-    
-    return offset
-    
-
 
 def rotate_offset(data, angle, cen=None, cval=0.0, order=1, 
-    reshape=True, recenter=True, **kwargs):
+    reshape=True, recenter=True, shift_func=fshift, **kwargs):
     """Rotate and offset an array.
 
     Same as `rotate` in `scipy.ndimage.interpolation` except that it
@@ -375,6 +417,8 @@ def rotate_offset(data, angle, cen=None, cval=0.0, order=1,
         Values are expected to be `(xcen, ycen)`.
     recenter : bool
         Do we want to reposition so that `cen` is the image center?
+    shift_func : function
+        Function to use for shifting. Usually either `fshift` or `fourier_imshift`.
         
     Keyword Args
     ------------
@@ -439,12 +483,20 @@ def rotate_offset(data, angle, cen=None, cval=0.0, order=1,
     if np.allclose((delx, dely), 0, atol=1e-5):
         return rotate(data, angle, reshape=reshape, **kwargs).squeeze()
 
+    # fshift interp type
+    if order <=1:
+        interp='linear'
+    elif order <=3:
+        interp='cubic'
+    else:
+        interp='quintic'
+
     # Pad and then shift array
     new_shape = (int(ny+2*abs(dely)), int(nx+2*abs(delx)))
     images_shift = []
     for im in data:
         im_pad = pad_or_cut_to_size(im, new_shape, fill_val=cval)
-        im_new = fshift(im_pad, delx, dely, cval=cval)
+        im_new = shift_func(im_pad, delx, dely, cval=cval, interp=interp)
         images_shift.append(im_new)
     images_shift = np.asarray(images_shift)
     
@@ -464,7 +516,7 @@ def rotate_offset(data, angle, cen=None, cval=0.0, order=1,
         else:
             images_rot = []
             for im in images_shrot:
-                im_new = fshift(im, -delx, -dely, pad=True, cval=cval)
+                im_new = shift_func(im, -1*delx, -1*dely, pad=True, cval=cval, interp=interp)
                 images_rot.append(im_new)
             images_rot = np.asarray(images_rot)
     
@@ -1297,7 +1349,14 @@ def rotate_shift_image(hdul, index=0, PA_offset=0, delx_asec=0, dely_asec=0,
     delx, dely = np.array([delx_asec, dely_asec]) / hdul[0].header['PIXELSCL']
     
     # Get position offsets
-    im_new = shift_func(im_rot, delx, dely, pad=True)
+    order = kwargs.get('order', 3)
+    if order <=1:
+        interp='linear'
+    elif order <=3:
+        interp='cubic'
+    else:
+        interp='quintic'
+    im_new = shift_func(im_rot, delx, dely, pad=True, interp=interp)
     
     # Create new HDU and copy header
     hdu_new = fits.PrimaryHDU(im_new)

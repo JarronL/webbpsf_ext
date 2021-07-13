@@ -5,7 +5,7 @@ import multiprocessing as mp
 from . import conf
 from .utils import poppy, S
 from .maths import jl_poly
-from .image_manip import krebin
+from .image_manip import krebin, fshift
 from .bandpasses import nircam_grism_res, niriss_grism_res
 
 import logging
@@ -254,9 +254,10 @@ def gen_image_from_coeff(inst, coeff, coeff_hdr, sp_norm=None, nwaves=None,
                     fracx = fracx + 1
                     intx = intx - 1
 
-                # spec_over[:,intx:intx+fov_pix_over] += fshift(psf_fit[i], fracx)
-                im = psf_fit[i]
-                spec_over[:,intx:intx+fov_pix_over] += im*(1.-fracx) + np.roll(im,1,axis=1)*fracx
+                # TODO: Benchmark and compare these two different methods
+                spec_over[:,intx:intx+fov_pix_over] += fshift(psf_fit[i], delx=fracx, interp='cubic')
+                # im = psf_fit[i]
+                # spec_over[:,intx:intx+fov_pix_over] += im*(1.-fracx) + np.roll(im,1,axis=1)*fracx
 
             spec_over[spec_over<__epsilon] = 0 #__epsilon
 

@@ -864,7 +864,8 @@ class OTE_WFE_Drift_Model(OTE_Linear_Model_WSS):
         return hdul
     
     
-def plot_im(im, fig, ax, vlim=None, add_cbar=True, return_ax=False, extent=None):
+def plot_im(im, fig, ax, vlim=None, add_cbar=True, return_ax=False, 
+    extent=None, cmap='RdBu_r'):
     """
     Plot single image on some axes
     """
@@ -872,7 +873,7 @@ def plot_im(im, fig, ax, vlim=None, add_cbar=True, return_ax=False, extent=None)
     if vlim is None:
         vlim = np.max(np.abs(im))
         
-    img = ax.imshow(im, cmap='RdBu_r', vmin=-1*vlim, vmax=+1*vlim, extent=extent)
+    img = ax.imshow(im, cmap=cmap, vmin=-1*vlim, vmax=+1*vlim, extent=extent)
     
     # Add colorbar
     if add_cbar:
