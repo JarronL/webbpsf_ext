@@ -90,7 +90,9 @@ class NIRCam_ext(webbpsf_NIRCam):
         _init_inst(self, filter=filter, pupil_mask=pupil_mask, image_mask=image_mask,
                    fov_pix=fov_pix, oversample=oversample, **kwargs)
 
-        self.options['jitter'] = 'gaussian'
+        # No jitter for coronagraphy
+        # Otherwise, assume 5 mas / axis
+        self.options['jitter'] = None if self.is_coron else 'gaussian'
         self.options['jitter_sigma'] = 0.005
 
         # By default, WebbPSF has wavelength limits depending on the channel
@@ -806,8 +808,9 @@ class MIRI_ext(webbpsf_MIRI):
                    fov_pix=fov_pix, oversample=oversample, **kwargs)
 
         # No jitter for coronagraphy
+        # Otherwise assume 5 mas / axis
         self.options['jitter'] = None if self.is_coron else 'gaussian'
-        self.options['jitter_sigma'] = 0.003
+        self.options['jitter_sigma'] = 0.005
 
     @property
     def save_dir(self):
