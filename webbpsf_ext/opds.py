@@ -888,7 +888,7 @@ def plot_im(im, fig, ax, vlim=None, add_cbar=True, return_ax=False,
 
 def plot_opd(hdul, index=1, opd0=None, vlim1=None, vlim2=None):
     """ 
-    Plot OPDs images (full and delta)
+    Plot OPDs images (full or delta)
     """
     
     def calc_rms_nm(im):
@@ -947,3 +947,33 @@ def plot_opd(hdul, index=1, opd0=None, vlim1=None, vlim2=None):
     fig.tight_layout()
 
     plt.draw()
+
+
+def slew_time(dist_asec):
+    """
+    Given a slew distance (arcsec), calculate telescope slew time. Output is sec.
+    Data comes from JDOX website:
+
+        https://jwst-docs.stsci.edu/jppom/visit-overheads-timing-model/slew-times.
+    """
+    # 
+    slew_arr = np.array([
+        0, 0.06, 0.0600001, 15, 20, 20.0000001, 30, 50,
+        100, 150, 300, 1000, 3600, 4000, 10000, 10800,
+        10800, 14400, 18000, 21600, 25200, 28800, 32400, 36000, 39600,
+        43200, 46800, 50400, 54000, 57600, 61200, 64800, 68400, 72000,
+        108000, 144000, 180000, 216000, 252000, 288000, 324000, 360000, 
+        396000, 432000, 468000, 504000, 540000, 576000, 612000, 648000
+    ])
+
+    tsec_arr = np.array([
+        0, 0, 20.48, 20.48, 23.296, 101.632, 116.224, 137.728,
+        173.568, 198.656, 250.112, 373.504, 572.416, 592.896, 804.864, 825.6, 521.216, 
+        578.048, 628.608, 674.56, 716.928, 756.608, 793.856, 829.184, 862.848, 894.976,
+        925.824, 955.648, 984.32, 1012.224, 1039.104, 1065.344, 1090.816, 1115.648,
+        1336.448, 1537.408,1744, 1939.328, 2112.192, 2278.272, 2440.32, 2599.936, 
+        2757.632, 2914.24, 3069.888, 3224.832, 3379.328, 3533.376, 3687.104, 3840.512
+    ])
+
+    return np.interp(dist_asec, slew_arr, tsec_arr)
+
