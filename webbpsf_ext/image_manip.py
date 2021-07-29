@@ -34,8 +34,8 @@ def fshift(inarr, delx=0, dely=0, pad=False, cval=0.0, interp='linear', **kwargs
     Parameters
     ----------
     inarr: ndarray
-        1D, 2D, or 3D array to be shifted. 
-        Image cubes assume shape of [nz,ny,nx].
+        1D, or 2D array to be shifted. Can also be an image 
+        cube assume with shape [nz,ny,nx].
     delx : float
         shift in x (same direction as IDL SHIFT function)
     dely: float
@@ -184,7 +184,7 @@ def fourier_imshift(image, xshift, yshift, pad=False, cval=0.0, **kwargs):
     Parameters
     ----------
     image : ndarray
-        2D or 3D array [nz,ny,nx].
+        2D image or 3D image cube [nz,ny,nx].
     xshift : float
         Number of pixels to shift image in the x direction
     yshift : float
@@ -534,12 +534,14 @@ def frebin(image, dimensions=None, scale=None, total=True):
     Python port from the IDL frebin.pro
     Shrink or expand the size of a 1D or 2D array by an arbitary amount 
     using bilinear interpolation. Conserves flux by ensuring that each 
-    input pixel is equally represented in the output array.
+    input pixel is equally represented in the output array. Can also input
+    an image cube.
 
     Parameters
     ----------
     image : ndarray
-        Input image, 1-d or 2-d ndarray.
+        Input image ndarray (1D, 2D). Can also be an image 
+        cube assumed to have shape [nz,ny,nx].
     dimensions : tuple or None
         Desired size of output array (take priority over scale).
     scale : tuple or None
@@ -586,8 +588,12 @@ def frebin(image, dimensions=None, scale=None, total=True):
         nlout = int(nlout+0.5)
         nsout = int(nsout+0.5)
         dimensions = [nlout, nsout]
-    if len(shape) > 2:
-        raise ValueError('Input image can only have 1 or 2 dimensions. Found {} dimensions.'.format(len(shape)))
+    elif len(shape)==3:
+        kwargs = {'dimensions': dimensions, 'scale': scale, 'total': total}
+        result = np.array([frebin(im, **kwargs) for im in image])
+        return result
+    elif len(shape) > 3:
+        raise ValueError('Input image can only have 1, 2, or 3 dimensions. Found {} dimensions.'.format(len(shape)))
     
 
     if nlout != 1:
@@ -605,7 +611,8 @@ def frebin(image, dimensions=None, scale=None, total=True):
     if (sbox.is_integer()) and (lbox.is_integer()):
         image = image.reshape((nl,ns))
         result = krebin(image, (nlout,nsout))
-        if not total: result /= (sbox*lbox)
+        if not total: 
+            result /= (sbox*lbox)
         if nl == 1:
             return result[0,:]
         else:
