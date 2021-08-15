@@ -345,10 +345,16 @@ def nircam_filter(filter, pupil=None, mask=None, module=None, ND_acq=False,
         wl48_list = ['WEAK LENS +12 (=4+8)', 'WEAK LENS -4 (=4-8)']
         if (wl_name in wl48_list):
             th_wl = th_wl4 * th_wl8
-            bp_name = 'F212N'
+            bp_name = 'F212N' # F212N2?
+            # Remove F200W contribitions
+            if filter=='F200W':
+                th_wl /= 0.97
         elif 'WEAK LENS +4' in wl_name:
             th_wl = th_wl4
-            bp_name = 'F212N'
+            bp_name = 'F212N' # F212N2?
+            # Remove F200W contribitions
+            if filter=='F200W':
+                th_wl /= 0.97
         else:
             th_wl = th_wl8
             
