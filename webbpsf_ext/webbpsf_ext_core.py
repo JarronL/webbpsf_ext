@@ -1,4 +1,5 @@
 # Import libraries
+from operator import add
 import numpy as np
 
 import time
@@ -225,7 +226,7 @@ class NIRCam_ext(webbpsf_NIRCam):
         """Number of wavelengths/PSFs to fit"""
         w1, w2 = self.wave_fit
         npsf = self._npsf
-        # Default to 10 PSF simulations per um
+        # Default to number of PSF simulations per um
         if npsf is None:
             dn = 10 if self.channel=='long' else 20
             npsf = int(np.ceil(dn * (w2-w1)))
@@ -651,7 +652,8 @@ class NIRCam_ext(webbpsf_NIRCam):
 
 
     def calc_psf_from_coeff(self, sp=None, return_oversample=True, wfe_drift=None, 
-        coord_vals=None, coord_frame='tel', coron_rescale=False, **kwargs):
+        coord_vals=None, coord_frame='tel', coron_rescale=False, return_hdul=True, 
+        **kwargs):
         """ Create PSF image from polynomial coefficients
         
         Create a PSF image from instrument settings. The image is noiseless and
@@ -660,9 +662,8 @@ class NIRCam_ext(webbpsf_NIRCam):
         The result is effectively an idealized slope image (no background).
 
         Returns a single image or list of images if sp is a list of spectra. 
-        By default, it returns only the detector-sampled PSF, but setting 
-        return_oversample=True will also return a set of oversampled images
-        as a second output.
+        By default, it returns only the oversampled PSF, but setting 
+        return_oversample=False will instead return detector-sampled images.
 
         Parameters
         ----------
@@ -691,11 +692,14 @@ class NIRCam_ext(webbpsf_NIRCam):
 
         return_hdul : bool
             Return PSFs in an HDUList rather than set of arrays (default: True).
+        coron_rescale : bool
+            Ensure correct scaling for coronagraphic off-axis PSFs based on
+            analytic scaling relationships of peak flux relative to mask position.
         """        
 
         res = _calc_psf_from_coeff(self, sp=sp, return_oversample=return_oversample, 
                                    coord_vals=coord_vals, coord_frame=coord_frame, 
-                                   wfe_drift=wfe_drift, **kwargs)
+                                   wfe_drift=wfe_drift, return_hdul=return_hdul, **kwargs)
 
         # Ensure correct scaling for off-axis PSFs
         if self.is_coron and coron_rescale and (coord_vals is not None):
@@ -775,6 +779,40 @@ class NIRCam_ext(webbpsf_NIRCam):
                                 fov_pixels=fov_pixels, oversample=oversample, wfe_drift=wfe_drift, 
                                 coord_vals=coord_vals, coord_frame=coord_frame, **kwargs)
 
+        return res
+
+    def calc_psfs_grid(self, sp=None, wfe_drift=0, osamp=1, npsf_per_full_fov=15,
+                       xsci_vals=None, ysci_vals=None, return_coords=None):
+
+        """ PSF grid across an instrumnet FoV
+        
+        Create a grid of PSFs across instrument aperture FoV. By default,
+        imaging observations will be for full detector FoV with regularly
+        spaced grid. Coronagraphic observations will cover nominal 
+        coronagraphic mask region (usually 10s of arcsec) and will have
+        logarithmically spaced values where appropriate.
+
+        Keyword Args
+        ============
+        wfe_drift : float
+            Desired WFE drift value relative to default OPD.
+        osamp : int
+            Sampling of output PSF relative to detector sampling.
+        npsf_per_full_fov : int
+            Number of PSFs across one dimension of the instrument's field of 
+            view. If a coronagraphic observation, then this is for the nominal
+            coronagrahic field of view. Otherwise,
+        xsci_vals: None or ndarray
+            Option to pass a custom grid values along x-axis in 'sci' coords.
+        ysci_vals: None or ndarray
+            Option to pass a custom grid values along y-axis in 'sci' coords.
+        return_coords : None or str
+            Option to also return coordinate values in desired frame 
+            ('det', 'sci', 'tel', 'idl').
+        """
+
+        res = _calc_psfs_grid(self, wfe_drift=wfe_drift, osamp=osamp, npsf_per_full_fov=npsf_per_full_fov,
+                              xsci_vals=xsci_vals, ysci_vals=ysci_vals, return_coords=return_coords, sp=sp)
         return res
 
     def calc_psfs_sgd(self, xoff_asec, yoff_asec, use_coeff=True, **kwargs):
@@ -1231,7 +1269,7 @@ class MIRI_ext(webbpsf_MIRI):
         """
         return _gen_wfemask_coeff(self, large_grid=large_grid, force=force, save=save, **kwargs)
 
-    def calc_psf_from_coeff(self, sp=None, return_oversample=True, 
+    def calc_psf_from_coeff(self, sp=None, return_oversample=True, return_hdul=True,
         wfe_drift=None, coord_vals=None, coord_frame='tel', **kwargs):
         """ Create PSF image from coefficients
         
@@ -1241,9 +1279,8 @@ class MIRI_ext(webbpsf_MIRI):
         The result is effectively an idealized slope image (no background).
 
         Returns a single image or list of images if sp is a list of spectra. 
-        By default, it returns only the detector-sampled PSF, but setting 
-        return_oversample=True will also return a set of oversampled images
-        as a second output.
+        By default, it returns only the oversampled PSF, but setting 
+        return_oversample=False will instead return detector-sampled images.
 
         Parameters
         ----------
@@ -1253,7 +1290,7 @@ class MIRI_ext(webbpsf_MIRI):
             The default is normalized to produce 1 count/sec within that bandpass,
             assuming the telescope collecting area and instrument bandpass. 
             Coronagraphic PSFs will further decrease this due to the smaller pupil
-            size and coronagraphic spot. 
+            size and coronagraphic mask. 
         return_oversample : bool
             Returns the oversampled version of the PSF instead of detector-sampled PSF.
             Default: True.
@@ -1274,8 +1311,8 @@ class MIRI_ext(webbpsf_MIRI):
             Return PSFs in an HDUList rather than set of arrays (default: True).
         """        
         return _calc_psf_from_coeff(self, sp=sp, return_oversample=return_oversample, 
-                                    wfe_drift=wfe_drift, coord_vals=coord_vals, 
-                                    coord_frame=coord_frame, **kwargs)
+                                    coord_vals=coord_vals, coord_frame=coord_frame, 
+                                    wfe_drift=wfe_drift, return_hdul=return_hdul, **kwargs)
 
     def calc_psf(self, add_distortion=None, fov_pixels=None, oversample=None, 
         wfe_drift=None, coord_vals=None, coord_frame='tel', **kwargs):
@@ -1345,6 +1382,44 @@ class MIRI_ext(webbpsf_MIRI):
                                 fov_pixels=fov_pixels, oversample=oversample, wfe_drift=wfe_drift, 
                                 coord_vals=coord_vals, coord_frame=coord_frame, **kwargs)
 
+        return res
+
+    def calc_psfs_grid(self, sp=None, wfe_drift=0, osamp=1, npsf_per_full_fov=15,
+                       xsci_vals=None, ysci_vals=None, return_coords=None):
+
+        """ PSF grid across an instrumnet FoV
+        
+        Create a grid of PSFs across instrument aperture FoV. By default,
+        imaging observations will be for full detector FoV with regularly
+        spaced grid. Coronagraphic observations will cover nominal 
+        coronagraphic mask region (usually 10s of arcsec) and will have
+        logarithmically spaced values where appropriate.
+
+        Keyword Args
+        ============
+        wfe_drift : float
+            Desired WFE drift value relative to default OPD.
+        osamp : int
+            Sampling of output PSF relative to detector sampling.
+        npsf_per_full_fov : int
+            Number of PSFs across one dimension of the instrument's field of 
+            view. If a coronagraphic observation, then this is for the nominal
+            coronagrahic field of view. Otherwise,
+        xsci_vals: None or ndarray
+            Option to pass a custom grid values along x-axis in 'sci' coords.
+            If coronagraph, this instead corresponds to coronagraphic mask axis, 
+            which has a slight rotation in MIRI.
+        ysci_vals: None or ndarray
+            Option to pass a custom grid values along y-axis in 'sci' coords.
+            If coronagraph, this instead corresponds to coronagraphic mask axis, 
+            which has a slight rotation in MIRI.
+        return_coords : None or str
+            Option to also return coordinate values in desired frame 
+            ('det', 'sci', 'tel', 'idl').
+        """
+
+        res = _calc_psfs_grid(self, wfe_drift=wfe_drift, osamp=osamp, npsf_per_full_fov=npsf_per_full_fov,
+                              xsci_vals=xsci_vals, ysci_vals=ysci_vals, return_coords=return_coords, sp=sp)
         return res
 
     def calc_psfs_sgd(self, xoff_asec, yoff_asec, use_coeff=True, **kwargs):
@@ -1968,6 +2043,11 @@ def _calc_psf_webbpsf(self, calc_psf_func, add_distortion=None, fov_pixels=None,
         kwargs['add_distortion'] = add_distortion
         kwargs['fov_pixels'] = fov_pixels
 
+        # If there are distortion, compute some fov_pixels, which will get cropped later
+        npix_extra = 5
+        if add_distortion:
+            kwargs['fov_pixels'] += 2 * npix_extra
+
         # Figure out sampling (always want >=4 for Lyot/coronagraphy)
         if self.is_lyot or self.is_coron:
             if oversample is None:
@@ -2057,12 +2137,21 @@ def _calc_psf_webbpsf(self, calc_psf_func, add_distortion=None, fov_pixels=None,
             self.options['coron_shift_y'] = coron_shift_y_orig
             self.options['bar_offset'] = bar_offset_orig
 
+        # Crop distorted borders
+        if add_distortion:
+            npix_over = npix_extra*oversample
+            hdul[0].data = hdul[0].data[npix_over:-npix_over,npix_over:-npix_over]
+            hdul[2].data = hdul[2].data[npix_over:-npix_over,npix_over:-npix_over]
+            hdul[1].data = hdul[1].data[npix_extra:-npix_extra,npix_extra:-npix_extra]
+            hdul[3].data = hdul[3].data[npix_extra:-npix_extra,npix_extra:-npix_extra]
+
+
         # Check if we set return_hdul=False
         if return_hdul:
             res = hdul
         else:
             # If just returning a single image, determine oversample and distortion
-            res = hdul[2].data if self.include_distortions else hdul[0].data
+            res = hdul[2].data if add_distortion else hdul[0].data
             if not return_oversample:
                 res = frebin(res, scale=1/self.oversample)
 
@@ -3290,8 +3379,8 @@ def _gen_wfemask_coeff(self, force=False, save=True, large_grid=None,
 
 
 
-def _calc_psf_from_coeff(self, sp=None, return_oversample=True, 
-    wfe_drift=None, coord_vals=None, coord_frame='tel', return_hdul=True, **kwargs):
+def _calc_psf_from_coeff(self, sp=None, return_oversample=True, return_hdul=True,
+    wfe_drift=None, coord_vals=None, coord_frame='tel', break_iter=True, **kwargs):
     """PSF Image from polynomial coefficients
     
     Create a PSF image from instrument settings. The image is noiseless and
@@ -3301,8 +3390,8 @@ def _calc_psf_from_coeff(self, sp=None, return_oversample=True,
 
     If no spectral dispersers (grisms or DHS), then this returns a single
     image or list of images if sp is a list of spectra. By default, it returns
-    only the detector-sampled PSF, but setting return_oversample=True will
-    instead return a set of oversampled images.
+    only the oversampled PSF, but setting return_oversample=False will
+    instead return a set of detector-sampled images.
 
     Parameters
     ----------
@@ -3311,7 +3400,7 @@ def _calc_psf_from_coeff(self, sp=None, return_oversample=True,
         per wavelength bin). The default is normalized to produce 1 count/sec within 
         that bandpass, assuming the telescope collecting area and instrument bandpass. 
         Coronagraphic PSFs will further decrease this due to the smaller pupil
-        size and coronagraphic spot. 
+        size and suppression of coronagraphic mask. 
         If set, then the resulting PSF image will be scaled to generate the total
         observed number of photons from the spectrum.
     return_oversample : bool
@@ -3331,6 +3420,9 @@ def _calc_psf_from_coeff(self, sp=None, return_oversample=True,
 
     return_hdul : bool
         Return PSFs in an HDUList rather than set of arrays (default: True).
+    break_iter : bool
+        For multiple field points, break up generate PSFs one-by-one rather 
+        than simultaneously, which can save on memory for large PSFs.
     """        
 
     psf_coeff_hdr = self.psf_coeff_header
@@ -3346,6 +3438,59 @@ def _calc_psf_from_coeff(self, sp=None, return_oversample=True,
         is_spec = True if self.is_grism else False
     elif (self.name=='MIRI') or (self.name=='NIRSpec'):
         is_spec = True if self.is_slitspec else False
+
+    # Make sp a list of spectral objects if it already isn't
+    if sp is None:
+        nspec = 0
+    elif (sp is not None) and (not isinstance(sp, list)):
+        sp = [sp]
+        nspec = 1
+    else:
+        nspec = len(sp)
+
+    if coord_vals is not None:
+        coord_vals = np.array(coord_vals)
+
+    # If large number of requested field points, then break into single event calls
+    if coord_vals is not None:
+        c1_all, c2_all = coord_vals
+        nfield_init = np.size(c1_all)
+        break_iter = False if nfield_init<=1 else break_iter
+        if break_iter:
+            kwargs['sp'] = sp
+            kwargs['return_oversample'] = return_oversample
+            kwargs['return_hdul'] = return_hdul
+            kwargs['wfe_drift'] = wfe_drift
+            kwargs['coord_frame'] = coord_frame
+            psf_all = fits.HDUList() if return_hdul else []
+            for ii in trange(nfield_init, leave=True, desc='PSFs'):
+                kwargs['coord_vals'] = (c1_all[ii], c2_all[ii])
+
+                # Just a single spectrum? Or unique spectrum at each field point?
+                kwargs['sp'] = sp[ii] if((sp is not None) and (nspec==nfield_init)) else sp
+
+                res = _calc_psf_from_coeff(self, **kwargs)
+                if return_hdul:
+                    # For grisms (etc), the wavelength solution is the same for each field point
+                    psf = res[0]
+                    wave = res[1] if is_spec else None
+                    # if ii>0:
+                    #     psf = fits.ImageHDU(data=psf.data, header=psf.header)
+                else:
+                    # For grisms (etc), the wavelength solution is the same for each field point
+                    wave, psf = res if is_spec else (None, res)
+                psf_all.append(psf)
+                
+            if return_hdul:
+                output = fits.HDUList(psf_all)
+                if is_spec:
+                    output.append(wave)
+            else:
+                output = np.asarray(psf_all)
+                output = (wave, psf_all) if is_spec else output
+
+            return output
+
 
     # Coeff modification variable
     psf_coeff_mod = 0 
@@ -3390,18 +3535,12 @@ def _calc_psf_from_coeff(self, sp=None, return_oversample=True,
             cf_mod = cf_mod_list[ind]
             psf_coeff_mod[i] += cf_mod
 
-    # Add modifications to coefficients
-    psf_coeff = psf_coeff + psf_coeff_mod
-    del psf_coeff_mod
+    # return psf_coeff, psf_coeff_mod
 
-    # Make sp a list of spectral objects if it already isn't
-    if sp is None:
-        nspec = 0
-    elif (sp is not None) and (not isinstance(sp, list)):
-        sp = [sp]
-        nspec = 1
-    else:
-        nspec = len(sp)
+    # Add modifications to coefficients
+    psf_coeff_mod += psf_coeff
+    del psf_coeff
+    psf_coeff = psf_coeff_mod
 
     # if multiple field points were present, we want to return PSF for each location
     if nfield>1:
@@ -3409,8 +3548,12 @@ def _calc_psf_from_coeff(self, sp=None, return_oversample=True,
         for ii in trange(nfield, leave=True, desc='PSFs'):
             # Just a single spectrum? Or unique spectrum at each field point?
             sp_norm = sp[ii] if((sp is not None) and (nspec==nfield)) else sp
-            res = gen_image_from_coeff(self, psf_coeff[ii], psf_coeff_hdr, sp_norm=sp_norm,
+
+            # Delete coefficients as they are used to reduce memory usage
+            cf_ii = psf_coeff[ii]
+            res = gen_image_from_coeff(self, cf_ii, psf_coeff_hdr, sp_norm=sp_norm,
                                        return_oversample=return_oversample)
+
             # For grisms (etc), the wavelength solution is the same for each field point
             wave, psf = res if is_spec else (None, res)
             psf_all.append(psf)
@@ -3489,9 +3632,14 @@ def _calc_psf_from_coeff(self, sp=None, return_oversample=True,
 
 def _wfe_drift_key(self, coord_vals, coord_frame):
     """
-    Choose which WFE drift coefficient key to use based on coordinate position
+    Choose which WFE drift coefficient key to use based on coordinate position.
+    Only for coronagraphic observations (on-axis vs off-axis PSFs).
     """
     xsci = ysci = None
+
+    # Preceed only if coronagraphic observation
+    if not self.is_coron:
+        return 'wfe_drift' 
 
     # Modify PSF coefficients based on position
     if coord_vals is None:
@@ -3521,7 +3669,7 @@ def _wfe_drift_key(self, coord_vals, coord_frame):
                     xsci, ysci = siaf_ap.convert(x,y, cframe, 'sci')  # arcsec
                 _log.warning('Update self.siaf_ap for more specific conversions to (xsci,ysci).')
         else:
-            # Can't figure out coordinate frames, so set to 0
+            # Can't figure out coordinate frames, so assume 0
             return 'wfe_drift'
 
     # Assume we successfully found (xsci,ysci)
@@ -3604,8 +3752,8 @@ def _coeff_mod_wfe_field(self, coord_vals, coord_frame):
 
     cf_fit = self._psf_coeff_mod['si_field'] 
     v2grid  = self._psf_coeff_mod['si_field_v2grid'] 
-    v3grid  = self._psf_coeff_mod['si_field_v3grid'] 
-    apname  = self._psf_coeff_mod['si_field_apname']
+    v3grid  = self._psf_coeff_mod['si_field_v3grid']
+    apname  = self.aperturename # self._psf_coeff_mod['si_field_apname']
     siaf_ap = self.siaf[apname] if apname is not None else None
 
     # Modify PSF coefficients based on position
@@ -3638,12 +3786,15 @@ def _coeff_mod_wfe_field(self, coord_vals, coord_frame):
         # print(v2,v3)
         nfield = np.size(v2)
         cf_mod = field_coeff_func(v2grid, v3grid, cf_fit, v2, v3)
+        cf_shape = psf_coeff.shape
+        # cf_mod = np.zeros([nfield, cf_shape[0], cf_shape[1], cf_shape[2]])
 
         # Pad cf_mod array with 0s if undersized
-        psf_cf_dim = len(psf_coeff.shape)
-        if not np.allclose(psf_coeff.shape, cf_mod.shape[-psf_cf_dim:]):
-            new_shape = psf_coeff.shape[1:]
+        psf_cf_dim = len(cf_shape)
+        if not np.allclose(cf_shape, cf_mod.shape[-psf_cf_dim:]):
+            new_shape = cf_shape[1:]
             cf_mod_resize = np.asarray([pad_or_cut_to_size(im, new_shape) for im in cf_mod])
+            del cf_mod
             cf_mod = cf_mod_resize
 
     return cf_mod, nfield
@@ -3673,7 +3824,7 @@ def _coeff_mod_wfe_mask(self, coord_vals, coord_frame):
     psf_coeff     = self.psf_coeff
 
     cf_fit = self._psf_coeff_mod.get('si_mask', None) 
-    apname = self._psf_coeff_mod.get('si_mask_apname', None)
+    apname = self.aperturename # self._psf_coeff_mod.get('si_mask_apname', None)
     siaf_ap = self.siaf[apname] if apname is not None else None
 
     # Coord values are set, but not coefficients supplied
@@ -3750,6 +3901,177 @@ def _coeff_mod_wfe_mask(self, coord_vals, coord_frame):
             cf_mod = cf_mod_resize
 
     return cf_mod, nfield
+
+
+def coron_grid(self, npsf_per_axis, xoff_vals=None, yoff_vals=None):
+    
+    
+    def log_grid(nvals, vmax=10):
+        """Log spacing in arcsec relative to mask center"""
+        vals_p = np.logspace(-2,np.log10(vmax),int((nvals-1)/2))
+        vals_m = np.sort(-1*vals_p)
+        return np.sort(np.concatenate([vals_m, [0], vals_p]))
+
+    def lin_grid(nvals, vmin=-10, vmax=10):
+        """Linear spacing in arcsec relative to mask center"""
+        return np.linspace(vmin, vmax, nvals)
+
+    # Observation aperture
+    siaf_ap = self.siaf_ap
+    
+    
+    if self.name.lower()=='nircam':
+        nx_pix = 320 if self.channel.lower()=='long' else 640
+        ny_pix = nx_pix
+    else:
+        xvert, yvert = siaf_ap.closed_polygon_points('sci', rederive=False)
+        xsci_min, xsci_max = int(np.min(xvert)), int(np.max(xvert))
+        ysci_min, ysci_max = int(np.min(yvert)), int(np.max(yvert))
+
+        nx_pix = int(xsci_max - xsci_min)
+        ny_pix = int(ysci_max - ysci_min)
+
+    xoff_min, xoff_max = siaf_ap.XSciScale * np.array([-1,1]) * nx_pix / 2
+    yoff_min, yoff_max = siaf_ap.YSciScale * np.array([-1,1]) * ny_pix / 2
+        
+    if np.size(npsf_per_axis)==1:
+        xpsf = ypsf = npsf_per_axis
+    else:
+        xpsf, ypsf = npsf_per_axis
+
+    field_rot = 0 if self._rotation is None else self._rotation
+    xlog_spacing = False if self.mask_image[-2]=='WB' else True
+    ylog_spacing = True 
+    
+    if xoff_vals is None:
+        xmax = np.abs([xoff_min,xoff_max]).max()
+        xoff = log_grid(xpsf, xmax) if xlog_spacing else lin_grid(xpsf, -xmax, xmax)
+    if yoff_vals is None:
+        ymax = np.abs([yoff_min,yoff_max]).max()
+        yoff = log_grid(ypsf, ymax) if ylog_spacing else lin_grid(ypsf, -ymax, ymax)
+
+    # Mask Offset grid positions in arcsec
+    xgrid_off, ygrid_off = np.meshgrid(xoff, yoff)
+    xgrid_off, ygrid_off = xgrid_off.flatten(), ygrid_off.flatten()
+
+    # Science positions in detector pixels
+    xoff_sci_asec, yoff_sci_asec = xy_rot(-1*xgrid_off, -1*ygrid_off, -1*field_rot)
+    xsci = xoff_sci_asec / siaf_ap.XSciScale + siaf_ap.XSciRef
+    ysci = yoff_sci_asec / siaf_ap.YSciScale + siaf_ap.YSciRef
+
+    return xsci, ysci
+
+def _calc_psfs_grid(self, wfe_drift=0, osamp=1, npsf_per_full_fov=15,
+                    xsci_vals=None, ysci_vals=None, return_coords=None,
+                    sp=None, use_coeff=True):
+
+    """Create a grid of PSFs across an instrumnet FoV
+    
+    Create a grid of PSFs across instrument aperture FoV. By default,
+    imaging observations will be for full detector FoV with regularly
+    spaced grid. Coronagraphic observations will cover nominal 
+    coronagraphic mask region (usually 10s of arcsec) and will have
+    logarithmically spaced values.
+
+    Keyword Args
+    ============
+    wfe_drift : float
+        Desired WFE drift value relative to default OPD.
+    osamp : int
+        Sampling of output PSF relative to detector sampling.
+    npsf_per_full_fov : int
+        Number of PSFs across one dimension of the instrument's field of 
+        view. If a coronagraphic observation, then this is for the nominal
+        coronagrahic field of view. Otherwise,
+    xsci_vals: None or ndarray
+        Option to pass a custom grid values along x-axis in 'sci' coords.
+        If coronagraph, this instead corresponds to coronagraphic mask axis, 
+        which has a slight rotation in MIRI.
+    ysci_vals: None or ndarray
+        Option to pass a custom grid values along y-axis in 'sci' coords.
+        If coronagraph, this instead corresponds to coronagraphic mask axis, 
+        which has a slight rotation in MIRI.
+    return_coords : None or str
+        Option to also return coordinate values in desired frame 
+        ('det', 'sci', 'tel', 'idl').
+    """
+
+    # Observation aperture
+    siaf_ap_obs = self.siaf_ap
+
+    # Produce grid of PSF locations across the field of view
+    if self.is_coron:
+        xsci_psf, ysci_psf = coron_grid(self, npsf_per_full_fov, 
+                                        xoff_vals=xsci_vals, yoff_vals=ysci_vals)
+    else:
+        # No need to go beyond detector pixels
+
+        # Number of sci pixels in FoV
+        # Generate grid borders
+        xvert, yvert = siaf_ap_obs.closed_polygon_points('sci', rederive=False)
+        xsci_min, xsci_max = int(np.min(xvert)), int(np.max(xvert))
+        ysci_min, ysci_max = int(np.min(yvert)), int(np.max(yvert))
+
+        nx_pix = int(xsci_max - xsci_min)
+        ny_pix = int(ysci_max - ysci_min)
+
+        # Ensure at least 5 PSFs across FoV for imaging
+        if np.size(npsf_per_full_fov)==1:
+            xpsf_full = ypsf_full = npsf_per_full_fov
+        else:
+            xpsf_full, ypsf_full = npsf_per_full_fov
+
+        xpsf = np.max([int(xpsf_full * nx_pix / siaf_ap_obs.XDetSize), 5])
+        ypsf = np.max([int(ypsf_full * ny_pix / siaf_ap_obs.YDetSize), 5])
+        # Cut in half for NIRCam SW (4 detectors per FoV)
+        if self.name.lower()=='nircam' and self.channel.lower()=='short':
+            xpsf = np.max([int(xpsf / 2), 5])
+            ypsf = np.max([int(ypsf / 2), 5])
+
+        # Create a PSF for each grid point 
+        if xsci_vals is None:
+            xsci_vals = np.linspace(xsci_min, xsci_max, xpsf)
+        if ysci_vals is None:
+            ysci_vals = np.linspace(ysci_min, ysci_max, ypsf)
+
+        xsci_psf, ysci_psf = np.meshgrid(xsci_vals, ysci_vals)
+        # Flatten PSFs
+        xsci_psf = xsci_psf.flatten()
+        ysci_psf = ysci_psf.flatten()
+
+    # Convert everything to tel for good measure (shouldn't matter, though)
+    xtel_psf, ytel_psf = siaf_ap_obs.convert(xsci_psf, ysci_psf, 'sci', 'tel')
+    if use_coeff:
+        hdul_psfs = self.calc_psf_from_coeff(sp=sp, coord_vals=(xtel_psf, ytel_psf), coord_frame='tel', 
+                                            wfe_drift=wfe_drift, return_oversample=True)
+    else:
+        hdul_psfs = fits.HDUList()
+        npos = len(xtel_psf)
+        for xoff, yoff in tqdm(zip(xtel_psf, ytel_psf), total=npos):
+            res = self.calc_psf(sp=sp, coord_vals=(xoff,yoff), coord_frame='tel', 
+                                return_oversample=True)
+            # If add_distortion take index 2, otherwise index 0
+            hdu = res[2] if len(res)==4 else res[0]
+            hdul_psfs.append(hdu)
+
+    # Resample if necessary
+    scale = osamp / self.oversample #hdu.header['OSAMP']
+    if scale != 1:
+        for hdu in hdul_psfs:
+            hdu.data = frebin(hdu.data, scale=scale)
+            hdu.header['PIXELSCL'] = hdu.header['PIXELSCL'] / scale
+            hdu.header['OSAMP'] = osamp
+
+    if return_coords is None:
+        return hdul_psfs
+    elif return_coords=='sci':
+        xvals, yvals = xsci_psf, ysci_psf
+    elif return_coords=='tel':
+        xvals, yvals = xtel_psf, ytel_psf
+    else:
+        xvals, yvals = siaf_ap_obs.convert(xsci_psf, ysci_psf, 'sci', return_coords)
+        
+    return xvals, yvals, hdul_psfs
 
 def _calc_psfs_sgd(self, xoff_asec, yoff_asec, use_coeff=True, return_oversample=True, **kwargs):
     """Calculate small grid dithers PSFs"""
