@@ -439,8 +439,12 @@ def field_coeff_func(v2grid, v3grid, cf_fields, v2_new, v3_new, method='linear')
 
     pts = np.array([v3_new,v2_new]).transpose()
     
+    if np.size(v2_new)>1:
+        res = np.asarray([func(pt).squeeze() for pt in pts])
+    else:
+        res = func(pts)
+
     # If only 1 point, remove first axes
-    res = func(pts)
     res = res.squeeze() if res.shape[0]==1 else res
     return res
 

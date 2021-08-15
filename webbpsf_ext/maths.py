@@ -492,7 +492,10 @@ def find_closest(A, B):
     
     # Make sure these are array
     a = np.asarray(A)
-    b = np.asarray(B)
+    if np.size(B)==1:
+        b = np.asarray([B])
+    else:
+        b = np.asarray(B)
     
     # Flatten a array
     a_shape = a.shape
