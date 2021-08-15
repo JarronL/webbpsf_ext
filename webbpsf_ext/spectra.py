@@ -1924,3 +1924,19 @@ def bin_spectrum(sp, wave, waveunits='um'):
     sp.convert(fluxunits0)
 
     return sp2
+
+def mag_to_counts(src_mag, bandpass, sp_type='G0V', mag_units='vegamag'):
+        """
+        Convert stellar magnitudes in some bandpass to corresponding flux values (e-/sec)
+        """
+        
+        # Get flux of a 0 magnitude star (zero-point flux)
+        sp = stellar_spectrum(sp_type, 0, mag_units, bandpass)
+        obs = S.Observation(sp, bandpass, binset=bandpass.wave)
+        zp_counts = obs.effstim('counts') # Counts of a 0 mag star
+        
+        # Flux of each star e-/sec
+        src_flux = np.array(zp_counts * 10**(-src_mag / 2.5))
+        
+        return src_flux
+
