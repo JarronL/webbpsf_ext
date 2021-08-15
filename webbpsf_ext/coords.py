@@ -6,6 +6,16 @@ __epsilon = np.finfo(float).eps
 
 from .utils import pysiaf
 
+# Define these here rather than calling multiple times
+# since it takes some time to generate these.
+siaf_nrc = pysiaf.Siaf('NIRCam')
+siaf_nis = pysiaf.Siaf('NIRISS')
+siaf_mir = pysiaf.Siaf('MIRI')
+siaf_nrs = pysiaf.Siaf('NIRSpec')
+siaf_fgs = pysiaf.Siaf('FGS')
+si_match = {'NRC': siaf_nrc, 'NIS': siaf_nis, 'MIR': siaf_mir, 'NRS': siaf_nrs, 'FGS': siaf_fgs}
+
+
 def dist_image(image, pixscale=None, center=None, return_theta=False):
     """Pixel distances
     
@@ -256,9 +266,8 @@ def ap_radec(ap_obs, ap_ref, coord_ref, pa, base_off=(0,0), dith_off=(0,0),
         _log.warning("Neither get_cenpos nor get_vert were set to True. Nothing to return.")
         return
 
-    si_match = {'NRC': 'nircam', 'NIS': 'niriss', 'MIR': 'miri', 'NRS': 'nirspec', 'FGS': 'fgs'}
-    siaf_obs = pysiaf.Siaf(si_match.get(ap_obs[0:3]))
-    siaf_ref = pysiaf.Siaf(si_match.get(ap_ref[0:3]))
+    siaf_obs = si_match.get(ap_obs[0:3])
+    siaf_ref = si_match.get(ap_ref[0:3])
     ap_siaf_ref = siaf_ref[ap_ref]
     ap_siaf_obs = siaf_obs[ap_obs]
 
@@ -299,6 +308,37 @@ def ap_radec(ap_obs, ap_ref, coord_ref, pa, base_off=(0,0), dith_off=(0,0),
         return
 
 
+def radec_to_coord(coord_objs, siaf_ref_name, coord_ref, pa_ref, 
+                   frame_out='tel', base_off=(0,0), dith_off=(0,0)):
+    """RA/Dec to 'tel' (arcsec), 'sci' (pixels), or 'det' (pixels)
+    
+    Convert a series of RA/Dec positions to telescope V2/V3 coordinates (in arcsec).
+    
+    Parameters
+    ----------
+    coord_objs : tuple 
+        (RA, Dec) positions (deg), where RA and Dec are numpy arrays.    
+    siaf_ref_name : str
+        Reference SIAF aperture name (e.g., 'NRCALL_FULL') 
+    coord_ref : list or tuple
+        RA and Dec towards which reference SIAF points
+    pa : float
+        Position angle in degrees measured from North to V3 axis in North to East direction.
+        
+    Keywords
+    --------
+    frame_out : str
+        One of 'tel' (arcsec), 'sci' (pixels), or 'det' (pixels).
+    base_off : list or tuple
+        X/Y offset of overall aperture offset (see APT pointing file)
+    dither_off : list or tuple
+        Additional offset from dithering (see APT pointing file)
+    """
+
+    return radec_to_v2v3(coord_objs, siaf_ref_name, coord_ref, pa_ref, frame_out=frame_out, 
+                         base_off=base_off, dith_off=dith_off)
+
+
 def radec_to_v2v3(coord_objs, siaf_ref_name, coord_ref, pa_ref, frame_out='tel',
                   base_off=(0,0), dith_off=(0,0)):
     """RA/Dec to V2/V3
@@ -319,7 +359,7 @@ def radec_to_v2v3(coord_objs, siaf_ref_name, coord_ref, pa_ref, frame_out='tel',
     Keywords
     --------
     frame_out : str
-        One of 'tel', 'sci', or 'det'.    
+        One of 'tel' (arcsec), 'sci' (pixels), or 'det' (pixels).
     base_off : list or tuple
         X/Y offset of overall aperture offset (see APT pointing file)
     dither_off : list or tuple
@@ -327,8 +367,7 @@ def radec_to_v2v3(coord_objs, siaf_ref_name, coord_ref, pa_ref, frame_out='tel',
     """
     
     # SIAF object setup
-    si_match = {'NRC': 'nircam', 'NIS': 'niriss', 'MIR': 'miri', 'NRS': 'nirspec', 'FGS': 'fgs'}
-    siaf_ref = pysiaf.Siaf(si_match.get(siaf_ref_name[0:3]))
+    siaf_ref = si_match.get(siaf_ref_name[0:3])
     siaf_ap = siaf_ref[siaf_ref_name]
     
     # RA and Dec of ap ref location and the objects in the field
@@ -377,8 +416,7 @@ def v2v3_to_pixel(ap_obs, v2_obj, v3_obj, frame='sci'):
     """
     
     # SIAF object setup
-    si_match = {'NRC': 'nircam', 'NIS': 'niriss', 'MIR': 'miri', 'NRS': 'nirspec', 'FGS': 'fgs'}
-    siaf = pysiaf.Siaf(si_match.get(ap_obs[0:3]))
+    siaf = si_match.get(ap_obs[0:3])
     ap_siaf = siaf[ap_obs]
 
     if frame=='det':
@@ -483,7 +521,7 @@ def get_idl_offset(base_offset=(0,0), dith_offset=(0,0), base_std=0, use_ta=True
     use_ta : bool
         If observation uses a target acquisition, then assume only 5 mas
         of pointing uncertainty, other 100 mas for "blind" pointing.
-    base_std : float or array-like or None
+    dith_std : float or array-like or None
         The 1-sigma pointing uncertainty per axis for dithers. If None,
         then standard deviation is chosen to be either 2.5 or 5 mas, 
         depending on `use_sgd` setting.
@@ -553,19 +591,51 @@ def radec_offset(ra, dec, dist, pos_ang):
     return res.ra.deg, res.dec.deg
     
 
-class jwst_point(object):    
+class jwst_point(object):
+
     
     def __init__(self, ap_obs_name, ap_ref_name, ra_ref, dec_ref, pos_ang=0, 
-        base_offset=(0,0), dith_offsets = [(0,0)], base_std=None, dith_std=None):
+        base_offset=(0,0), dith_offsets=[(0,0)], base_std=None, dith_std=None):
+
+        """
+        Parameters
+        ==========
+        ap_obs_name : str
+            Name of the observed instrument aperture.
+        ap_ref_name : str
+            Name of the reference instrument aperture. Can be the same as observed,
+            but not always.
+        ra_ref : float
+            RA position (in deg) of the reference aperture.
+        dec_ref : float
+            Dec position (in deg) of the reference aperture.
         
+        Keyword Args
+        ============
+        pos_ang : float
+            Position angle (positive angles East of North) in degrees.
+        base_offset : array-like
+            Corresponds to (BaseX, BaseY) columns in .pointing file (arcsec).
+        dith_offset : array-like
+            Corresponds to (DithX, DithY) columns in .pointing file (arcsec). 
+        base_std : float or array-like or None
+            The 1-sigma pointing uncertainty per axis for telescope slew. 
+            If None, then standard deviation is chosen to be either 5 mas 
+            or 100 mas, depending on `use_ta` attribute (default: True).
+        dith_std : float or array-like or None
+            The 1-sigma pointing uncertainty per axis for dithers. If None,
+            then standard deviation is chosen to be either 2.5 or 5 mas, 
+            depending on `use_sgd` attribute (default: True).
+        """
+
+
         # SIAF objects configuration
-        si_match = {'NRC': 'nircam', 'NIS': 'niriss', 'MIR': 'miri', 'NRS': 'nirspec', 'FGS': 'fgs'}
         # Reference instrument and aperture
-        siaf_ref_inst = pysiaf.Siaf(si_match.get(ap_ref_name[0:3]))
+        siaf_ref_inst = si_match.get(ap_ref_name[0:3])
         self.siaf_ap_ref = siaf_ref_inst[ap_ref_name]
 
         # Observation instrument and aperture
-        self.siaf_inst = pysiaf.Siaf(si_match.get(ap_obs_name[0:3]))
+        self.siaf_inst = si_match.get(ap_obs_name[0:3])
         self.siaf_ap_obs = self.siaf_inst[ap_obs_name]
         
         # Store RA/Dec nominal pointing
@@ -628,40 +698,31 @@ class jwst_point(object):
         """Target pointing uncertainty (mas)"""
         self._base_std = value
         
-    def ap_radec(self, idl_off=(0,0), get_cenpos=True, get_vert=False):
-        """Aperture reference point(s) RA/Dec
-
-        Given the (RA, Dec) and position angle of a given reference aperture,
-        return the (RA, Dec) associated with the reference point (usually center) 
-        of a different aperture. Can also return the corner vertices of the
-        aperture. 
-
-        Typically, the reference aperture (ap_ref) is used for the telescope 
-        pointing information (e.g., NRCALL), but you may want to determine
-        locations of the individual detector apertures (NRCA1_FULL, NRCB3_FULL, etc).
-
+    def attitude_matrix(self, idl_off=(0,0), ap_siaf_ref=None, coord_ref=None, **kwargs):
+        """Return an attitutde correction matrix
+        
         Parameters
-        ----------
+        ==========
         idl_off : list or tuple
-            X/Y offset of overall aperture offset
-        get_cenpos : bool
-            Return aperture reference location coordinates?
-        get_vert: bool
-            Return closed polygon vertices (useful for plotting)?
+            X/Y offset of overall aperture offset. Usually a combination
+            of base_off + dith_off (both in idl coordinates).
+        ap_siaf_ref : pysiaf aperture
+            Aperture reference being offset (uses it's V2/V3 ref/center coords).
+            By default, uses self.siaf_ap_ref.
+        coord_ref : tuple
+            RA/Dec (in deg) reference coordinate nominally placed at 
+            aperture's reference location prior to dither offset.
+            Default is (self.ra_ref, self.dec_ref).
         """
 
-        if (get_cenpos==False) and (get_vert==False):
-            _log.warning("Neither get_cenpos nor get_vert were set to True. Nothing to return.")
-            return
-
-        ap_siaf_ref = self.siaf_ap_ref
-        ap_siaf_obs = self.siaf_ap_obs
+        
+        ap_siaf_ref = self.siaf_ap_ref if ap_siaf_ref is None else ap_siaf_ref
 
         # RA and Dec of ap ref location and the objects in the field
-        ra_ref, dec_ref = (self.ra_ref, self.dec_ref)
+        ra_ref, dec_ref = (self.ra_ref, self.dec_ref) if coord_ref is None else coord_ref
         pa = self.pos_ang
 
-        # Field offset defined in 'idl' coords
+        # Any field offset defined in 'idl' coords
         x_off, y_off = idl_off
 
         # V2/V3 reference location aligned with RA/Dec reference
@@ -670,18 +731,61 @@ class jwst_point(object):
 
         # Attitude correction matrix relative to reference aperture
         att = pysiaf.utils.rotations.attitude(v2_ref, v3_ref, ra_ref, dec_ref, pa)
+        return att
 
-        # Get V2/V3 position of observed SIAF aperture and convert to RA/Dec
-        if get_cenpos==True:
-            v2_obs, v3_obs  = ap_siaf_obs.reference_point('tel')
-            ra_obs, dec_obs = pysiaf.utils.rotations.pointing(att, v2_obs, v3_obs)
-            cen_obs = (ra_obs, dec_obs)
+    def ap_radec(self, idl_off=(0,0), get_cenpos=True, get_vert=False, 
+                 ap_siaf_obs=None, **kwargs):
+        """Aperture reference point(s) RA/Dec
 
-        # Get V2/V3 vertices of observed SIAF aperture and convert to RA/Dec
-        if get_vert==True:
-            v2_vert, v3_vert  = ap_siaf_obs.closed_polygon_points('tel', rederive=False)
-            ra_vert, dec_vert = pysiaf.utils.rotations.pointing(att, v2_vert, v3_vert)
-            vert_obs = (ra_vert, dec_vert)
+        Given the (RA, Dec) and position angle some reference aperture,
+        return the (RA, Dec) associated with the reference point (usually center) 
+        of a different aperture. Can also return the corner vertices of the
+        aperture. 
+
+        Typically, the reference aperture (self.siaf_ap_ref) is used for the telescope 
+        pointing information (e.g., NRCALL), but you may want to determine
+        locations of the individual detector apertures (NRCA1_FULL, NRCB3_FULL, etc).
+
+        Parameters
+        ----------
+        idl_off : list or tuple
+            X/Y offset of overall aperture offset. Usually a combination
+            of base_off + dith_off (both in idl coordinates)
+        get_cenpos : bool
+            Return aperture reference location coordinates?
+        get_vert : bool
+            Return closed polygon vertices (useful for plotting)?
+        ap_siaf_obs : pysiaf aperture
+            Specify the aperture for which to obtain RA/Dec reference point.
+            The default is self.siaf_ap_obs.
+        """
+
+        if (get_cenpos==False) and (get_vert==False):
+            _log.warning("Neither get_cenpos nor get_vert were set to True. Nothing to return.")
+            return
+
+        ap_siaf_obs = self.siaf_ap_obs if ap_siaf_obs is None else ap_siaf_obs
+
+        # Attitude correction matrix relative to reference aperture
+        # att = pysiaf.utils.rotations.attitude(v2_ref, v3_ref, ra_ref, dec_ref, pa)
+        att = self.attitude_matrix(idl_off=idl_off, **kwargs)
+
+        try: # Use internal pysiaf conversion wrapper (v0.12+)
+            ap_siaf_obs.set_attitude_matrix(att)
+            cen_obs  = ap_siaf_obs.reference_point('sky')
+            vert_obs = ap_siaf_obs.closed_polygon_points('sky', rederive=False)
+            ap_siaf_obs._attitude_matrix = None
+        except AttributeError:
+            # Get V2/V3 position of observed SIAF aperture and convert to RA/Dec
+            if get_cenpos==True:
+                v2_obs, v3_obs  = ap_siaf_obs.reference_point('tel')
+                ra_obs, dec_obs = pysiaf.utils.rotations.pointing(att, v2_obs, v3_obs)
+                cen_obs = (ra_obs, dec_obs)
+            # Get V2/V3 vertices of observed SIAF aperture and convert to RA/Dec
+            if get_vert==True:
+                v2_vert, v3_vert  = ap_siaf_obs.closed_polygon_points('tel', rederive=False)
+                ra_vert, dec_vert = pysiaf.utils.rotations.pointing(att, v2_vert, v3_vert)
+                vert_obs = (ra_vert, dec_vert)
 
         if (get_cenpos==True) and (get_vert==True):
             return cen_obs, vert_obs
@@ -705,8 +809,8 @@ class jwst_point(object):
         coord_objs : tuple 
             (RA, Dec) positions (deg), where RA and Dec are numpy arrays.
         frame_out : str
-            One of 'tel', 'sci', or 'det'.
-        idl_off : None or list of 2-element array
+            One of 'tel' (arcsec), 'sci' (pixels), or 'det' (pixels).
+        idl_offsets : None or list of 2-element array
             Option to specify custom offset locations. Normally this is set to None, and
             we return RA/Dec for all telescope point positions defined in 
             `self.position_offsets_act`. However, we can specify offsets here (in 'idl')
@@ -718,7 +822,7 @@ class jwst_point(object):
 
         # RA and Dec of ap ref location and the objects in the field
         ra_ref, dec_ref = (self.ra_obs, self.dec_obs)
-        pa_ref = self.pos_ang
+        # pa_ref = self.pos_ang
         ra_obj, dec_obj = coord_objs
 
         # Field offset as specified in APT Special Requirements
@@ -727,24 +831,26 @@ class jwst_point(object):
             idl_offsets = self.position_offsets_act
 
         out_all = []
+        # For each dither position
         for idl_off in idl_offsets:
-            x_off, y_off  = idl_off
+            # Attitude correction matrix relative to observed aperture
+            att = self.attitude_matrix(idl_off=idl_off, ap_siaf_ref=siaf_ap, coord_ref=(ra_ref, dec_ref))
 
-            # V2/V3 reference location aligned with RA/Dec reference
-            # and offset by (x_off, y_off) in 'idl' coords
-            v2_ref, v3_ref = np.array(siaf_ap.convert(x_off, y_off, 'idl', 'tel'))
+            try:
+                # Use internal pysiaf conversion wrapper (v0.12+)
+                siaf_ap.set_attitude_matrix(att)
+                c1, c2 = siaf_ap.convert(ra_obj, dec_obj, 'sky', frame_out)
+                siaf_ap._attitude_matrix = None
+            except AttributeError:
+                # Convert all RA/Dec coordinates into V2/V3 positions for objects
+                v2_obj, v3_obj = pysiaf.utils.rotations.getv2v3(att, ra_obj, dec_obj)
 
-            # Attitude correction matrix relative to reference aperture
-            att = pysiaf.utils.rotations.attitude(v2_ref, v3_ref, ra_ref, dec_ref, pa_ref)
+                # Convert from tel to something else?
+                if frame_out=='tel':
+                    c1, c2 = (v2_obj, v3_obj)
+                else:
+                    c1, c2 = siaf_ap.convert(v2_obj, v3_obj, 'tel', frame_out)
 
-            # Convert all RA/Dec coordinates into V2/V3 positions for objects
-            v2_obj, v3_obj = pysiaf.utils.rotations.getv2v3(att, ra_obj, dec_obj)
-
-            # Convert from tel to something else?
-            if frame_out=='tel':
-                c1, c2 = (v2_obj, v3_obj)
-            else:
-                c1, c2 = siaf_ap.convert(v2_obj, v3_obj, 'tel', frame_out)
             out_all.append((c1,c2))
 
         if len(out_all)==1:
@@ -753,6 +859,7 @@ class jwst_point(object):
             return out_all
         
     def gen_random_offsets(self):
+        """Generate randomized pointing offsets for each dither position"""
         
         _log.info('Generating random pointing offsets...')
         
@@ -812,7 +919,7 @@ class jwst_point(object):
         pysiaf.siaf.plot_main_apertures(fill=fill, **kwargs)
         
     def plot_inst_apertures(self, subarrays=False, fill=False, **kwargs):
-        """ Plot all apertures in this SIAF.
+        """ Plot all apertures in this instrument's SIAF.
         
         Other matplotlib standard parameters may be passed in via **kwargs
         to adjust the style of the displayed lines.
@@ -866,12 +973,84 @@ class jwst_point(object):
         return self.siaf_inst.plot(subarrays=subarrays, fill=fill, **kwargs)
     
     def plot_ref_aperture(self, fill=False, **kwargs):
-        
-        self.siaf_ap_ref.plot(fill=fill, **kwargs)
+        """
+        Parameters
+        -----------
+        names : list of strings
+            A subset of aperture names, if you wish to plot only a subset
+        subarrays : bool
+            Plot all the minor subarrays if True, else just plot the "main" apertures
+        label : bool
+            Add text labels stating aperture names
+        units : str
+            one of 'arcsec', 'arcmin', 'deg'. Only set for 'idl' and 'tel' frames.
+        clear : bool
+            Clear plot before plotting (set to false to overplot)
+        show_frame_origin : str or list
+            Plot frame origin (goes to plot_frame_origin()): None, 'all', 'det',
+            'sci', 'raw', 'idl', or a list of these.
+        mark_ref : bool
+            Add markers for the reference (V2Ref, V3Ref) point in each apertyre
+        frame : str
+            Which coordinate system to plot in: 'tel', 'idl', 'sci', 'det'
+        ax : matplotlib.Axes
+            Desired destination axes to plot into (If None, current
+            axes are inferred from pyplot.)
+        fill : bool
+            Whether to color fill the aperture
+        fill_color : str
+            Fill color
+        fill_alpha : float
+            alpha parameter for filled aperture
+        color : matplotlib-compatible color
+            Color specification for this aperture's outline,
+            passed through to `matplotlib.Axes.plot`
+        """          
+        siaf_ap = self.siaf_ap_ref
+        att = self.attitude_matrix(**kwargs)
+        siaf_ap.set_attitude_matrix(att)
+        siaf_ap.plot(fill=fill, **kwargs)
+        siaf_ap._attitude_matrix = None
         
     def plot_obs_aperture(self, fill=False, **kwargs):
-        
-        self.siaf_ap_obs.plot(fill=fill, **kwargs)
+        """
+        Parameters
+        -----------
+        names : list of strings
+            A subset of aperture names, if you wish to plot only a subset
+        subarrays : bool
+            Plot all the minor subarrays if True, else just plot the "main" apertures
+        label : bool
+            Add text labels stating aperture names
+        units : str
+            one of 'arcsec', 'arcmin', 'deg'. Only set for 'idl' and 'tel' frames.
+        clear : bool
+            Clear plot before plotting (set to false to overplot)
+        show_frame_origin : str or list
+            Plot frame origin (goes to plot_frame_origin()): None, 'all', 'det',
+            'sci', 'raw', 'idl', or a list of these.
+        mark_ref : bool
+            Add markers for the reference (V2Ref, V3Ref) point in each apertyre
+        frame : str
+            Which coordinate system to plot in: 'tel', 'idl', 'sci', 'det'
+        ax : matplotlib.Axes
+            Desired destination axes to plot into (If None, current
+            axes are inferred from pyplot.)
+        fill : bool
+            Whether to color fill the aperture
+        fill_color : str
+            Fill color
+        fill_alpha : float
+            alpha parameter for filled aperture
+        color : matplotlib-compatible color
+            Color specification for this aperture's outline,
+            passed through to `matplotlib.Axes.plot`
+        """ 
+        siaf_ap = self.siaf_ap_obs
+        att = self.attitude_matrix(**kwargs)
+        siaf_ap.set_attitude_matrix(att)
+        siaf_ap.plot(fill=fill, **kwargs)
+        siaf_ap._attitude_matrix = None
 
 
 def plotAxes(ax, position=(0.9,0.1), label1='V2', label2='V3', dir1=[-1,0], dir2=[0,1],
