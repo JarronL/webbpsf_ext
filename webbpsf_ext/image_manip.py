@@ -1,3 +1,4 @@
+from copy import deepcopy
 from astropy.io.fits import hdu
 import numpy as np
 import multiprocessing as mp
@@ -61,7 +62,8 @@ def fshift(inarr, delx=0, dely=0, pad=False, cval=0.0, interp='linear', **kwargs
     
     from scipy.interpolate import interp1d, interp2d
 
-    ndim = len(inarr.shape)
+    shape = inarr.shape
+    ndim = len(shape)
     
     if ndim == 1:
         # Return if delx is 0
@@ -106,7 +108,7 @@ def fshift(inarr, delx=0, dely=0, pad=False, cval=0.0, interp='linear', **kwargs
         if np.isclose(delx, 0, atol=1e-5) and np.isclose(dely, 0, atol=1e-5):
             return inarr
 
-        ny, nx = inarr.shape
+        ny, nx = shape
 
         # separate shift into an integer and fraction shift
         intx = np.int(delx)
@@ -171,7 +173,7 @@ def fshift(inarr, delx=0, dely=0, pad=False, cval=0.0, interp='linear', **kwargs
         out = np.array([fshift(im, **kwargs) for im in inarr])
 
     else:
-        raise ValueError(f'Found {ndim} dimensions. Only up to 3 dimensions allowed.')
+        raise ValueError(f'Found {ndim} dimensions {shape}. Only up to 3 dimensions allowed.')
 
     return out
 
@@ -204,11 +206,12 @@ def fourier_imshift(image, xshift, yshift, pad=False, cval=0.0, **kwargs):
         Shifted image
     """
 
-    ndim = len(image.shape)
+    shape = image.shape
+    ndim = len(shape)
 
     if ndim==2:
 
-        ny, nx = image.shape
+        ny, nx = shape
     
         # Pad ends with zeros
         if pad:
@@ -229,7 +232,7 @@ def fourier_imshift(image, xshift, yshift, pad=False, cval=0.0, **kwargs):
         kwargs['cval'] = cval
         offset = np.array([fourier_imshift(im, xshift, yshift, **kwargs) for im in image])
     else:
-        raise ValueError(f'Found {ndim} dimensions. Only up 2 or 3 dimensions allowed.')
+        raise ValueError(f'Found {ndim} dimensions {shape}. Only up 2 or 3 dimensions allowed.')
     
     return offset
     
@@ -263,7 +266,8 @@ def pad_or_cut_to_size(array, new_shape, fill_val=0.0, offset_vals=None,
         of the input array.
     """
     
-    ndim = len(array.shape)
+    shape_orig = array.shape
+    ndim = len(shape_orig)
     if ndim == 1:
         # is_1d = True
         # Reshape array to a 2D array with nx=1
@@ -298,8 +302,7 @@ def pad_or_cut_to_size(array, new_shape, fill_val=0.0, offset_vals=None,
             ny_new, nx_new = new_shape
         output = np.zeros(shape=(nz,ny_new,nx_new), dtype=array.dtype)
     else:
-        raise ValueError('Input image can only have 1 or 2 or 3 dimensions. \
-                          Found {} dimensions.'.format(ndim))
+        raise ValueError(f'Found {ndim} dimensions {shape_orig}. Only up to 3 dimensions allowed.')
                       
     # Return if no difference in shapes
     # This needs to occur after the above so that new_shape is verified to be a tuple
@@ -456,15 +459,15 @@ def rotate_offset(data, angle, cen=None, cval=0.0, order=1,
     if ((angle is None) or (angle==0)) and (cen is None):
         return data
 
-    ndim = len(data.shape)
+    shape_orig = data.shape
+    ndim = len(shape_orig)
     if ndim==2:
-        ny, nx = data.shape
+        ny, nx = shape_orig
         nz = 1
     elif ndim==3:
-        nz, ny, nx = data.shape
+        nz, ny, nx = shape_orig
     else:
-        raise ValueError('Input image can only have 2 or 3 dimensions. \
-                          Found {} dimensions.'.format(ndim))
+        raise ValueError(f'Found {ndim} dimensions {shape_orig}. Only 2 or 3 dimensions allowed.')    
 
     if 'axes' not in kwargs.keys():
         kwargs['axes'] = (2,1)
@@ -578,23 +581,23 @@ def frebin(image, dimensions=None, scale=None, total=True):
 
 
     shape = image.shape
-    if len(shape)==1:
+    ndim = len(shape)
+    if ndim==1:
         nlout = 1
         nsout = dimensions[0]
         nsout = int(nsout+0.5)
         dimensions = [nsout]
-    elif len(shape)==2:
+    elif ndim==2:
         nlout, nsout = dimensions
         nlout = int(nlout+0.5)
         nsout = int(nsout+0.5)
         dimensions = [nlout, nsout]
-    elif len(shape)==3:
+    elif ndim==3:
         kwargs = {'dimensions': dimensions, 'scale': scale, 'total': total}
         result = np.array([frebin(im, **kwargs) for im in image])
         return result
-    elif len(shape) > 3:
-        raise ValueError('Input image can only have 1, 2, or 3 dimensions. Found {} dimensions.'.format(len(shape)))
-    
+    elif ndim > 3:
+        raise ValueError(f'Found {ndim} dimensions {shape}. Only up to 3 dimensions allowed.')    
 
     if nlout != 1:
         nl = shape[0]
@@ -1095,6 +1098,55 @@ def _convolve_psfs_for_mp(arg_vals):
     """
     
     im, psf, ind_mask = arg_vals
+    
+    ny, nx = im.shape
+    ny_psf, nx_psf = psf.data.shape
+
+    # Get region to perform convolution
+    xtra_pix = int(nx_psf/2 + 10)
+    ind = np.argwhere(ind_mask.sum(axis=0)>0)
+    ix1, ix2 = (np.min(ind), np.max(ind))
+    ix1 -= xtra_pix
+    ix1 = 0 if ix1<0 else ix1
+    ix2 += xtra_pix
+    ix2 = nx if ix2>nx else ix2
+    
+    xtra_pix = int(ny_psf/2 + 10)
+    ind = np.argwhere(ind_mask.sum(axis=1))
+    iy1, iy2 = (np.min(ind), np.max(ind))    
+    iy1 -= xtra_pix
+    iy1 = 0 if iy1<0 else iy1
+    iy2 += xtra_pix
+    iy2 = ny if iy2>ny else iy2
+    
+    im_temp = im.copy()
+    im_temp[~ind_mask] = 0
+    
+    if np.allclose(im_temp,0):
+        # No need to convolve anything if no flux!
+        res = im_temp
+    else:
+        # Normalize PSF sum to 1.0
+        # Otherwise convolve_fft may throw an error if psf.sum() is too small
+        norm = psf.sum()
+        psf = psf / norm
+        res = convolve_fft(im_temp[iy1:iy2,ix1:ix2], psf, fftn=fftpack.fftn, ifftn=fftpack.ifftn, allow_huge=True)
+        res *= norm
+        im_temp[iy1:iy2,ix1:ix2] = res
+        res = im_temp
+
+    return res
+
+
+def _convolve_psfs_for_mp_old(arg_vals):
+    """
+    Internal helper routine for parallelizing computations across multiple processors,
+    specifically for convolving position-dependent PSFs with an extended image or
+    field of PSFs.
+
+    """
+    
+    im, psf, ind_mask = arg_vals
     im_temp = im.copy()
     im_temp[~ind_mask] = 0
     
@@ -1111,7 +1163,139 @@ def _convolve_psfs_for_mp(arg_vals):
 
     return res
 
-def convolve_image(hdul_sci_image, hdul_psfs, aper=None):
+def convolve_image(hdul_sci_image, hdul_psfs, return_hdul=False, output_sampling=None):
+    """ Convolve image with various PSFs
+
+    Takes an extended image, breaks it up into subsections, then
+    convolves each subsection with the nearest neighbor PSF. The
+    subsection sizes and locations are determined from PSF 'sci'
+    positions.
+
+    Parameters
+    ==========
+    hdul_sci_image : HDUList
+        Image to convolve. Requires header info of APERNAME, OSAMP,
+        PIXELSCL, CFRAME, and XCEN and YCEN (image indices corresponding to 
+        center of aperture)
+    hdul_psfs : HDUList
+        Multi-extension FITS. Each HDU element is a different PSF for
+        some location within some field of view. Must have some pixel
+        scale as hdul_sci_image.
+
+    Keyword Args
+    ============
+    return_hdul : bool
+        Return as an HDUList, otherwise return as an image.
+    output_sampling : None or int
+        Sampling output relative to detector.
+        If None, then return same sampling as input image.
+    """
+    
+    import pysiaf
+
+    # Get SIAF aperture info
+    hdr_psf = hdul_psfs[0].header
+    siaf = pysiaf.siaf.Siaf(hdr_psf['INSTRUME'])
+    siaf_ap_psfs = siaf[hdr_psf['APERNAME']]
+
+    # Science image aperture info
+    im_input = hdul_sci_image[0].data
+    hdr_im = hdul_sci_image[0].header
+    siaf_ap_sci = siaf[hdr_im['APERNAME']]
+
+    try:
+        pixscale = hdul_sci_image[0].header['PIXELSCL']
+    except:
+        pixscale = hdul_psfs[0].header['PIXELSCL']
+    
+    # Get tel coordinates for all PSFs
+    xvals = np.array([hdu.header['XVAL'] for hdu in hdul_psfs])
+    yvals = np.array([hdu.header['YVAL'] for hdu in hdul_psfs])
+    if 'tel' in hdr_psf['CFRAME']:
+        xtel_psfs, ytel_psfs = (xvals, yvals)
+    else:
+        xtel_psfs, ytel_psfs = siaf_ap_psfs.convert(xvals, yvals, hdr_psf['CFRAME'], 'tel')
+    
+    # Get tel coordinates for every pixel in science image
+    # Size of input image in arcsec
+    ysize, xsize = im_input.shape
+    # Image index corresponding to reference point
+    try:
+        xcen_im = hdr_im['XIND_REF']
+        ycen_im = hdr_im['YIND_REF']
+    except:
+        try:
+            xcen_im = hdr_im['XCEN']
+            ycen_im = hdr_im['YCEN']
+        except:
+            ycen_im, xcen_im = np.array(hdr_im.shape) / 2
+
+    xvals_im = np.arange(xsize).astype('float') - xcen_im
+    yvals_im = np.arange(ysize).astype('float') - ycen_im
+    xarr_im, yarr_im = np.meshgrid(xvals_im, yvals_im)
+    xref, yref = siaf_ap_sci.reference_point(hdr_im['CFRAME'])
+    if (hdr_im['CFRAME'] == 'tel') or (hdr_im['CFRAME'] == 'idl'):
+        xarr_im *= pixscale 
+        xarr_im += xref
+        yarr_im *= pixscale
+        yarr_im += yref
+    elif (hdr_im['CFRAME'] == 'sci') or (hdr_im['CFRAME'] == 'det'):
+        xarr_im /= hdr_im['OSAMP']
+        xarr_im += xref
+        yarr_im /= hdr_im['OSAMP']
+        yarr_im += yref
+
+    # Convert each element in image array to tel coords
+    xarr_im, yarr_im = siaf_ap_sci.convert(xarr_im, yarr_im, hdr_im['CFRAME'], 'tel')
+
+    # Create mask for input image for each PSF to convolve
+    # For each pixel, find PSF that is closest on the sky
+    # Go row-by-row to save on memory
+    npsf = len(hdul_psfs)
+    mask_arr = np.zeros([npsf, ysize, xsize], dtype='bool')
+    for iy in range(ysize):
+        rho_arr = (xarr_im[iy].reshape([-1,1]) - xtel_psfs.reshape([1,-1]))**2 \
+                + (yarr_im[iy].reshape([-1,1]) - ytel_psfs.reshape([1,-1]))**2
+
+        # Calculate indices corresponding to closest PSF for each pixel
+        im_ind = np.argmin(rho_arr, axis=1)
+
+        mask = np.asarray([im_ind==i for i in range(npsf)])
+        mask_arr[:,iy,:] = mask
+        
+    del rho_arr, im_ind, mask, xarr_im, yarr_im
+    
+    # Make sure all mask values are 1
+    mask_sum = mask_arr.sum(axis=0)
+    ind_bad = (mask_sum != 1)
+    nbad = len(mask_sum[ind_bad])
+    assert np.allclose(mask_sum, 1), f"{nbad} pixels in mask not assigned a PSF."
+
+    # Split into workers
+    im_conv = np.zeros_like(im_input)
+    worker_args = [(im_input, hdul_psfs[i].data, mask_arr[i]) for i in range(npsf)]
+    for wa in tqdm(worker_args):
+        im_conv += _convolve_psfs_for_mp(wa)
+
+    # Ensure there are no negative values from convolve_fft
+    im_conv[im_conv<0] = 0
+
+    # Scale to specified output sampling
+    output_sampling = 1 if output_sampling is None else output_sampling
+    if output_sampling != 1:
+        scale = hdr_im['OSAMP'] / output_sampling
+        im_conv = frebin(im_conv, scale=scale)
+
+    if return_hdul:
+        hdul = deepcopy(hdul_sci_image)
+        hdul[0].data = im_conv
+        hdr_im['OSAMP'] = output_sampling
+        return hdul
+    else:
+        return im_conv
+
+
+def _convolve_image_old(hdul_sci_image, hdul_psfs, aper=None, nsplit=None):
     """ Convolve image with various PSFs
 
     Takes an extended image, breaks it up into subsections, then
@@ -1125,7 +1309,7 @@ def convolve_image(hdul_sci_image, hdul_psfs, aper=None):
         Disk model. Requires header keyword 'PIXELSCL'.
     hdul_psfs : HDUList
         Multi-extension FITS. Each HDU element is a different PSF for
-        some location within the corongraphic field of view. 
+        some location within some field of view. 
     aper : :mod:`pysiaf.aperture.JwstAperture`
         Option to specify the reference SIAF aperture.
     """
@@ -1168,7 +1352,7 @@ def convolve_image(hdul_sci_image, hdul_psfs, aper=None):
         yarr = yarr*pixscale - cen[1]
         rho = np.sqrt(xarr**2 + yarr**2)
         rho_arr.append(rho)
-    rho_arr = np.array(rho_arr)
+    rho_arr = np.asarray(rho_arr)
 
     # Calculate indices corresponding to closest PSF
     im_indices = np.argmin(rho_arr, axis=0)
@@ -1176,17 +1360,18 @@ def convolve_image(hdul_sci_image, hdul_psfs, aper=None):
 
     # Create an image mask for each PSF
     npsf = len(hdul_psfs)
-    mask_arr = np.array([im_indices==i for i in range(npsf)])
+    mask_arr = np.asarray([im_indices==i for i in range(npsf)])
     
     # Split into workers
     worker_args = [(im_input, hdul_psfs[i].data, mask_arr[i]) for i in range(npsf)]
 
-    nsplit = 4
+    # nsplit = 4
+    nsplit = 1 if nsplit is None else nsplit
     if nsplit>1:
         im_conv = []
         try:
             with mp.Pool(nsplit) as pool:
-                for res in tqdm(pool.imap_unordered(_convolve_psfs_for_mp, worker_args), total=npsf):
+                for res in tqdm(pool.imap_unordered(_convolve_psfs_for_mp_old, worker_args), total=npsf):
                     im_conv.append(res)
                 pool.close()
             if im_conv[0] is None:
@@ -1202,7 +1387,10 @@ def convolve_image(hdul_sci_image, hdul_psfs, aper=None):
 
         im_conv = np.asarray(im_conv).sum(axis=0)
     else:
-        im_conv = np.sum(np.asarray([_convolve_psfs_for_mp(wa) for wa in tqdm(worker_args)]), axis=0)
+        im_conv = np.zeros_like(im_input)
+        for wa in tqdm(worker_args):
+            im_conv += _convolve_psfs_for_mp(wa)
+        # im_conv = np.sum(np.asarray([_convolve_psfs_for_mp(wa) for wa in tqdm(worker_args)]), axis=0)
 
     return im_conv
 
