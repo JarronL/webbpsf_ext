@@ -782,7 +782,8 @@ class NIRCam_ext(webbpsf_NIRCam):
         return res
 
     def calc_psfs_grid(self, sp=None, wfe_drift=0, osamp=1, npsf_per_full_fov=15,
-                       xsci_vals=None, ysci_vals=None, return_coords=None):
+                       xsci_vals=None, ysci_vals=None, return_coords=None, 
+                       use_coeff=True, **kwargs):
 
         """ PSF grid across an instrumnet FoV
         
@@ -794,7 +795,14 @@ class NIRCam_ext(webbpsf_NIRCam):
 
         Keyword Args
         ============
-        wfe_drift : float
+        sp : :mod:`pysynphot.spectrum`
+            If not specified, the default is flat in phot lam (equal number of photons 
+            per wavelength bin). The default is normalized to produce 1 count/sec within 
+            that bandpass, assuming the telescope collecting area and instrument bandpass. 
+            Coronagraphic PSFs will further decrease this due to the smaller pupil
+            size and suppression of coronagraphic mask. 
+            If set, then the resulting PSF image will be scaled to generate the total
+            observed number of photons from the spectrum.        wfe_drift : float
             Desired WFE drift value relative to default OPD.
         osamp : int
             Sampling of output PSF relative to detector sampling.
@@ -804,15 +812,22 @@ class NIRCam_ext(webbpsf_NIRCam):
             coronagrahic field of view. Otherwise,
         xsci_vals: None or ndarray
             Option to pass a custom grid values along x-axis in 'sci' coords.
+            If coronagraph, this instead corresponds to coronagraphic mask axis, 
+            which has a slight rotation in MIRI.
         ysci_vals: None or ndarray
             Option to pass a custom grid values along y-axis in 'sci' coords.
+            If coronagraph, this instead corresponds to coronagraphic mask axis, 
+            which has a slight rotation in MIRI.
         return_coords : None or str
             Option to also return coordinate values in desired frame 
-            ('det', 'sci', 'tel', 'idl').
+            ('det', 'sci', 'tel', 'idl'). Output is then xvals, yvals, hdul_psfs.
+        use_coeff : bool
+            If True, uses `calc_psf_from_coeff`, other WebbPSF's built-in `calc_psf`.
         """
 
-        res = _calc_psfs_grid(self, wfe_drift=wfe_drift, osamp=osamp, npsf_per_full_fov=npsf_per_full_fov,
-                              xsci_vals=xsci_vals, ysci_vals=ysci_vals, return_coords=return_coords, sp=sp)
+        res = _calc_psfs_grid(self, sp=sp, wfe_drift=wfe_drift, osamp=osamp, npsf_per_full_fov=npsf_per_full_fov,
+                              xsci_vals=xsci_vals, ysci_vals=ysci_vals, return_coords=return_coords, 
+                              use_coeff=use_coeff, **kwargs)
         return res
 
     def calc_psfs_sgd(self, xoff_asec, yoff_asec, use_coeff=True, **kwargs):
@@ -1385,7 +1400,8 @@ class MIRI_ext(webbpsf_MIRI):
         return res
 
     def calc_psfs_grid(self, sp=None, wfe_drift=0, osamp=1, npsf_per_full_fov=15,
-                       xsci_vals=None, ysci_vals=None, return_coords=None):
+                       xsci_vals=None, ysci_vals=None, return_coords=None, 
+                       use_coeff=True, **kwargs):
 
         """ PSF grid across an instrumnet FoV
         
@@ -1397,7 +1413,14 @@ class MIRI_ext(webbpsf_MIRI):
 
         Keyword Args
         ============
-        wfe_drift : float
+        sp : :mod:`pysynphot.spectrum`
+            If not specified, the default is flat in phot lam (equal number of photons 
+            per wavelength bin). The default is normalized to produce 1 count/sec within 
+            that bandpass, assuming the telescope collecting area and instrument bandpass. 
+            Coronagraphic PSFs will further decrease this due to the smaller pupil
+            size and suppression of coronagraphic mask. 
+            If set, then the resulting PSF image will be scaled to generate the total
+            observed number of photons from the spectrum.        wfe_drift : float
             Desired WFE drift value relative to default OPD.
         osamp : int
             Sampling of output PSF relative to detector sampling.
@@ -1415,11 +1438,14 @@ class MIRI_ext(webbpsf_MIRI):
             which has a slight rotation in MIRI.
         return_coords : None or str
             Option to also return coordinate values in desired frame 
-            ('det', 'sci', 'tel', 'idl').
+            ('det', 'sci', 'tel', 'idl'). Output is then xvals, yvals, hdul_psfs.
+        use_coeff : bool
+            If True, uses `calc_psf_from_coeff`, other WebbPSF's built-in `calc_psf`.
         """
 
-        res = _calc_psfs_grid(self, wfe_drift=wfe_drift, osamp=osamp, npsf_per_full_fov=npsf_per_full_fov,
-                              xsci_vals=xsci_vals, ysci_vals=ysci_vals, return_coords=return_coords, sp=sp)
+        res = _calc_psfs_grid(self, sp=sp, wfe_drift=wfe_drift, osamp=osamp, npsf_per_full_fov=npsf_per_full_fov,
+                              xsci_vals=xsci_vals, ysci_vals=ysci_vals, return_coords=return_coords, 
+                              use_coeff=use_coeff, **kwargs)
         return res
 
     def calc_psfs_sgd(self, xoff_asec, yoff_asec, use_coeff=True, **kwargs):
@@ -3463,7 +3489,7 @@ def _calc_psf_from_coeff(self, sp=None, return_oversample=True, return_hdul=True
             kwargs['wfe_drift'] = wfe_drift
             kwargs['coord_frame'] = coord_frame
             psf_all = fits.HDUList() if return_hdul else []
-            for ii in trange(nfield_init, leave=True, desc='PSFs'):
+            for ii in trange(nfield_init, leave=False, desc='PSFs'):
                 kwargs['coord_vals'] = (c1_all[ii], c2_all[ii])
 
                 # Just a single spectrum? Or unique spectrum at each field point?
@@ -3961,9 +3987,9 @@ def coron_grid(self, npsf_per_axis, xoff_vals=None, yoff_vals=None):
 
     return xsci, ysci
 
-def _calc_psfs_grid(self, wfe_drift=0, osamp=1, npsf_per_full_fov=15,
+def _calc_psfs_grid(self, sp=None, wfe_drift=0, osamp=1, npsf_per_full_fov=15,
                     xsci_vals=None, ysci_vals=None, return_coords=None,
-                    sp=None, use_coeff=True):
+                    use_coeff=True, **kwargs):
 
     """Create a grid of PSFs across an instrumnet FoV
     
@@ -3975,6 +4001,14 @@ def _calc_psfs_grid(self, wfe_drift=0, osamp=1, npsf_per_full_fov=15,
 
     Keyword Args
     ============
+    sp : :mod:`pysynphot.spectrum`
+        If not specified, the default is flat in phot lam (equal number of photons 
+        per wavelength bin). The default is normalized to produce 1 count/sec within 
+        that bandpass, assuming the telescope collecting area and instrument bandpass. 
+        Coronagraphic PSFs will further decrease this due to the smaller pupil
+        size and suppression of coronagraphic mask. 
+        If set, then the resulting PSF image will be scaled to generate the total
+        observed number of photons from the spectrum.
     wfe_drift : float
         Desired WFE drift value relative to default OPD.
     osamp : int
@@ -3994,6 +4028,9 @@ def _calc_psfs_grid(self, wfe_drift=0, osamp=1, npsf_per_full_fov=15,
     return_coords : None or str
         Option to also return coordinate values in desired frame 
         ('det', 'sci', 'tel', 'idl').
+        Output is then xvals, yvals, hdul_psfs.
+    use_coeff : bool
+        If True, uses `calc_psf_from_coeff`, other WebbPSF's built-in `calc_psf`.
     """
 
     # Observation aperture
@@ -4072,6 +4109,7 @@ def _calc_psfs_grid(self, wfe_drift=0, osamp=1, npsf_per_full_fov=15,
         xvals, yvals = siaf_ap_obs.convert(xsci_psf, ysci_psf, 'sci', return_coords)
         
     return xvals, yvals, hdul_psfs
+
 
 def _calc_psfs_sgd(self, xoff_asec, yoff_asec, use_coeff=True, return_oversample=True, **kwargs):
     """Calculate small grid dithers PSFs"""
