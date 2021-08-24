@@ -429,7 +429,7 @@ def v2v3_to_pixel(ap_obs, v2_obj, v3_obj, frame='sci'):
     return (xpix, ypix)
 
 
-def gen_sgd_offsets(sgd_type, slew_std=5, fsm_std=2.5):
+def gen_sgd_offsets(sgd_type, slew_std=5, fsm_std=2.5, rand_seed=None):
     """
     Create a series of x and y position offsets for a SGD pattern.
     This includes the central position as the first in the series.
@@ -477,17 +477,20 @@ def gen_sgd_offsets(sgd_type, slew_std=5, fsm_std=2.5):
         yoff_msec = np.array([0.0,  0,+10,+10,+10,  0,-10,-10,-10])
     else:
         raise ValueError(f"{sgd_type} not a valid SGD type")
-        
+
+    # Create local random number generator to avoid global seed setting
+    rng = np.random.default_rng(seed=rand_seed)
+
     # Add randomized telescope offsets
     if slew_std>0:
-        x_point, y_point = np.random.normal(scale=slew_std, size=2)
+        x_point, y_point = rng.normal(scale=slew_std, size=2)
         xoff_msec += x_point
         yoff_msec += y_point
 
     # Add randomized FSM offsets
     if fsm_std>0:
-        x_fsm = np.random.normal(scale=fsm_std, size=xoff_msec.shape)
-        y_fsm = np.random.normal(scale=fsm_std, size=yoff_msec.shape)
+        x_fsm = rng.normal(scale=fsm_std, size=xoff_msec.shape)
+        y_fsm = rng.normal(scale=fsm_std, size=yoff_msec.shape)
         xoff_msec[1:] += x_fsm[1:]
         yoff_msec[1:] += y_fsm[1:]
     
@@ -495,7 +498,7 @@ def gen_sgd_offsets(sgd_type, slew_std=5, fsm_std=2.5):
 
 
 def get_idl_offset(base_offset=(0,0), dith_offset=(0,0), base_std=0, use_ta=True, 
-                   dith_std=0, use_sgd=True, **kwargs):
+                   dith_std=0, use_sgd=True, rand_seed=None, **kwargs):
     """
     Calculate pointing offsets in 'idl' coordinates with errors. Inputs come from the
     APT's .pointing file. For a sequence of dithers, make sure to only calculate the 
@@ -531,6 +534,8 @@ def get_idl_offset(base_offset=(0,0), dith_offset=(0,0), base_std=0, use_ta=True
         assume standard small angle maneuver, which has ~5 mas uncertainty.
     """
     
+    # Create local random number generator to avoid global seed setting
+    rng = np.random.default_rng(seed=rand_seed)
 
     # Convert to arrays (values of mas)
     base_xy = np.asarray(base_offset, dtype='float') * 1000
@@ -546,8 +551,8 @@ def get_idl_offset(base_offset=(0,0), dith_offset=(0,0), base_std=0, use_ta=True
     elif (dith_std is None):
         dith_std = 2.5 if use_sgd else 5.0
     
-    base_rand = np.random.normal(loc=base_xy, scale=base_std)
-    dith_rand = np.random.normal(loc=dith_xy, scale=dith_std)
+    base_rand = rng.normal(loc=base_xy, scale=base_std)
+    dith_rand = rng.normal(loc=dith_xy, scale=dith_std)
     # Add and convert to arcsec
     offset = (base_rand + dith_rand) / 1000
     return offset
@@ -595,9 +600,13 @@ class jwst_point(object):
 
     
     def __init__(self, ap_obs_name, ap_ref_name, ra_ref, dec_ref, pos_ang=0, 
-        base_offset=(0,0), dith_offsets=[(0,0)], base_std=None, dith_std=None):
+        base_offset=(0,0), dith_offsets=[(0,0)], base_std=None, dith_std=None, rand_seed=None):
 
-        """
+        """ JWST Telescope Pointing information
+
+        Holds pointing coordinates and dither information for a given telescope
+        visit.
+
         Parameters
         ==========
         ap_obs_name : str
@@ -626,6 +635,8 @@ class jwst_point(object):
             The 1-sigma pointing uncertainty per axis for dithers. If None,
             then standard deviation is chosen to be either 2.5 or 5 mas, 
             depending on `use_sgd` attribute (default: True).
+        rand_seed : None or int
+            Random seed to use for generating repeatable random offsets.
         """
 
 
@@ -666,7 +677,7 @@ class jwst_point(object):
         
         # Generate self.position_offsets_act, which houses all position offsets
         # for calculating positions of objects
-        self.gen_random_offsets()
+        self.gen_random_offsets(rand_seed=rand_seed)
 
     @property
     def ndith(self):
@@ -858,24 +869,39 @@ class jwst_point(object):
         else:
             return out_all
         
-    def gen_random_offsets(self):
+    def gen_random_offsets(self, rand_seed=None):
         """Generate randomized pointing offsets for each dither position"""
         
         _log.info('Generating random pointing offsets...')
+
+        # Create a randomly assigned random seed...
+        if rand_seed is None:
+            rng = np.random.default_rng()
+            rand_seed = rng.integers(0, 2**32-1)
         
         # Get initial point offset
         _log.info(f'Pointing uncertainty: {self.base_std:.1f} mas')
         self.base_offset_act = get_idl_offset(base_offset=self.base_offset, base_std=self.base_std,
-                                              dith_offset=(0,0), dith_std=0)
+                                              dith_offset=(0,0), dith_std=0, rand_seed=rand_seed)
         
         # Get dither positions, including initial location 
         offsets_actual = []
+        rand_seed_i = rand_seed + 1
         for i in range(self.ndith):
             dith_xy = self.dith_offsets[i]
-            dith_std = 0 if (dith_xy[0]==dith_xy[1]==0) else self.dith_std
+
+            # Random seed should only increment if a dither offset exists.
+            # If there's no offset, passing the same random seed will
+            # produce the same random position, which we want.
+            if (i>0) and (not np.allclose([dith_xy], self.dith_offsets[i-1])):
+                rand_seed_i += 1
+
+            # First position is slew, so no additional dither uncertainty
+            # dith_std = 0 if (dith_xy[0]==dith_xy[1]==0) else self.dith_std
+            dith_std = 0 if (i==0) else self.dith_std
             _log.info(f'  Pos {i} dither uncertainty: {dith_std:.1f} mas')
             offset = get_idl_offset(base_offset=self.base_offset_act, base_std=0,
-                                    dith_offset=dith_xy, dith_std=dith_std)
+                                    dith_offset=dith_xy, dith_std=dith_std, rand_seed=rand_seed_i)
             
             offsets_actual.append(offset)
             
