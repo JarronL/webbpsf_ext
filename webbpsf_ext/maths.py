@@ -1,6 +1,8 @@
 # Import libraries
 import numpy as np
 from numpy.polynomial import legendre
+from scipy.special import eval_legendre
+
 
 from .coords import dist_image
 from .image_manip import frebin
@@ -84,7 +86,9 @@ def jl_poly(xvals, coeff, dim_reorder=False, use_legendre=False, lxmap=None, **k
         lxvals = 2 * (xvals - (lxmap[0] + dx/2)) / dx
 
         # Use Identity matrix to evaluate each polynomial component
-        xfan = legendre.legval(lxvals, np.identity(dim[0]))
+        # xfan = legendre.legval(lxvals, np.identity(dim[0]))
+        # Below method is faster for large lxvals
+        xfan = np.asarray([eval_legendre(n, lxvals) for n in range(dim[0])])
     else:
         # Create an array of exponent values
         parr = np.arange(dim[0], dtype='float')
@@ -200,7 +204,9 @@ def jl_poly_fit(x, yvals, deg=1, QR=True, robust_fit=False, niter=25, use_legend
         lx = 2 * (x - (lxmap[0] + dx/2)) / dx
 
         # Use Identity matrix to evaluate each polynomial component
-        a = legendre.legval(lx, np.identity(deg+1))
+        # a = legendre.legval(lx, np.identity(deg+1))
+        # Below method is faster for large lxvals
+        a = np.asarray([eval_legendre(n, lx) for n in range(deg+1)])
     else:
         # Normalize x values to closer to 1 for numerical stability with large inputs
         xnorm = np.mean(x)
@@ -518,3 +524,67 @@ def find_closest(A, B):
         
     return isort[closest_arg].reshape(a_shape)
 
+
+def fit_bootstrap(pinit, datax, datay, function, yerr_systematic=0.0, nrand=1000, return_more=False):
+    """Bootstrap fitting routine
+    
+    Bootstrap fitting algorithm to determine the uncertainties on the fit parameters.
+    
+    Parameters
+    ----------
+    pinit : ndarray
+        Initial guess for parameters to fit
+    datax, datay : ndarray
+        X and Y values of data to be fit
+    function : func
+        Model function 
+    yerr_systematic : float or array_like of floats
+        Systematic uncertainites contributing to additional error in data. 
+        This is treated as independent Normal error on each data point.
+        Can have unique values for each data point. If 0, then we just use
+        the standard deviation of the residuals to randomize the data.
+    nrand : int
+        Number of random data sets to generate and fit.
+    return_more : bool
+        If true, then also return the full set of fit parameters for the randomized
+        data to perform a more thorough analysis of the distribution. Otherewise, 
+        just reaturn the mean and standard deviations.
+    """
+
+    from scipy import optimize
+    
+    def errfunc(p, x, y):
+        return function(x, p) - y
+
+    # Fit first time
+    pfit, perr = optimize.leastsq(errfunc, pinit, args=(datax, datay), full_output=0)
+
+
+    # Get the stdev of the residuals
+    residuals = errfunc(pfit, datax, datay)
+    sigma_res = np.std(residuals)
+
+    sigma_err_total = np.sqrt(sigma_res**2 + yerr_systematic**2)
+
+    # Some random data sets are generated and fitted
+    randomdataY = datay + np.random.normal(scale=sigma_err_total, size=(nrand, len(datay)))
+    ps = []
+    for i in range(nrand):
+
+        # randomDelta = np.random.normal(0., sigma_err_total, len(datay))
+        # datay_rand = datay + randomDelta
+    
+        datay_rand = randomdataY[i]
+        randomfit, randomcov = optimize.leastsq(errfunc, pinit, args=(datax, datay_rand), full_output=0)
+
+        ps.append(randomfit) 
+
+    ps = np.array(ps)
+    mean_pfit = np.mean(ps,axis=0)
+    err_pfit = np.std(ps,axis=0)
+    
+    if return_more:
+        return mean_pfit, err_pfit, ps
+    else:
+        return mean_pfit, err_pfit
+    
