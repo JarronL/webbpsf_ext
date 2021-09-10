@@ -561,27 +561,33 @@ def frebin(image, dimensions=None, scale=None, total=True):
         The binned ndarray
     """
 
+    shape = image.shape
+    ndim = len(shape)
+    if ndim>2:
+        ndim_temp = 2
+        sh_temp = shape[-2:]
+    else:
+        ndim_temp = ndim
+        sh_temp = shape
+
     if dimensions is not None:
         if isinstance(dimensions, float):
-            dimensions = [int(dimensions)] * len(image.shape)
+            dimensions = [int(dimensions)] * ndim_temp
         elif isinstance(dimensions, int):
-            dimensions = [dimensions] * len(image.shape)
-        elif len(dimensions) != len(image.shape):
+            dimensions = [dimensions] * ndim_temp
+        elif len(dimensions) != ndim_temp:
             raise RuntimeError("The number of input dimensions don't match the image shape.")
     elif scale is not None:
         if isinstance(scale, float) or isinstance(scale, int):
-            dimensions = list(map(int, map(lambda x: x+0.5, map(lambda x: x*scale, image.shape))))
-        elif len(scale) != len(image.shape):
+            dimensions = list(map(int, map(lambda x: x+0.5, map(lambda x: x*scale, sh_temp))))
+        elif len(scale) != ndim_temp:
             raise RuntimeError("The number of input dimensions don't match the image shape.")
         else:
-            dimensions = [scale[i]*image.shape[i] for i in range(len(scale))]
+            dimensions = [scale[i]*sh_temp[i] for i in range(len(scale))]
     else:
         raise RuntimeError('Incorrect parameters to rebin.\n\frebin(image, dimensions=(x,y))\n\frebin(image, scale=a')
     #print(dimensions)
 
-
-    shape = image.shape
-    ndim = len(shape)
     if ndim==1:
         nlout = 1
         nsout = dimensions[0]
@@ -1476,6 +1482,7 @@ def rotate_shift_image(hdul, index=0, PA_offset=0, delx_asec=0, dely_asec=0,
     """ Rotate/Shift image
     
     Rotate then offset image by some amount.
+    Positive angles rotate the image counter-clockwise.
     
     Parameters
     ==========
@@ -1485,7 +1492,7 @@ def rotate_shift_image(hdul, index=0, PA_offset=0, delx_asec=0, dely_asec=0,
         Specify HDU index, usually 0
     PA_offset : float
         Rotate entire scene by some position angle. 
-        Positive values are counter-clockwise.
+        Positive angles rotate counter-clockwise.
     delx_asec : float
         Offset in x direction (specified in arcsec). 
         Pixel scale should be included in header keyword 'PIXELSCL'.
