@@ -2061,7 +2061,6 @@ def _calc_psf_webbpsf(self, calc_psf_func, add_distortion=None, fov_pixels=None,
         and oversample are not specified, then we automatically use the associated attributes.
         """
 
-
         # Automatically use already defined properties
         add_distortion = self.include_distortions if add_distortion is None else add_distortion
         fov_pixels = self.fov_pix if fov_pixels is None else fov_pixels
@@ -2118,7 +2117,7 @@ def _calc_psf_webbpsf(self, calc_psf_func, add_distortion=None, fov_pixels=None,
             bar_offset_orig = self.options.get('bar_offset', None)
             self.options['bar_offset'] = 0
 
-            bar_offset_orig = self.options.get('b')
+            # bar_offset_orig = self.options.get('b')
 
             xidl, yidl = siaf_ap.convert(xnew, ynew, coord_frame, 'idl')
             xsci, ysci = siaf_ap.convert(xnew, ynew, coord_frame, 'sci')
@@ -2165,12 +2164,12 @@ def _calc_psf_webbpsf(self, calc_psf_func, add_distortion=None, fov_pixels=None,
 
         # Crop distorted borders
         if add_distortion:
-            npix_over = npix_extra*oversample
+            osamp = hdul[0].header['DET_SAMP']
+            npix_over = npix_extra * osamp
             hdul[0].data = hdul[0].data[npix_over:-npix_over,npix_over:-npix_over]
             hdul[2].data = hdul[2].data[npix_over:-npix_over,npix_over:-npix_over]
             hdul[1].data = hdul[1].data[npix_extra:-npix_extra,npix_extra:-npix_extra]
             hdul[3].data = hdul[3].data[npix_extra:-npix_extra,npix_extra:-npix_extra]
-
 
         # Check if we set return_hdul=False
         if return_hdul:
