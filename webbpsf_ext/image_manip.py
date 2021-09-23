@@ -840,7 +840,7 @@ def model_to_hdulist(args_model, sp_star, bandpass):
             - scale0  : Pixel scale (in arcsec/pixel)
             - dist0   : Assumed model distance
             - wave_um : Wavelength of observation
-            - units0  : Assumed flux units (ie., MJy/arcsec^2 or muJy/pixel)
+            - units0  : Assumed flux units (e.g., MJy/arcsec^2 or muJy/pixel)
     sp_star : :mod:`pysynphot.spectrum`
         A pysynphot spectrum of central star. Used to adjust observed
         photon flux if filter differs from model input
