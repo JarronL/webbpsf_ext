@@ -693,8 +693,9 @@ class NIRCam_ext(webbpsf_NIRCam):
         return_hdul : bool
             Return PSFs in an HDUList rather than set of arrays (default: True).
         coron_rescale : bool
-            Ensure correct scaling for coronagraphic off-axis PSFs based on
-            analytic scaling relationships of peak flux relative to mask position.
+            Rescale off-axis coronagraphic PSF to better match analytic prediction
+            when source overlaps coronagraphic occulting mask.
+            Primarily used for planetary companion PSFs.
         """        
 
         res = _calc_psf_from_coeff(self, sp=sp, return_oversample=return_oversample, 
@@ -1531,6 +1532,10 @@ def _init_inst(self, filter=None, pupil_mask=None, image_mask=None,
     if (image_mask is None) and (kwargs.get('mask') is not None):
         image_mask = kwargs.get('mask')
 
+    # Ensure CIRCLYOT or WEDGELYOT in case coron masks were specified
+    if self.name=='NIRCam' and (pupil_mask is not None) and ('MASK' in pupil_mask):
+        pupil_mask = 'WEDGELYOT' if ('LWB' in pupil_mask) else 'CIRCLYOT'
+
     if pupil_mask is not None:
         self.pupil_mask = pupil_mask
     if image_mask is not None:
@@ -1661,9 +1666,20 @@ def _gen_save_name(self, wfe_drift=0):
     # Mask and pupil names
     pstr = 'CLEAR' if self.pupil_mask is None else self.pupil_mask
     mstr = 'NONE' if self.image_mask is None else self.image_mask
-    # Check for coron subtraste if image mask is None
-    if (mstr == 'NONE') and self.coron_substrate:
-        mstr = 'CORONSUB'
+    ## 9/14/2022 - PSF weighting for substrate and ND mask should not be necessary
+    ## since these are included in bandpass throughputs, which are then
+    ## applied to input spectrum to get flux-dependent PSFs. Therefore, the
+    ## saved PSF coefficients are similar for all three scenario:
+    ##   1) coron_substrate=False; 2) coron_substrate=True; 3) ND_acq=True
+    # Check for coron substrate if image mask is None
+    # if (mstr == 'NONE') and self.coron_substrate:
+    #     mstr = 'CORONSUB'
+    # Only need coron substrate for PSF weighting
+    # if (mstr == 'NONE'):
+    #     if self.ND_acq:
+    #         mstr = 'NDACQ'
+    #     elif self.coron_substrate:
+    #         mstr = 'CORONSUB'
 
     fmp_str = f'{fstr}{pstr}_{mstr}'
 
@@ -2424,6 +2440,13 @@ def _gen_psf_coeff(self, nproc=None, wfe_drift=0, force=False, save=True,
             hdu_arr.append(hdu)
     t1 = time.time()
 
+    # Ensure PSF sum is not larger than 1.0
+    # This can sometimes occur for distorted PSFs near edges
+    for hdu in hdu_arr:
+        data_sum = hdu.data.sum()
+        # print(data_sum)
+        if data_sum>1:
+            hdu.data /= data_sum
     
     # Reset pupils
     self.pupilopd = pupilopd_orig
@@ -2439,7 +2462,7 @@ def _gen_psf_coeff(self, nproc=None, wfe_drift=0, force=False, save=True,
     for hdu in hdu_arr:
         images.append(hdu.data)
 
-    # Turn results into an numpy array (npsf,ny,nx)
+    # Turn results into a numpy array (npsf,ny,nx)
     images = np.asarray(images)
 
     # Simultaneous polynomial fits to all pixels using linear least squares
