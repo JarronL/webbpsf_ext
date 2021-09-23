@@ -1925,7 +1925,7 @@ def bin_spectrum(sp, wave, waveunits='um'):
 
     return sp2
 
-def mag_to_counts(src_mag, bandpass, sp_type='G0V', mag_units='vegamag'):
+def mag_to_counts(src_mag, bandpass, sp_type='G0V', mag_units='vegamag', **kwargs):
         """
         Convert stellar magnitudes in some bandpass to corresponding flux values (e-/sec)
         """
