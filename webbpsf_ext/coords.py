@@ -545,10 +545,8 @@ def get_idl_offset(base_offset=(0,0), dith_offset=(0,0), base_std=0, use_ta=True
     if base_std is None:
         base_std = 5.0 if use_ta else 100
     
-    # No dither offset 
-    if dith_xy[0]==dith_xy[1]==0:
-        dith_std = 0
-    elif (dith_std is None):
+    # No dither offset
+    if (dith_std is None):
         dith_std = 2.5 if use_sgd else 5.0
     
     base_rand = rng.normal(loc=base_xy, scale=base_std)
@@ -600,7 +598,8 @@ class jwst_point(object):
 
     
     def __init__(self, ap_obs_name, ap_ref_name, ra_ref, dec_ref, pos_ang=0, 
-        base_offset=(0,0), dith_offsets=[(0,0)], base_std=None, dith_std=None, rand_seed=None):
+        base_offset=(0,0), dith_offsets=[(0,0)], exp_nums=None,
+        base_std=None, dith_std=None, rand_seed=None):
 
         """ JWST Telescope Pointing information
 
@@ -623,6 +622,10 @@ class jwst_point(object):
         ============
         pos_ang : float
             Position angle (positive angles East of North) in degrees.
+        exp_nums : ndarray or None
+            Option to specify exposure numbers associated with each dither
+            position. Useful fro Visit book-keeping. If not set, then will
+            simply be a `np.arange(self.ndith) + 1`
         base_offset : array-like
             Corresponds to (BaseX, BaseY) columns in .pointing file (arcsec).
         dith_offset : array-like
@@ -662,12 +665,17 @@ class jwst_point(object):
         self.base_offset = base_offset
         # Dither offsets
         self.dith_offsets = dith_offsets
+
+        self._exp_nums = exp_nums
         
         # Include randomized pointing offsets?
         self._base_std = base_std # Initial telescope pointing uncertainty (mas)
         self._dith_std = dith_std # Dither uncertainty value
         self.use_ta  = True   # Do we employ target acquisition to reduce pointing uncertainty?
         self.use_sgd = True   # True for small grid dithers, otherwise small angle maneuver
+
+        self._sgd_sig = 2.5
+        self._std_sig = 5.0
         
         # Get nominal RA/Dec of observed aperture's reference point
         # Don't include any offsets here, as they will be added later 
@@ -681,13 +689,26 @@ class jwst_point(object):
 
     @property
     def ndith(self):
+        """Number of dither positions"""
         return len(self.dith_offsets)
+
+    @property
+    def exp_nums(self):
+        """Exposure Numbers associated with each dither position"""
+        if self._exp_nums is None:
+            return np.arange(self.ndith) + 1
+        else:
+            return self._exp_nums
+    @exp_nums.setter
+    def exp_nums(self, value):
+        """Set Exposure Numbers. Should be numpy array"""
+        self._exp_nums = value
     
     @property
     def dith_std(self):
         """Dither pointing uncertainty (mas)"""
         if self._dith_std is None:
-            dith_std = 2.5 if self.use_sgd else 5.0
+            dith_std = self._sgd_sig if self.use_sgd else self._std_sig
         else:
             dith_std = self._dith_std
         return dith_std
@@ -897,7 +918,6 @@ class jwst_point(object):
                 rand_seed_i += 1
 
             # First position is slew, so no additional dither uncertainty
-            # dith_std = 0 if (dith_xy[0]==dith_xy[1]==0) else self.dith_std
             dith_std = 0 if (i==0) else self.dith_std
             _log.info(f'  Pos {i} dither uncertainty: {dith_std:.1f} mas')
             offset = get_idl_offset(base_offset=self.base_offset_act, base_std=0,
