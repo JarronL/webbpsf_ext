@@ -803,22 +803,19 @@ class NIRCam_ext(webbpsf_NIRCam):
             Coronagraphic PSFs will further decrease this due to the smaller pupil
             size and suppression of coronagraphic mask. 
             If set, then the resulting PSF image will be scaled to generate the total
-            observed number of photons from the spectrum.        wfe_drift : float
+            observed number of photons from the spectrum (ie., not scaled by unit response).
+        wfe_drift : float
             Desired WFE drift value relative to default OPD.
         osamp : int
             Sampling of output PSF relative to detector sampling.
         npsf_per_full_fov : int
             Number of PSFs across one dimension of the instrument's field of 
             view. If a coronagraphic observation, then this is for the nominal
-            coronagrahic field of view. Otherwise,
+            coronagrahic field of view (20"x20"). 
         xsci_vals: None or ndarray
             Option to pass a custom grid values along x-axis in 'sci' coords.
-            If coronagraph, this instead corresponds to coronagraphic mask axis, 
-            which has a slight rotation in MIRI.
         ysci_vals: None or ndarray
             Option to pass a custom grid values along y-axis in 'sci' coords.
-            If coronagraph, this instead corresponds to coronagraphic mask axis, 
-            which has a slight rotation in MIRI.
         return_coords : None or str
             Option to also return coordinate values in desired frame 
             ('det', 'sci', 'tel', 'idl'). Output is then xvals, yvals, hdul_psfs.
@@ -1421,22 +1418,23 @@ class MIRI_ext(webbpsf_MIRI):
             Coronagraphic PSFs will further decrease this due to the smaller pupil
             size and suppression of coronagraphic mask. 
             If set, then the resulting PSF image will be scaled to generate the total
-            observed number of photons from the spectrum.        wfe_drift : float
+            observed number of photons from the spectrum (ie., not scaled by unit response).     
+        wfe_drift : float
             Desired WFE drift value relative to default OPD.
         osamp : int
             Sampling of output PSF relative to detector sampling.
         npsf_per_full_fov : int
             Number of PSFs across one dimension of the instrument's field of 
             view. If a coronagraphic observation, then this is for the nominal
-            coronagrahic field of view. Otherwise,
+            coronagrahic field of view. 
         xsci_vals: None or ndarray
             Option to pass a custom grid values along x-axis in 'sci' coords.
             If coronagraph, this instead corresponds to coronagraphic mask axis, 
-            which has a slight rotation in MIRI.
+            which has a slight rotation relative to detector axis in MIRI.
         ysci_vals: None or ndarray
             Option to pass a custom grid values along y-axis in 'sci' coords.
             If coronagraph, this instead corresponds to coronagraphic mask axis, 
-            which has a slight rotation in MIRI.
+            which has a slight rotation relative to detector axis in MIRI.
         return_coords : None or str
             Option to also return coordinate values in desired frame 
             ('det', 'sci', 'tel', 'idl'). Output is then xvals, yvals, hdul_psfs.
@@ -1623,7 +1621,7 @@ def _gen_save_dir(self):
 
     # Create directory (and all intermediates) if it doesn't already exist
     if not os.path.isdir(save_dir):
-        _log.info("Creating directory: " + save_dir)
+        _log.info(f"Creating directory: {save_dir}")
         os.makedirs(save_dir, exist_ok=True)
 
     return save_dir
@@ -2090,7 +2088,15 @@ def _calc_psf_webbpsf(self, calc_psf_func, add_distortion=None, fov_pixels=None,
             kwargs['fov_pixels'] += 2 * npix_extra
 
         # Figure out sampling (always want >=4 for Lyot/coronagraphy)
-        if self.is_lyot or self.is_coron:
+        try:  # is_lyot may not always be a valid attribute
+            is_lyot = self.is_lyot
+        except AttributeError:
+            is_lyot = False
+        try:  # is_coron may not always be a valid attribute
+            is_coron = self.is_coron
+        except AttributeError:
+            is_coron = False
+        if is_lyot or is_coron:
             if oversample is None:
                 if self.oversample>=4: # we're good!
                     oversample = self.oversample
@@ -3952,11 +3958,12 @@ def _coeff_mod_wfe_mask(self, coord_vals, coord_frame):
 
 
 def coron_grid(self, npsf_per_axis, xoff_vals=None, yoff_vals=None):
-    
+    """Get grid points based on coronagraphic obseervation"""
     
     def log_grid(nvals, vmax=10):
         """Log spacing in arcsec relative to mask center"""
-        vals_p = np.logspace(-2,np.log10(vmax),int((nvals-1)/2))
+        # vals_p = np.logspace(-2,np.log10(vmax),int((nvals-1)/2))
+        vals_p = np.geomspace(0.01, vmax, int((nvals-1)/2))
         vals_m = np.sort(-1*vals_p)
         return np.sort(np.concatenate([vals_m, [0], vals_p]))
 
@@ -3966,7 +3973,6 @@ def coron_grid(self, npsf_per_axis, xoff_vals=None, yoff_vals=None):
 
     # Observation aperture
     siaf_ap = self.siaf_ap
-    
     
     if self.name.lower()=='nircam':
         nx_pix = 320 if self.channel.lower()=='long' else 640
@@ -4030,7 +4036,7 @@ def _calc_psfs_grid(self, sp=None, wfe_drift=0, osamp=1, npsf_per_full_fov=15,
         Coronagraphic PSFs will further decrease this due to the smaller pupil
         size and suppression of coronagraphic mask. 
         If set, then the resulting PSF image will be scaled to generate the total
-        observed number of photons from the spectrum.
+        observed number of photons from the spectrum (ie., not scaled by unit response).
     wfe_drift : float
         Desired WFE drift value relative to default OPD.
     osamp : int
@@ -4038,15 +4044,15 @@ def _calc_psfs_grid(self, sp=None, wfe_drift=0, osamp=1, npsf_per_full_fov=15,
     npsf_per_full_fov : int
         Number of PSFs across one dimension of the instrument's field of 
         view. If a coronagraphic observation, then this is for the nominal
-        coronagrahic field of view. Otherwise,
+        coronagrahic field of view.
     xsci_vals: None or ndarray
         Option to pass a custom grid values along x-axis in 'sci' coords.
         If coronagraph, this instead corresponds to coronagraphic mask axis, 
-        which has a slight rotation in MIRI.
+        which has a slight rotation relative to detector axis in MIRI.
     ysci_vals: None or ndarray
         Option to pass a custom grid values along y-axis in 'sci' coords.
         If coronagraph, this instead corresponds to coronagraphic mask axis, 
-        which has a slight rotation in MIRI.
+        which has a slight rotation relative to detector axis in MIRI.
     return_coords : None or str
         Option to also return coordinate values in desired frame 
         ('det', 'sci', 'tel', 'idl').
@@ -4087,14 +4093,14 @@ def _calc_psfs_grid(self, sp=None, wfe_drift=0, osamp=1, npsf_per_full_fov=15,
             xpsf = np.max([int(xpsf / 2), 5])
             ypsf = np.max([int(ypsf / 2), 5])
 
-        # Create a PSF for each grid point 
+        # Create linear set of grid points along x and y axes 
         if xsci_vals is None:
             xsci_vals = np.linspace(xsci_min, xsci_max, xpsf)
         if ysci_vals is None:
             ysci_vals = np.linspace(ysci_min, ysci_max, ypsf)
 
+        # Full set of grid points to generate PSFs
         xsci_psf, ysci_psf = np.meshgrid(xsci_vals, ysci_vals)
-        # Flatten PSFs
         xsci_psf = xsci_psf.flatten()
         ysci_psf = ysci_psf.flatten()
 
