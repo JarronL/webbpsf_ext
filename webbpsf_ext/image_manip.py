@@ -1464,16 +1464,29 @@ def make_disk_image(inst, disk_params, sp_star=None, pixscale_out=None, dist_out
     hdul_disk_image = image_rescale(hdul_model, pixscale_out, dist_out=dist_out, 
                                     cen_star=disk_params['cen_star'], shape_out=shape_out)
 
-    copy_keys = [
-        'INSTRUME', 'APERNAME', 'FILTER', 'DET_SAMP',
-        'DET_NAME', 'DET_X', 'DET_Y', 'DET_V2', 'DET_V3',
-    ]
-    head_temp = inst.psf_coeff_header
-    for key in copy_keys:
-        try:
-            hdul_disk_image[0].header[key] = (head_temp[key], head_temp.comments[key])
-        except (AttributeError, KeyError):
-            pass
+    # copy_keys = [
+    #     'INSTRUME', 'APERNAME', 'FILTER', 'DET_SAMP',
+    #     'DET_NAME', 'DET_X', 'DET_Y', 'DET_V2', 'DET_V3',
+    # ]
+    # head_temp = inst.psf_coeff_header
+    # for key in copy_keys:
+    #     try:
+    #         hdul_disk_image[0].header[key] = (head_temp[key], head_temp.comments[key])
+    #     except (AttributeError, KeyError):
+    #         pass
+
+    # Make sure these keywords match current instrument aperture,
+    # which could be different from PSF-generated aperture name.
+    hdul_disk_image[0].header['INSTRUME'] = inst.name
+    hdul_disk_image[0].header['FILTER'] = inst.filter
+    hdul_disk_image[0].header['DET_SAMP'] = inst.pixelscale
+    hdul_disk_image[0].header['DET_NAME'] = inst.aperturename.split('_')[0]
+    siaf_ap = inst.siaf_ap
+    hdul_disk_image[0].header['APERNAME'] = siaf_ap.AperName
+    hdul_disk_image[0].header['DET_X']    = siaf_ap.XSciRef
+    hdul_disk_image[0].header['DET_Y']    = siaf_ap.YSciRef
+    hdul_disk_image[0].header['DET_V2']   = siaf_ap.V2Ref
+    hdul_disk_image[0].header['DET_V3']   = siaf_ap.V3Ref
         
     return hdul_disk_image
 

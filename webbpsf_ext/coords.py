@@ -452,6 +452,9 @@ def gen_sgd_offsets(sgd_type, slew_std=5, fsm_std=2.5, rand_seed=None):
         One-sigma accuracy per axis of the initial slew. This is applied
         to all positions and gives a baseline offset relative to the
         desired mask center. Values should be in units of mas. 
+    rand_seed : int
+        Input a random seed in order to make reproduceable pseudo-random
+        numbers.
     """
     
     if sgd_type=='9circle':
