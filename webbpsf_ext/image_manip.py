@@ -1234,7 +1234,7 @@ def convolve_image(hdul_sci_image, hdul_psfs, return_hdul=False, output_sampling
             xcen_im = hdr_im['XCEN']
             ycen_im = hdr_im['YCEN']
         except:
-            ycen_im, xcen_im = np.array(hdr_im.shape) / 2
+            ycen_im, xcen_im = np.array(im_input.shape) / 2
 
     xvals_im = np.arange(xsize).astype('float') - xcen_im
     yvals_im = np.arange(ysize).astype('float') - ycen_im
@@ -1479,7 +1479,7 @@ def make_disk_image(inst, disk_params, sp_star=None, pixscale_out=None, dist_out
     # which could be different from PSF-generated aperture name.
     hdul_disk_image[0].header['INSTRUME'] = inst.name
     hdul_disk_image[0].header['FILTER'] = inst.filter
-    hdul_disk_image[0].header['DET_SAMP'] = inst.pixelscale
+    hdul_disk_image[0].header['DET_SAMP'] = inst.oversample
     hdul_disk_image[0].header['DET_NAME'] = inst.aperturename.split('_')[0]
     siaf_ap = inst.siaf_ap
     hdul_disk_image[0].header['APERNAME'] = siaf_ap.AperName

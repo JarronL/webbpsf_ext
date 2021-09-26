@@ -3019,7 +3019,10 @@ def _gen_wfemask_coeff(self, force=False, save=True, large_grid=None,
             self._psf_coeff_mod['si_mask_large'] = large_grid
             return
 
-    _log.warn('Generating mask position-dependent coefficients. This may take some time...')
+    if large_grid:
+        _log.warn('Generating mask position-dependent coeffs (large grid). This may take some time...')
+    else:
+        _log.warn('Generating mask position-dependent coeffs (small grid). This may take some time...')
 
     # Current mask positions to return to at end
     coron_shift_x_orig = self.options.get('coron_shift_x', 0)
@@ -3994,7 +3997,7 @@ def coron_grid(self, npsf_per_axis, xoff_vals=None, yoff_vals=None):
         xpsf, ypsf = npsf_per_axis
 
     field_rot = 0 if self._rotation is None else self._rotation
-    xlog_spacing = False if self.mask_image[-2]=='WB' else True
+    xlog_spacing = False if self.image_mask[-2]=='WB' else True
     ylog_spacing = True 
     
     if xoff_vals is None:
