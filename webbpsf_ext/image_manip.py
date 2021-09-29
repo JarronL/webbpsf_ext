@@ -1120,7 +1120,7 @@ def _convolve_psfs_for_mp(arg_vals):
     """
     
     im, psf, ind_mask = arg_vals
-    
+
     ny, nx = im.shape
     ny_psf, nx_psf = psf.data.shape
 
@@ -1189,7 +1189,66 @@ def _convolve_psfs_for_mp_old(arg_vals):
 
     return res
 
-def convolve_image(hdul_sci_image, hdul_psfs, return_hdul=False, output_sampling=None):
+def _crop_hdul(hdul_sci_image, psf_shape):
+
+    # Science image aperture info
+    im_input = hdul_sci_image[0].data
+    hdr_im = hdul_sci_image[0].header
+
+    # Crop original image in case of unnecessary zeros
+    zmask = im_input!=0
+    row_sum = zmask.sum(axis=0)
+    col_sum = zmask.sum(axis=1)
+    indx = np.where(row_sum>0)[0]
+    indy = np.where(col_sum>0)[0]
+    ix1, ix2 = indx[0], indx[-1]+1
+    iy1, iy2 = indy[0], indy[-1]+1
+
+    # Expand indices to accommodate PSF size
+    ny_psf, nx_psf = psf_shape
+    ny_im, nx_im = im_input.shape
+    ix1 -= int(nx_psf/2 + 5)
+    ix2 += int(nx_psf/2 + 5)
+    iy1 -= int(ny_psf/2 + 5)
+    iy2 += int(ny_psf/2 + 5)
+
+    # Make sure we don't go out of bounds
+    if ix1<0:     ix1 = 0
+    if ix2>nx_im: ix2 = nx_im
+    if iy1<0:     iy1 = 0
+    if iy2>ny_im: iy2 = ny_im
+
+    # Make HDU and copy header info
+    hdu = fits.PrimaryHDU(im_input[iy1:iy2,ix1:ix2])
+    try:
+        hdu.header['XIND_REF'] = hdr_im['XIND_REF'] - ix1
+        hdu.header['YIND_REF'] = hdr_im['YIND_REF'] - iy1
+    except:
+        try:
+            hdu.header['XCEN'] = hdr_im['XCEN'] - ix1
+            hdu.header['YCEN'] = hdr_im['YCEN'] - iy1
+        except:
+            hdu.header['XIND_REF'] = im_input.shape[1] / 2 - ix1
+            hdu.header['YIND_REF'] = im_input.shape[0] / 2 - iy1
+
+    hdu.header['CFRAME'] = hdr_im['CFRAME']
+    if 'PIXELSCL' in hdr_im.keys():
+        hdu.header['PIXELSCL'] = hdr_im['PIXELSCL']
+    if 'OSAMP' in hdr_im.keys():
+        hdu.header['OSAMP'] = hdr_im['OSAMP']
+
+    hdu.header['APERNAME'] = hdr_im['APERNAME']
+
+    hdu.header['IX1'] = ix1
+    hdu.header['IX2'] = ix2
+    hdu.header['IY1'] = iy1
+    hdu.header['IY2'] = iy2
+
+    return fits.HDUList([hdu])
+
+
+def convolve_image(hdul_sci_image, hdul_psfs, return_hdul=False, 
+                   output_sampling=None, crop_zeros=True):
     """ Convolve image with various PSFs
 
     Takes an extended image, breaks it up into subsections, then
@@ -1220,6 +1279,13 @@ def convolve_image(hdul_sci_image, hdul_psfs, return_hdul=False, output_sampling
     output_sampling : None or int
         Sampling output relative to detector.
         If None, then return same sampling as input image.
+    crop_zeros : bool
+        For large images that are zero-padded, this option will first crop off the
+        extraneous zeros (but accounting for PSF size to not tuncate resulting
+        convolution at edges), then place the convolved subarray image back into
+        a full frame of zeros. This process speeds up convolution by a factor of 10,
+        with no resulting differences. Should always be set to True; only provided 
+        as an option for debugging purposes.
     """
     
     import pysiaf
@@ -1229,15 +1295,14 @@ def convolve_image(hdul_sci_image, hdul_psfs, return_hdul=False, output_sampling
     siaf = pysiaf.siaf.Siaf(hdr_psf['INSTRUME'])
     siaf_ap_psfs = siaf[hdr_psf['APERNAME']]
 
+    if crop_zeros:
+        hdul_sci_image_orig = hdul_sci_image
+        hdul_sci_image = _crop_hdul(hdul_sci_image, hdul_psfs[0].data.shape)
+
     # Science image aperture info
     im_input = hdul_sci_image[0].data
     hdr_im = hdul_sci_image[0].header
     siaf_ap_sci = siaf[hdr_im['APERNAME']]
-
-    try:
-        pixscale = hdul_sci_image[0].header['PIXELSCL']
-    except:
-        pixscale = hdul_psfs[0].header['PIXELSCL']
     
     # Get tel coordinates for all PSFs
     xvals = np.array([hdu.header['XVAL'] for hdu in hdul_psfs])
@@ -1260,6 +1325,11 @@ def convolve_image(hdul_sci_image, hdul_psfs, return_hdul=False, output_sampling
             ycen_im = hdr_im['YCEN']
         except:
             ycen_im, xcen_im = np.array(im_input.shape) / 2
+
+    try:
+        pixscale = hdr_im['PIXELSCL']
+    except:
+        pixscale = hdul_psfs[0].header['PIXELSCL']
 
     xvals_im = np.arange(xsize).astype('float') - xcen_im
     yvals_im = np.arange(ysize).astype('float') - ycen_im
@@ -1310,6 +1380,21 @@ def convolve_image(hdul_sci_image, hdul_psfs, return_hdul=False, output_sampling
 
     # Ensure there are no negative values from convolve_fft
     im_conv[im_conv<0] = 0
+
+    # If we cropped the original input, put convolved image into full array
+    if crop_zeros:
+        hdul_sci_image_crop = hdul_sci_image
+        hdul_sci_image = hdul_sci_image_orig
+
+        im_conv_crop = im_conv
+        im_conv = np.zeros_like(hdul_sci_image[0].data)
+
+        hdr_crop = hdul_sci_image_crop[0].header
+
+        ix1, ix2 = (hdr_crop['IX1'], hdr_crop['IX2'])
+        iy1, iy2 = (hdr_crop['IY1'], hdr_crop['IY2'])
+
+        im_conv[iy1:iy2,ix1:ix2] = im_conv_crop
 
     # Scale to specified output sampling
     output_sampling = 1 if output_sampling is None else output_sampling
@@ -1609,4 +1694,31 @@ def rotate_shift_image(hdul, index=0, angle=0, delx_asec=0, dely_asec=0,
     # hdu_new[index] = im_new
     # return hdu_new
     
+def crop_zero_rows_cols(image, symmetric=True):
+    """Crop off rows and columns from an image that are zeros."""
+
+    zmask = (image!=0)
+
+    row_sum = zmask.sum(axis=0)
+    col_sum = zmask.sum(axis=1)
+
+    if symmetric:
+        nx1 = np.where(row_sum>0)[0][0]
+        nx2 = np.where(row_sum[::-1]>0)[0][0]
+
+        ny1 = np.where(col_sum>0)[0][0]
+        ny2 = np.where(col_sum[::-1]>0)[0][0]
+
+        crop_border = np.min([nx1,nx2,ny1,ny2])
+        sh_new = np.array(image.shape) - 2*crop_border
+        im_new = pad_or_cut_to_size(image, sh_new)
+    else:
+        indx = np.where(row_sum>0)[0]
+        indy = np.where(col_sum>0)[0]
+        ix1, ix2 = indx[0], indx[-1]+1
+        iy1, iy2 = indy[0], indy[-1]+1
+
+        im_new = image[iy1:iy2,ix1:ix2]
+
+    return im_new
 
