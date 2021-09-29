@@ -408,13 +408,14 @@ def rotate_offset(data, angle, cen=None, cval=0.0, order=1,
     rotates around a center point given by `cen` keyword.
     The array is rotated in the plane defined by the two axes given by the
     `axes` parameter using spline interpolation of the requested order.
+    Default rotation is clockwise direction.
     
     Parameters
     ----------
     data : ndarray
         The input array.
     angle : float
-        The rotation angle in degrees (rotates in CW direction).
+        The rotation angle in degrees (rotates in clockwise direction).
     cen : tuple
         Center location around which to rotate image.
         Values are expected to be `(xcen, ycen)`.
@@ -926,7 +927,7 @@ def model_to_hdulist(args_model, sp_star, bandpass):
 
 def distort_image(hdulist_or_filename, ext=0, to_frame='sci', fill_value=0, 
                   xnew_coords=None, ynew_coords=None, return_coords=False,
-                  aper=None, sci_cen=None):
+                  aper=None, sci_cen=None, pixelscale=None, oversamp=None):
     """ Distort an image
 
     Apply SIAF instrument distortion to an image that is assumed to be in 
@@ -980,6 +981,15 @@ def distort_image(hdulist_or_filename, ext=0, to_frame='sci', fill_value=0,
         specified to save time on generating a new one. If set to None,
         then automatically determines a new `pysiaf` aperture based on
         information stored in the header.
+    sci_cen : tuple or None
+        Science pixel values associated with center of array. If set to
+        None, then will grab values from DET_X and DET_Y header keywords.
+    pixelscale : float or None
+        Pixel scale of input image in arcsec/pixel. If set to None, then
+        will search for PIXELSCL and PIXSCALE keywords in header.
+    oversamp : int or None
+        Oversampling of input image relative to native detector pixel scale.
+        If set to None, will search for OSAMP and DET_SAMP keywords. 
     """
 
     import pysiaf
@@ -1018,8 +1028,14 @@ def distort_image(hdulist_or_filename, ext=0, to_frame='sci', fill_value=0,
     
     # Pixel scale information
     ny, nx = hdu_list[ext].shape
-    pixelscale = hdu_list[ext].header["PIXELSCL"]  # the pixel scale carries the over-sample value
-    oversamp   = hdu_list[ext].header["DET_SAMP"]  # PSF oversampling relative to detector 
+    if pixelscale is None:
+        # Pixel scale of input image
+        try: pixelscale = hdu_list[ext].header["PIXELSCL"]
+        except: pixelscale = hdu_list[ext].header["PIXSCALE"]
+    if oversamp is None:
+        # Image oversampling relative to detector
+        try: oversamp = hdu_list[ext].header["OSAMP"]   
+        except: oversamp = hdu_list[ext].header["DET_SAMP"]
 
     # Get 'sci' reference location where PSF is observed
     if sci_cen is None:
@@ -1108,22 +1124,26 @@ def _convolve_psfs_for_mp(arg_vals):
     ny, nx = im.shape
     ny_psf, nx_psf = psf.data.shape
 
-    # Get region to perform convolution
-    xtra_pix = int(nx_psf/2 + 10)
-    ind = np.argwhere(ind_mask.sum(axis=0)>0)
-    ix1, ix2 = (np.min(ind), np.max(ind))
-    ix1 -= xtra_pix
-    ix1 = 0 if ix1<0 else ix1
-    ix2 += xtra_pix
-    ix2 = nx if ix2>nx else ix2
-    
-    xtra_pix = int(ny_psf/2 + 10)
-    ind = np.argwhere(ind_mask.sum(axis=1))
-    iy1, iy2 = (np.min(ind), np.max(ind))    
-    iy1 -= xtra_pix
-    iy1 = 0 if iy1<0 else iy1
-    iy2 += xtra_pix
-    iy2 = ny if iy2>ny else iy2
+    try:
+        # Get region to perform convolution
+        xtra_pix = int(nx_psf/2 + 10)
+        ind = np.argwhere(ind_mask.sum(axis=0)>0)
+        ix1, ix2 = (np.min(ind), np.max(ind))
+        ix1 -= xtra_pix
+        ix1 = 0 if ix1<0 else ix1
+        ix2 += xtra_pix
+        ix2 = nx if ix2>nx else ix2
+        
+        xtra_pix = int(ny_psf/2 + 10)
+        ind = np.argwhere(ind_mask.sum(axis=1))
+        iy1, iy2 = (np.min(ind), np.max(ind))
+        iy1 -= xtra_pix
+        iy1 = 0 if iy1<0 else iy1
+        iy2 += xtra_pix
+        iy2 = ny if iy2>ny else iy2
+    except ValueError:
+        # No 
+        return 0
     
     im_temp = im.copy()
     im_temp[~ind_mask] = 0
@@ -1180,9 +1200,14 @@ def convolve_image(hdul_sci_image, hdul_psfs, return_hdul=False, output_sampling
     Parameters
     ==========
     hdul_sci_image : HDUList
-        Image to convolve. Requires header info of APERNAME, OSAMP,
-        PIXELSCL, CFRAME, and XCEN and YCEN (image indices corresponding to 
-        center of aperture)
+        Image to convolve. Requires header info of:
+            - APERNAME : SIAF aperture that images is placed in
+            - PIXELSCL : Pixel scale of image (arcsec/pixel)
+            - OSAMP    : Oversampling relative to detector pixels
+            - CFRAME   : Coordinate frame of image ('sci', 'tel', 'idl', 'det')
+            - XCEN     : Image x-position corresponding to aperture reference location
+            - YCEN     : Image y-position corresponding to aperture reference location
+            - XIND_REF, YIND_REF : Alternative for (XCEN, YCEN)
     hdul_psfs : HDUList
         Multi-extension FITS. Each HDU element is a different PSF for
         some location within some field of view. Must have some pixel
@@ -1252,7 +1277,7 @@ def convolve_image(hdul_sci_image, hdul_psfs, return_hdul=False, output_sampling
         yarr_im += yref
 
     # Convert each element in image array to tel coords
-    xarr_im, yarr_im = siaf_ap_sci.convert(xarr_im, yarr_im, hdr_im['CFRAME'], 'tel')
+    xtel_im, ytel_im = siaf_ap_sci.convert(xarr_im, yarr_im, hdr_im['CFRAME'], 'tel')
 
     # Create mask for input image for each PSF to convolve
     # For each pixel, find PSF that is closest on the sky
@@ -1260,8 +1285,8 @@ def convolve_image(hdul_sci_image, hdul_psfs, return_hdul=False, output_sampling
     npsf = len(hdul_psfs)
     mask_arr = np.zeros([npsf, ysize, xsize], dtype='bool')
     for iy in range(ysize):
-        rho_arr = (xarr_im[iy].reshape([-1,1]) - xtel_psfs.reshape([1,-1]))**2 \
-                + (yarr_im[iy].reshape([-1,1]) - ytel_psfs.reshape([1,-1]))**2
+        rho_arr = (xtel_im[iy].reshape([-1,1]) - xtel_psfs.reshape([1,-1]))**2 \
+                + (ytel_im[iy].reshape([-1,1]) - ytel_psfs.reshape([1,-1]))**2
 
         # Calculate indices corresponding to closest PSF for each pixel
         im_ind = np.argmin(rho_arr, axis=1)
@@ -1269,7 +1294,7 @@ def convolve_image(hdul_sci_image, hdul_psfs, return_hdul=False, output_sampling
         mask = np.asarray([im_ind==i for i in range(npsf)])
         mask_arr[:,iy,:] = mask
         
-    del rho_arr, im_ind, mask, xarr_im, yarr_im
+    del rho_arr, im_ind, mask, xtel_im, ytel_im
     
     # Make sure all mask values are 1
     mask_sum = mask_arr.sum(axis=0)
@@ -1479,6 +1504,7 @@ def make_disk_image(inst, disk_params, sp_star=None, pixscale_out=None, dist_out
     # which could be different from PSF-generated aperture name.
     hdul_disk_image[0].header['INSTRUME'] = inst.name
     hdul_disk_image[0].header['FILTER'] = inst.filter
+    hdul_disk_image[0].header['OSAMP'] = inst.oversample
     hdul_disk_image[0].header['DET_SAMP'] = inst.oversample
     hdul_disk_image[0].header['DET_NAME'] = inst.aperturename.split('_')[0]
     siaf_ap = inst.siaf_ap
@@ -1490,12 +1516,12 @@ def make_disk_image(inst, disk_params, sp_star=None, pixscale_out=None, dist_out
         
     return hdul_disk_image
 
-def rotate_shift_image(hdul, index=0, PA_offset=0, delx_asec=0, dely_asec=0, 
+def rotate_shift_image(hdul, index=0, angle=0, delx_asec=0, dely_asec=0, 
                        shift_func=fshift, **kwargs):
     """ Rotate/Shift image
     
     Rotate then offset image by some amount.
-    Positive angles rotate the image counter-clockwise.
+    Positive angles rotate the image clockwise.
     
     Parameters
     ==========
@@ -1503,8 +1529,8 @@ def rotate_shift_image(hdul, index=0, PA_offset=0, delx_asec=0, dely_asec=0,
         Input HDUList
     index : int
         Specify HDU index, usually 0
-    PA_offset : float
-        Rotate entire scene by some position angle. 
+    angle : float
+        Rotate entire scene by some angle. 
         Positive angles rotate counter-clockwise.
     delx_asec : float
         Offset in x direction (specified in arcsec). 
@@ -1557,8 +1583,8 @@ def rotate_shift_image(hdul, index=0, PA_offset=0, delx_asec=0, dely_asec=0,
     # from copy import deepcopy
 
     # Rotate
-    if np.abs(PA_offset)!=0:
-        im_rot = rotate(hdul[index].data, -1*PA_offset, reshape=False, **kwargs)
+    if np.abs(angle)!=0:
+        im_rot = rotate(hdul[index].data, -1*angle, reshape=False, **kwargs)
     else:
         im_rot = hdul[index].data
     delx, dely = np.array([delx_asec, dely_asec]) / hdul[0].header['PIXELSCL']
