@@ -292,7 +292,14 @@ class NIRCam_ext(webbpsf_NIRCam):
 
     @property
     def siaf_ap(self):
-        return self.siaf[self.aperturename]
+        """SIAF Aperture object"""
+        if self._siaf_ap is None:
+            return self.siaf[self.aperturename]
+        else:
+            return self._siaf_ap
+    @siaf_ap.setter
+    def siaf_ap(self, value):
+        self._siaf_ap = value
 
     @property
     def scaid(self):
@@ -394,7 +401,9 @@ class NIRCam_ext(webbpsf_NIRCam):
         """
         Return an image representation of the focal plane mask.
         Output is in 'sci' coords orientation. If no image mask
-        is present, then returns an array of all 1s.
+        is present, then returns an array of all 1s. Mask is
+        centered in image, while actual subarray readout has a
+        slight offset.
         
         Parameters
         ==========
@@ -527,7 +536,7 @@ class NIRCam_ext(webbpsf_NIRCam):
         # Set to input bar offset value. No effect if not a wedge mask.
         bar_offset_orig = self.options.get('bar_offset', None)
         self.options['bar_offset'] = bar_offset
-        res =  _gen_psf_coeff(self, **kwargs)
+        res = _gen_psf_coeff(self, **kwargs)
         self.options['bar_offset'] = bar_offset_orig
 
         return res
@@ -821,6 +830,9 @@ class NIRCam_ext(webbpsf_NIRCam):
             ('det', 'sci', 'tel', 'idl'). Output is then xvals, yvals, hdul_psfs.
         use_coeff : bool
             If True, uses `calc_psf_from_coeff`, other WebbPSF's built-in `calc_psf`.
+        coron_rescale : bool
+            Rescale off-axis coronagraphic PSF to better match analytic prediction
+            when source overlaps coronagraphic occulting mask. Only valid for use_coeff=True.
         """
 
         res = _calc_psfs_grid(self, sp=sp, wfe_drift=wfe_drift, osamp=osamp, npsf_per_full_fov=npsf_per_full_fov,
@@ -1549,6 +1561,9 @@ def _init_inst(self, filter=None, pupil_mask=None, image_mask=None,
         self.include_si_wfe = True
     else:
         self.include_si_wfe = True
+
+    # SIAF aperture attribute
+    self._siaf_ap = None
 
     # Options to include or exclude distortions
     self.include_distortions = True
@@ -2708,6 +2723,7 @@ def _gen_wfedrift_coeff(self, force=False, save=True, wfe_list=[0,1,2,5,10,20,40
     cf_fit_off = cf_wfe_off = None
     if self.is_coron:
         image_mask_orig = self.image_mask
+        apername_orig = self._aperturename
         self.image_mask = None
         
         cf_wfe_off = []
@@ -2715,7 +2731,9 @@ def _gen_wfedrift_coeff(self, force=False, save=True, wfe_list=[0,1,2,5,10,20,40
             cf, _ = self.gen_psf_coeff(wfe_drift=wfe_drift, force=True, save=False, return_results=True, **kwargs)
             cf_wfe_off.append(cf)
         cf_wfe_off = np.asarray(cf_wfe_off)
+        # Return to original values
         self.image_mask = image_mask_orig
+        self.aperturename = apername_orig
 
         # Return fov_pix to original size
         self.fov_pix = fov_pix_orig
@@ -4111,7 +4129,7 @@ def _calc_psfs_grid(self, sp=None, wfe_drift=0, osamp=1, npsf_per_full_fov=15,
     xtel_psf, ytel_psf = siaf_ap_obs.convert(xsci_psf, ysci_psf, 'sci', 'tel')
     if use_coeff:
         hdul_psfs = self.calc_psf_from_coeff(sp=sp, coord_vals=(xtel_psf, ytel_psf), coord_frame='tel', 
-                                            wfe_drift=wfe_drift, return_oversample=True)
+                                             wfe_drift=wfe_drift, return_oversample=True, **kwargs)
     else:
         hdul_psfs = fits.HDUList()
         npos = len(xtel_psf)
