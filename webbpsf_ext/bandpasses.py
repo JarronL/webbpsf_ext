@@ -92,6 +92,60 @@ def miri_filter(filter, **kwargs):
         
     return bp
 
+def nircam_com_th(wave_out=None, ND_acq=False):
+
+    # Sapphire mask transmission values for coronagraphic substrate
+    fname = 'jwst_nircam_moda_com_substrate_trans.fits'
+    path_com = _bp_dir / fname
+
+    hdulist = fits.open(path_com)
+    wvals = hdulist[1].data['WAVELENGTH']
+    tvals = hdulist[1].data['THROUGHPUT']
+    # Estimates for w<1.5um
+    wvals = np.insert(wvals, 0, [0.5, 0.7, 1.2, 1.40])
+    tvals = np.insert(tvals, 0, [0.2, 0.2, 0.5, 0.15])
+    # Estimates for w>5.0um
+    wvals = np.append(wvals, [6.00])
+    tvals = np.append(tvals, [0.22])
+
+    if ND_acq:
+        ovals = nircam_com_nd(wave_out=wvals)
+        tvals *= 10**(-1*ovals)
+
+    if wave_out is None:
+        return wvals, tvals
+    else:
+        return np.interp(wave_out, wvals, tvals, left=0, right=0)
+
+
+def nircam_com_nd(wave_out=None):
+    """NIRCam COM Neutral Density squares
+    
+    Return optical density, where final throughput is equal
+    to 10**(-1*OD).
+    """
+    fname = 'NDspot_ODvsWavelength.txt'
+    path_ND = _bp_dir / fname
+    data = ascii.read(path_ND)
+
+    wdata = data[data.colnames[0]].data # Wavelength (um)
+    odata = data[data.colnames[1]].data # Optical Density
+    # Estimates for w<1.5um
+    wdata = np.insert(wdata, 0, [0.5])
+    odata = np.insert(odata, 0, [3.8])
+    # Estimates for w>5.0um
+    wdata = np.append(wdata, [6.00])
+    odata = np.append(odata, [2.97])
+
+    # CV3 data suggests OD needs to be multiplied by 0.93
+    # compared to Barr measurements
+    odata *= 0.93
+
+    if wave_out is None:
+        return wdata, odata
+    else:
+        return np.interp(wave_out, wdata, odata, left=0, right=0)
+
 
 def nircam_filter(filter, pupil=None, mask=None, module=None, ND_acq=False,
     ice_scale=None, nvr_scale=None, ote_scale=None, nc_scale=None,
@@ -229,46 +283,13 @@ def nircam_filter(filter, pupil=None, mask=None, module=None, ND_acq=False,
     # Substrate transmission (off-axis substrate with occulting masks)
     if ((mask  is not None) and ('MASK' in mask)) or coron_substrate or ND_acq:
         # Sapphire mask transmission values for coronagraphic substrate
-        hdulist = fits.open(_bp_dir / 'jwst_nircam_moda_com_substrate_trans.fits')
-        wtemp = hdulist[1].data['WAVELENGTH']
-        ttemp = hdulist[1].data['THROUGHPUT']
-        # Estimates for w<1.5um
-        wtemp = np.insert(wtemp, 0, [0.5, 0.7, 1.2, 1.40])
-        ttemp = np.insert(ttemp, 0, [0.2, 0.2, 0.5, 0.15])
-        # Estimates for w>5.0um
-        wtemp = np.append(wtemp, [6.00])
-        ttemp = np.append(ttemp, [0.22])
-
         # Did we explicitly set the ND acquisition square?
         # This is a special case and doesn't necessarily need to be set.
         # WebbPSF has a provision to include ND filters in the field, but we include
         # this option if the user doesn't want to figure out offset positions.
-        if ND_acq:
-            fname = 'NDspot_ODvsWavelength.txt'
-            path_ND = _bp_dir / fname
-            data = ascii.read(path_ND)
-
-            wdata = data[data.colnames[0]].data # Wavelength (um)
-            odata = data[data.colnames[1]].data # Optical Density
-            # Estimates for w<1.5um
-            wdata = np.insert(wdata, 0, [0.5])
-            odata = np.insert(odata, 0, [3.8])
-            # Estimates for w>5.0um
-            wdata = np.append(wdata, [6.00])
-            odata = np.append(odata, [2.97])
-
-            # CV3 data suggests OD needs to be multiplied by 0.93
-            # compared to Barr measurements
-            odata *= 0.93
-
-            otemp = np.interp(wtemp, wdata, odata, left=0, right=0)
-            ttemp *= 10**(-1*otemp)
-
-        # Interpolate substrate transmission onto filter wavelength grid and multiply
-        th_coron_sub = np.interp(bp.wave/1e4, wtemp, ttemp, left=0, right=0)
+        th_coron_sub = nircam_com_th(wave_out=bp.wave/1e4, ND_acq=ND_acq)
         th_new = th_coron_sub * bp.throughput
         bp = S.ArrayBandpass(bp.wave, th_new)
-
 
     # Lyot stop wedge modifications 
     # Substrate transmission (located in pupil wheel to deflect beam)
