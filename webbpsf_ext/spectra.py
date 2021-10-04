@@ -1836,7 +1836,10 @@ def companion_spec(bandpass, model='SB12', atmo='hy3s', mass=10, age=100, entrop
             sp = sp_ext
                         
         # For BEX and COND models, set up renorm_args
-        if model.lower()=='bex':
+        # unless renorm_args is already set
+        if (renorm_args is not None) and (len(renorm_args) > 0):
+            pass
+        elif model.lower()=='bex':
             table = linder_table()
             mass_arr, mag_arr = linder_filter(table, bandpass.name, age, dist=dist)
             mag = np.interp(mass, mass_arr, mag_arr)
