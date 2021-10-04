@@ -599,52 +599,50 @@ def radec_offset(ra, dec, dist, pos_ang):
 
 class jwst_point(object):
 
+    """ JWST Telescope Pointing information
+
+    Holds pointing coordinates and dither information for a given telescope
+    visit.
+
+    Parameters
+    ==========
+    ap_obs_name : str
+        Name of the observed instrument aperture.
+    ap_ref_name : str
+        Name of the reference instrument aperture. Can be the same as observed,
+        but not always.
+    ra_ref : float
+        RA position (in deg) of the reference aperture.
+    dec_ref : float
+        Dec position (in deg) of the reference aperture.
+    
+    Keyword Args
+    ============
+    pos_ang : float
+        Position angle (positive angles East of North) in degrees.
+    exp_nums : ndarray or None
+        Option to specify exposure numbers associated with each dither
+        position. Useful fro Visit book-keeping. If not set, then will
+        simply be a `np.arange(self.ndith) + 1`
+    base_offset : array-like
+        Corresponds to (BaseX, BaseY) columns in .pointing file (arcsec).
+    dith_offset : array-like
+        Corresponds to (DithX, DithY) columns in .pointing file (arcsec). 
+    base_std : float or array-like or None
+        The 1-sigma pointing uncertainty per axis for telescope slew. 
+        If None, then standard deviation is chosen to be either 5 mas 
+        or 100 mas, depending on `use_ta` attribute (default: True).
+    dith_std : float or array-like or None
+        The 1-sigma pointing uncertainty per axis for dithers. If None,
+        then standard deviation is chosen to be either 2.5 or 5 mas, 
+        depending on `use_sgd` attribute (default: True).
+    rand_seed : None or int
+        Random seed to use for generating repeatable random offsets.
+    """
     
     def __init__(self, ap_obs_name, ap_ref_name, ra_ref, dec_ref, pos_ang=0, 
         base_offset=(0,0), dith_offsets=[(0,0)], exp_nums=None,
         base_std=None, dith_std=None, rand_seed=None):
-
-        """ JWST Telescope Pointing information
-
-        Holds pointing coordinates and dither information for a given telescope
-        visit.
-
-        Parameters
-        ==========
-        ap_obs_name : str
-            Name of the observed instrument aperture.
-        ap_ref_name : str
-            Name of the reference instrument aperture. Can be the same as observed,
-            but not always.
-        ra_ref : float
-            RA position (in deg) of the reference aperture.
-        dec_ref : float
-            Dec position (in deg) of the reference aperture.
-        
-        Keyword Args
-        ============
-        pos_ang : float
-            Position angle (positive angles East of North) in degrees.
-        exp_nums : ndarray or None
-            Option to specify exposure numbers associated with each dither
-            position. Useful fro Visit book-keeping. If not set, then will
-            simply be a `np.arange(self.ndith) + 1`
-        base_offset : array-like
-            Corresponds to (BaseX, BaseY) columns in .pointing file (arcsec).
-        dith_offset : array-like
-            Corresponds to (DithX, DithY) columns in .pointing file (arcsec). 
-        base_std : float or array-like or None
-            The 1-sigma pointing uncertainty per axis for telescope slew. 
-            If None, then standard deviation is chosen to be either 5 mas 
-            or 100 mas, depending on `use_ta` attribute (default: True).
-        dith_std : float or array-like or None
-            The 1-sigma pointing uncertainty per axis for dithers. If None,
-            then standard deviation is chosen to be either 2.5 or 5 mas, 
-            depending on `use_sgd` attribute (default: True).
-        rand_seed : None or int
-            Random seed to use for generating repeatable random offsets.
-        """
-
 
         # SIAF objects configuration
         # Reference instrument and aperture
