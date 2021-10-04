@@ -1039,7 +1039,7 @@ class jwst_point(object):
         mark_ref : bool
             Add markers for the reference (V2Ref, V3Ref) point in each apertyre
         frame : str
-            Which coordinate system to plot in: 'tel', 'idl', 'sci', 'det'
+            Which coordinate system to plot in: 'tel', 'idl', 'sci', 'det', 'sky'.
         ax : matplotlib.Axes
             Desired destination axes to plot into (If None, current
             axes are inferred from pyplot.)
@@ -1054,8 +1054,16 @@ class jwst_point(object):
             passed through to `matplotlib.Axes.plot`
         """          
         siaf_ap = self.siaf_ap_ref
-        att = self.attitude_matrix(**kwargs)
-        siaf_ap.set_attitude_matrix(att)
+
+        # Set attitude matrix for sky transformations
+        frame = kwargs.get('frame')
+        if (frame is not None) and (frame=='sky'):
+            att = self.attitude_matrix(**kwargs)
+            try:
+                siaf_ap.set_attitude_matrix(att)
+            except AttributeError:
+                _log.error("Running outdated version of pysiaf. Need >v12.0 for sky transformations.")
+
         siaf_ap.plot(fill=fill, **kwargs)
         siaf_ap._attitude_matrix = None
         
@@ -1079,7 +1087,7 @@ class jwst_point(object):
         mark_ref : bool
             Add markers for the reference (V2Ref, V3Ref) point in each apertyre
         frame : str
-            Which coordinate system to plot in: 'tel', 'idl', 'sci', 'det'
+            Which coordinate system to plot in: 'tel', 'idl', 'sci', 'det', 'sky'
         ax : matplotlib.Axes
             Desired destination axes to plot into (If None, current
             axes are inferred from pyplot.)
@@ -1094,8 +1102,17 @@ class jwst_point(object):
             passed through to `matplotlib.Axes.plot`
         """ 
         siaf_ap = self.siaf_ap_obs
-        att = self.attitude_matrix(**kwargs)
-        siaf_ap.set_attitude_matrix(att)
+
+        # Set attitude matrix for sky transformations
+        frame = kwargs.get('frame')
+        if (frame is not None) and (frame=='sky'):
+            att = self.attitude_matrix(**kwargs)
+            try:
+                siaf_ap.set_attitude_matrix(att)
+            except AttributeError:
+                _log.error("Running outdated version of pysiaf. Need >v12.0 for sky transformations.")
+
+
         siaf_ap.plot(fill=fill, **kwargs)
         siaf_ap._attitude_matrix = None
 
