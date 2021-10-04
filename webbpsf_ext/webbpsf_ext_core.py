@@ -994,19 +994,15 @@ class MIRI_ext(webbpsf_MIRI):
         self._quick = value
 
     @property
-    def scaid(self):
-        """SCA ID (481, 482, ... 489, 490)"""
-        detid = self.detector[-2:]
-        return self._det2sca.get(detid, 'unknown')
-    @scaid.setter
-    def scaid(self, value):
-        scaid_values = np.array(list(self._det2sca.values()))
-        det_values = np.array(list(self._det2sca.keys()))
-        if value in scaid_values:
-            ind = np.where(scaid_values==value)[0][0]
-            self.detector = 'NRC'+det_values[ind]
+    def siaf_ap(self):
+        """SIAF Aperture object"""
+        if self._siaf_ap is None:
+            return self.siaf[self.aperturename]
         else:
-            _check_list(value, scaid_values, var_name='scaid')
+            return self._siaf_ap
+    @siaf_ap.setter
+    def siaf_ap(self, value):
+        self._siaf_ap = value
 
     @webbpsf_MIRI.detector_position.setter
     def detector_position(self, position):
