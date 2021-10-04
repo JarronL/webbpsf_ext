@@ -1283,7 +1283,7 @@ def convolve_image(hdul_sci_image, hdul_psfs, return_hdul=False,
         For large images that are zero-padded, this option will first crop off the
         extraneous zeros (but accounting for PSF size to not tuncate resulting
         convolution at edges), then place the convolved subarray image back into
-        a full frame of zeros. This process speeds up convolution by a factor of 10,
+        a full frame of zeros. This process can improve speeds by a factor of 10,
         with no resulting differences. Should always be set to True; only provided 
         as an option for debugging purposes.
     """
@@ -1694,8 +1694,8 @@ def rotate_shift_image(hdul, index=0, angle=0, delx_asec=0, dely_asec=0,
     # hdu_new[index] = im_new
     # return hdu_new
     
-def crop_zero_rows_cols(image, symmetric=True):
-    """Crop off rows and columns from an image that are zeros."""
+def crop_zero_rows_cols(image, symmetric=True, return_indices=False):
+    """Crop off rows and columns that are all zeros."""
 
     zmask = (image!=0)
 
@@ -1710,15 +1710,19 @@ def crop_zero_rows_cols(image, symmetric=True):
         ny2 = np.where(col_sum[::-1]>0)[0][0]
 
         crop_border = np.min([nx1,nx2,ny1,ny2])
-        sh_new = np.array(image.shape) - 2*crop_border
-        im_new = pad_or_cut_to_size(image, sh_new)
+        ix1 = iy1 = crop_border
+        ix2 = image.shape[1] - crop_border
+        iy2 = image.shape[0] - crop_border
     else:
         indx = np.where(row_sum>0)[0]
         indy = np.where(col_sum>0)[0]
         ix1, ix2 = indx[0], indx[-1]+1
         iy1, iy2 = indy[0], indy[-1]+1
 
-        im_new = image[iy1:iy2,ix1:ix2]
+    im_new = image[iy1:iy2,ix1:ix2]
 
-    return im_new
+    if return_indices:
+        return im_new, [ix1,ix2,iy1,iy2]
+    else:
+        return im_new
 
