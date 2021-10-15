@@ -1683,6 +1683,11 @@ def rotate_shift_image(hdul, index=0, angle=0, delx_asec=0, dely_asec=0,
     
     # from copy import deepcopy
 
+    PA_offset = kwargs.get('PA_offset')
+    if PA_offset is not None:
+        _log.warn('`PA_offset` is deprecated. Please use `angle` keyword instead. Setting angle=PA_offset for now.')
+        angle = PA_offset
+
     # Rotate
     if np.abs(angle)!=0:
         im_rot = rotate(hdul[index].data, -1*angle, reshape=False, **kwargs)
