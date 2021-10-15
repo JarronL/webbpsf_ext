@@ -1105,6 +1105,12 @@ def distort_image(hdulist_or_filename, ext=0, to_frame='sci', fill_value=0,
     # Create an array of (yidl, xidl) values to interpolate onto
     pts = np.array([ynew_idl.flatten(),xnew_idl.flatten()]).transpose()
     psf_new = func(pts).reshape(xnew.shape)
+
+    # Make sure we're not adding flux to the system via interpolation artifacts
+    sum_orig = hdu_list[ext].data.sum()
+    sum_new = psf_new.sum()
+    if sum_new > sum_orig:
+        psf_new *= (sum_orig / sum_new)
     
     if return_coords:
         return (psf_new, xnew, ynew)
@@ -1122,7 +1128,7 @@ def _convolve_psfs_for_mp(arg_vals):
     im, psf, ind_mask = arg_vals
 
     ny, nx = im.shape
-    ny_psf, nx_psf = psf.data.shape
+    ny_psf, nx_psf = psf.shape
 
     try:
         # Get region to perform convolution
@@ -1201,8 +1207,18 @@ def _crop_hdul(hdul_sci_image, psf_shape):
     col_sum = zmask.sum(axis=1)
     indx = np.where(row_sum>0)[0]
     indy = np.where(col_sum>0)[0]
-    ix1, ix2 = indx[0], indx[-1]+1
-    iy1, iy2 = indy[0], indy[-1]+1
+    try:
+        ix1, ix2 = indx[0], indx[-1]+1
+    except IndexError:
+        # In case all zeroes
+        ix1 = int(im_input.shape[1] / 2)
+        ix2 = ix1 + 1
+    try:
+        iy1, iy2 = indy[0], indy[-1]+1
+    except IndexError:
+        # In case all zeroes
+        iy1 = int(im_input.shape[0] / 2)
+        iy2 = iy1 + 1
 
     # Expand indices to accommodate PSF size
     ny_psf, nx_psf = psf_shape
@@ -1283,7 +1299,7 @@ def convolve_image(hdul_sci_image, hdul_psfs, return_hdul=False,
         For large images that are zero-padded, this option will first crop off the
         extraneous zeros (but accounting for PSF size to not tuncate resulting
         convolution at edges), then place the convolved subarray image back into
-        a full frame of zeros. This process can improve speeds by a factor of 10,
+        a full frame of zeros. This process can improve speeds by a factor of a few,
         with no resulting differences. Should always be set to True; only provided 
         as an option for debugging purposes.
     """
@@ -1366,7 +1382,7 @@ def convolve_image(hdul_sci_image, hdul_psfs, return_hdul=False,
         
     del rho_arr, im_ind, mask, xtel_im, ytel_im
     
-    # Make sure all mask values are 1
+    # Make sure all pixels have a mask value of 1 somewhere (and only in one mask!)
     mask_sum = mask_arr.sum(axis=0)
     ind_bad = (mask_sum != 1)
     nbad = len(mask_sum[ind_bad])
