@@ -1622,7 +1622,7 @@ def rotate_shift_image(hdul, index=0, angle=0, delx_asec=0, dely_asec=0,
     """ Rotate/Shift image
     
     Rotate then offset image by some amount.
-    Positive angles rotate the image clockwise.
+    Positive angles rotate the image counter-clockwise.
     
     Parameters
     ==========
