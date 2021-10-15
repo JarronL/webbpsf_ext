@@ -368,7 +368,7 @@ class NIRCam_ext(webbpsf_NIRCam):
                            **kwargs)
         return bp
 
-    def get_bar_offset(self):
+    def get_bar_offset(self, narrow=False):
         """
         Obtain the value of the bar offset that would be passed through to
         PSF calculations for bar/wedge coronagraphic masks.
@@ -381,7 +381,7 @@ class NIRCam_ext(webbpsf_NIRCam):
             # or explicit specification
             bar_offset = self.options.get('bar_offset', None)
             if bar_offset is None:
-                auto_offset = self.filter
+                auto_offset = 'narrow' if narrow else self.filter
             else:
                 try:
                     _ = float(bar_offset)
@@ -391,7 +391,7 @@ class NIRCam_ext(webbpsf_NIRCam):
                     auto_offset = bar_offset
                     bar_offset = None
 
-            mask = NIRCam_BandLimitedCoron(name=self.image_mask, module=self.module, 
+            mask = NIRCam_BandLimitedCoron(name=self.image_mask, module=self.module, kind='nircamwedge',
                                            bar_offset=bar_offset, auto_offset=auto_offset)
             return mask.bar_offset
         else:
@@ -399,7 +399,7 @@ class NIRCam_ext(webbpsf_NIRCam):
 
     def gen_mask_image(self, npix=None, pixelscale=None, bar_offset=None, nd_squares=True):
         """
-        Return an image representation of the focal plane mask.
+        Return an image representation of the focal plane mask attenuation.
         Output is in 'sci' coords orientation. If no image mask
         is present, then returns an array of all 1s. Mask is
         centered in image, while actual subarray readout has a
@@ -439,7 +439,7 @@ class NIRCam_ext(webbpsf_NIRCam):
             # Create wavefront to pass through mask and obtain transmission image
             wavelength = self.bandpass.avgwave() / 1e10
             wave = poppy.Wavefront(wavelength=wavelength, npix=npix, pixelscale=pixelscale)
-            im = mask.get_transmission(wave)
+            im = mask.get_transmission(wave)**2
         else:
             im = np.ones([npix,npix])
 
@@ -713,7 +713,8 @@ class NIRCam_ext(webbpsf_NIRCam):
 
         # Ensure correct scaling for off-axis PSFs
         if self.is_coron and coron_rescale and (coord_vals is not None):
-            res = _nrc_coron_rescale(self, res, coord_vals, coord_frame, sp=sp)
+            siaf_ap = kwargs.get('siaf_ap', None)
+            res = _nrc_coron_rescale(self, res, coord_vals, coord_frame, siaf_ap=siaf_ap, sp=sp)
 
         return res
 
@@ -1101,14 +1102,14 @@ class MIRI_ext(webbpsf_MIRI):
                           poppy.BarOcculter(width=0.722, height=31, rotation=rot1, **offsets),
                           poppy.SquareFieldStop(size=30, rotation=rot2, **offsets)]
             mask = poppy.CompoundAnalyticOptic(name="MIRI Lyot Occulter", opticslist=opticslist)
-            im = mask.get_transmission(wave)
+            im = mask.get_transmission(wave)**2
         elif self.image_mask == 'LRS slit':
             full_pad = 2*np.max(np.abs(xy_rot(2.5, 2.5, rot2)))
             npix = int(full_pad / pixelscale + 0.5) if npix is None else npix
             wave = poppy.Wavefront(wavelength=23e-6, npix=npix, pixelscale=pixelscale)
             mask = poppy.RectangularFieldStop(width=4.7, height=0.51, rotation=rot2, 
                                               name=self.image_mask, **offsets)
-            im = mask.get_transmission(wave)
+            im = mask.get_transmission(wave)**2
         else:
             im = np.ones([npix,npix])
         
@@ -2152,7 +2153,7 @@ def _calc_psf_webbpsf(self, calc_psf_func, add_distortion=None, fov_pixels=None,
 
         # Get new sci coord
         if coord_vals is not None:
-            siaf_ap = self.siaf_ap
+            siaf_ap = self.siaf[self.aperturename]
             xorig, yorig = self.detector_position
             xnew, ynew = coord_vals
 
@@ -2726,7 +2727,7 @@ def _gen_wfedrift_coeff(self, force=False, save=True, wfe_list=[0,1,2,5,10,20,40
         cf_wfe.append(cf)
     cf_wfe = np.asarray(cf_wfe)
 
-    # For coronagraphic observations, produce an offset PSF by turning off mask
+    # For coronagraphic observations, produce an off-axis PSF by turning off mask
     cf_fit_off = cf_wfe_off = None
     if self.is_coron:
         image_mask_orig = self.image_mask
@@ -3462,7 +3463,8 @@ def _gen_wfemask_coeff(self, force=False, save=True, large_grid=None,
 
 
 def _calc_psf_from_coeff(self, sp=None, return_oversample=True, return_hdul=True,
-    wfe_drift=None, coord_vals=None, coord_frame='tel', break_iter=True, **kwargs):
+    wfe_drift=None, coord_vals=None, coord_frame='tel', break_iter=True, 
+    siaf_ap=None, **kwargs):
     """PSF Image from polynomial coefficients
     
     Create a PSF image from instrument settings. The image is noiseless and
@@ -3492,8 +3494,9 @@ def _calc_psf_from_coeff(self, sp=None, return_oversample=True, return_hdul=True
     coord_vals : tuple or None
         Coordinates (in arcsec or pixels) to calculate field-dependent PSF.
         If multiple values, then this should be an array ([xvals], [yvals]).
+        Relative to self.aperturename aperture.
     coord_frame : str
-        Type of input coordinates. 
+        Type of input coordinates relative to self.aperturename aperture.
 
             * 'tel': arcsecs V2,V3
             * 'sci': pixels, in conventional DMS axes orientation
@@ -3503,7 +3506,7 @@ def _calc_psf_from_coeff(self, sp=None, return_oversample=True, return_hdul=True
     return_hdul : bool
         Return PSFs in an HDUList rather than set of arrays (default: True).
     break_iter : bool
-        For multiple field points, break up generate PSFs one-by-one rather 
+        For multiple field points, break up and generate PSFs one-by-one rather 
         than simultaneously, which can save on memory for large PSFs.
     """        
 
@@ -3544,6 +3547,7 @@ def _calc_psf_from_coeff(self, sp=None, return_oversample=True, return_hdul=True
             kwargs['return_hdul'] = return_hdul
             kwargs['wfe_drift'] = wfe_drift
             kwargs['coord_frame'] = coord_frame
+            kwargs['siaf_ap'] = siaf_ap
             psf_all = fits.HDUList() if return_hdul else []
             for ii in trange(nfield_init, leave=False, desc='PSFs'):
                 kwargs['coord_vals'] = (c1_all[ii], c2_all[ii])
@@ -3580,6 +3584,11 @@ def _calc_psf_from_coeff(self, sp=None, return_oversample=True, return_hdul=True
     if wfe_drift is None: 
         wfe_drift = 0
 
+    # Only pass 'off' coord frame to coronagraphic mask function
+    coord_frame_input = coord_frame
+    if coord_frame=='idl_cen':
+        coord_frame = 'idl'
+
     # Modify PSF coefficients based on field-dependence
     # Ignore if there is a focal plane mask
     # No need for SI WFE field dependence if coronagraphy, but this allows us
@@ -3593,7 +3602,8 @@ def _calc_psf_from_coeff(self, sp=None, return_oversample=True, return_hdul=True
     # Modify PSF coefficients based on field-dependence with a focal plane mask
     nfield_mask = None
     if self.image_mask is not None:
-        cf_mod, nfield_mask = _coeff_mod_wfe_mask(self, coord_vals, coord_frame)
+        cf_mod, nfield_mask = _coeff_mod_wfe_mask(self, coord_vals, coord_frame_input,
+                                                  siaf_ap=siaf_ap)
         psf_coeff_mod += cf_mod
     nfield = nfield if nfield_mask is None else nfield_mask
 
@@ -3656,7 +3666,7 @@ def _calc_psf_from_coeff(self, sp=None, return_oversample=True, return_hdul=True
                 cunits = 'pixels' if ('sci' in coord_frame) or ('det' in coord_frame) else 'arcsec'
                 hdr['XVAL']     = (xvals[ii], f'[{cunits}] Input X coordinate')
                 hdr['YVAL']     = (yvals[ii], f'[{cunits}] Input Y coordinate')
-                hdr['CFRAME']   = (coord_frame, 'Specified coordinate frame')
+                hdr['CFRAME']   = (coord_frame_input, 'Specified coordinate frame')
                 hdr['WFEDRIFT'] = (wfe_drift, '[nm] WFE drift amplitude')
                 hdul.append(fits.ImageHDU(data=psf, header=hdr))
             # Append wavelength solution
@@ -3687,7 +3697,7 @@ def _calc_psf_from_coeff(self, sp=None, return_oversample=True, return_hdul=True
                 cunits = 'pixels' if ('sci' in coord_frame) or ('det' in coord_frame) else 'arcsec'
                 hdr['XVAL']   = (coord_vals[0], f'[{cunits}] Input X coordinate')
                 hdr['YVAL']   = (coord_vals[1], f'[{cunits}] Input Y coordinate')
-                hdr['CFRAME'] = (coord_frame, 'Specified coordinate frame')
+                hdr['CFRAME'] = (coord_frame_input, 'Specified coordinate frame')
             else:
                 cunits = 'pixels'
                 hdr['XVAL']   = (hdr['DET_X'], f'[{cunits}] Input X coordinate')
@@ -3820,7 +3830,7 @@ def _coeff_mod_wfe_drift(self, wfe_drift, key='wfe_drift'):
     return cf_mod
 
 
-def _coeff_mod_wfe_field(self, coord_vals, coord_frame):
+def _coeff_mod_wfe_field(self, coord_vals, coord_frame, siaf_ap=None):
     """
     Modify PSF polynomial coefficients as a function of V2/V3 position.
     """
@@ -3848,9 +3858,21 @@ def _coeff_mod_wfe_field(self, coord_vals, coord_frame):
         # _log.warning("`calc_psf_from_coeff` will continue with default PSF.")
         cf_mod = 0
     else:
-        # Determine V2/V3 coordinates
+        si_field_apname = self._psf_coeff_mod.get('si_field_apname')
+        siaf_ap_field = self.siaf[si_field_apname]
+
+        # Assume cframe corresponds to siaf_ap input
+        siaf_ap = siaf_ap_field if siaf_ap is None else siaf_ap
         cframe = coord_frame.lower()
-        if cframe=='tel':
+
+        # Determine V2/V3 coordinates
+        # Convert to common 'tel' coordinates
+        if (siaf_ap.AperName != siaf_ap_field.AperName):
+            x = np.array(coord_vals[0])
+            y = np.array(coord_vals[1])
+            v2, v3 = siaf_ap.convert(x,y, cframe, 'tel')
+            v2, v3 = (v2/60., v3/60.) # convert to arcmin
+        elif cframe=='tel':
             v2, v3 = coord_vals
             v2, v3 = (v2/60., v3/60.) # convert to arcmin
         elif cframe in ['det', 'sci', 'idl']:
@@ -3881,7 +3903,7 @@ def _coeff_mod_wfe_field(self, coord_vals, coord_frame):
 
     return cf_mod, nfield
 
-def _coeff_mod_wfe_mask(self, coord_vals, coord_frame):
+def _coeff_mod_wfe_mask(self, coord_vals, coord_frame, siaf_ap=None):
     """
     Modify PSF polynomial coefficients as a function of V2/V3 position.
 
@@ -3906,8 +3928,6 @@ def _coeff_mod_wfe_mask(self, coord_vals, coord_frame):
     psf_coeff     = self.psf_coeff
 
     cf_fit = self._psf_coeff_mod.get('si_mask', None) 
-    apname = self.aperturename # self._psf_coeff_mod.get('si_mask_apname', None)
-    siaf_ap = self.siaf[apname] if apname is not None else None
 
     # Coord values are set, but not coefficients supplied
     if (coord_vals is not None) and (cf_fit is None):
@@ -3930,10 +3950,20 @@ def _coeff_mod_wfe_mask(self, coord_vals, coord_frame):
             # xsci = siaf_ap.XSciRef + bar_offset_pix
             # ysci = siaf_ap.YSciRef
     elif (coord_vals is not None):
-        # Determine sci coordinates
+        si_mask_apname = self._psf_coeff_mod.get('si_mask_apname')
+        siaf_ap_mask = self.siaf[si_mask_apname]
+
+        # Assume cframe corresponds to siaf_ap input
+        siaf_ap = siaf_ap_mask if siaf_ap is None else siaf_ap
         cframe = coord_frame.lower()
-        
-        if cframe=='idl':
+
+        # Convert to common 'tel' coordinates
+        if (siaf_ap.AperName != siaf_ap_mask.AperName):
+            x = np.array(coord_vals[0])
+            y = np.array(coord_vals[1])
+            xtel, ytel = siaf_ap.convert(x,y, cframe, 'tel')
+            xidl, yidl = siaf_ap_mask.convert(xtel, ytel, 'tel', 'idl')
+        elif cframe=='idl':
             xidl, yidl = coord_vals
         elif cframe in ['det', 'tel', 'sci']:
             x = np.array(coord_vals[0])
@@ -3942,16 +3972,6 @@ def _coeff_mod_wfe_mask(self, coord_vals, coord_frame):
         else:
             _log.warning("coord_frame setting '{}' not recognized.".format(coord_frame))
             _log.warning("`calc_psf_from_coeff` will continue with default PSF.")
-
-        # if cframe=='sci':
-        #     xsci, ysci = coord_vals  # pixels
-        # elif cframe in ['det', 'tel', 'idl']:
-        #     x = np.array(coord_vals[0])
-        #     y = np.array(coord_vals[1])
-        #     xsci, ysci = siaf_ap.convert(x,y, cframe, 'sci')
-        # else:
-        #     _log.warning("coord_frame setting '{}' not recognized.".format(coord_frame))
-        #     _log.warning("`calc_psf_from_coeff` will continue with default PSF.")
 
     # PSF Modifications assuming we successfully found (xsci,ysci)
     # print(xidl, yidl)
@@ -3962,18 +3982,17 @@ def _coeff_mod_wfe_mask(self, coord_vals, coord_frame):
         field_rot = 0 if self._rotation is None else self._rotation
 
         # Convert to mask shifts (arcsec)
-        # xoff_asec = (xsci - siaf_ap.XSciRef) * self.pixelscale #siaf_ap.XSciScale  # asec offset from reference
-        # yoff_asec = (ysci - siaf_ap.YSciRef) * self.pixelscale #siaf_ap.YSciScale  # asec offset from reference
         xoff_asec, yoff_asec = (xidl, yidl)
-        xoff, yoff = xy_rot(-1*xoff_asec, -1*yoff_asec, field_rot)
+        xoff_cf, yoff_cf = xy_rot(-1*xoff_asec, -1*yoff_asec, field_rot)
+
 
         if (self.name=='NIRCam') and (np.any(np.abs(xoff_asec)>12) or np.any(np.abs(yoff_asec)>12)):
             _log.warn("Some values outside mask FoV (beyond 12 asec offset)!")
             
-        # print(xoff, yoff)
+        # print(xoff_asec, yoff_asec)
         xgrid  = self._psf_coeff_mod['si_mask_xgrid']  # arcsec
         ygrid  = self._psf_coeff_mod['si_mask_ygrid']  # arcsec
-        cf_mod = field_coeff_func(xgrid, ygrid, cf_fit, xoff, yoff)
+        cf_mod = field_coeff_func(xgrid, ygrid, cf_fit, xoff_cf, yoff_cf)
 
         # Pad cf_mod array with 0s if undersized
         psf_cf_dim = len(psf_coeff.shape)
@@ -3986,7 +4005,10 @@ def _coeff_mod_wfe_mask(self, coord_vals, coord_frame):
 
 
 def coron_grid(self, npsf_per_axis, xoff_vals=None, yoff_vals=None):
-    """Get grid points based on coronagraphic obseervation"""
+    """Get grid points based on coronagraphic obseervation
+    
+    Returns sci pixels values around mask center.
+    """
     
     def log_grid(nvals, vmax=10):
         """Log spacing in arcsec relative to mask center"""
@@ -4000,21 +4022,21 @@ def coron_grid(self, npsf_per_axis, xoff_vals=None, yoff_vals=None):
         return np.linspace(vmin, vmax, nvals)
 
     # Observation aperture
-    siaf_ap = self.siaf_ap
+    siaf_ap = self.siaf[self.aperturename]
     
     if self.name.lower()=='nircam':
-        nx_pix = 320 if self.channel.lower()=='long' else 640
+        nx_pix = 300 if self.channel.lower()=='long' else 600
         ny_pix = nx_pix
     else:
-        xvert, yvert = siaf_ap.closed_polygon_points('sci', rederive=False)
+        xvert, yvert = siaf_ap.corners('sci', rederive=False)
         xsci_min, xsci_max = int(np.min(xvert)), int(np.max(xvert))
         ysci_min, ysci_max = int(np.min(yvert)), int(np.max(yvert))
 
         nx_pix = int(xsci_max - xsci_min)
         ny_pix = int(ysci_max - ysci_min)
 
-    xoff_min, xoff_max = siaf_ap.XSciScale * np.array([-1,1]) * nx_pix / 2
-    yoff_min, yoff_max = siaf_ap.YSciScale * np.array([-1,1]) * ny_pix / 2
+    xoff_min, xoff_max = self.pixelscale * np.array([-1,1]) * nx_pix / 2
+    yoff_min, yoff_max = self.pixelscale * np.array([-1,1]) * ny_pix / 2
         
     if np.size(npsf_per_axis)==1:
         xpsf = ypsf = npsf_per_axis
@@ -4022,24 +4044,30 @@ def coron_grid(self, npsf_per_axis, xoff_vals=None, yoff_vals=None):
         xpsf, ypsf = npsf_per_axis
 
     field_rot = 0 if self._rotation is None else self._rotation
-    xlog_spacing = False if self.image_mask[-2]=='WB' else True
+    xlog_spacing = False if self.image_mask[-2:]=='WB' else True
     ylog_spacing = True 
     
     if xoff_vals is None:
         xmax = np.abs([xoff_min,xoff_max]).max()
         xoff = log_grid(xpsf, xmax) if xlog_spacing else lin_grid(xpsf, -xmax, xmax)
+    else:
+        xoff = xoff_vals
     if yoff_vals is None:
         ymax = np.abs([yoff_min,yoff_max]).max()
         yoff = log_grid(ypsf, ymax) if ylog_spacing else lin_grid(ypsf, -ymax, ymax)
+    else:
+        yoff = yoff_vals
 
     # Mask Offset grid positions in arcsec
     xgrid_off, ygrid_off = np.meshgrid(xoff, yoff)
     xgrid_off, ygrid_off = xgrid_off.flatten(), ygrid_off.flatten()
 
-    # Science positions in detector pixels
-    xoff_sci_asec, yoff_sci_asec = xy_rot(-1*xgrid_off, -1*ygrid_off, -1*field_rot)
-    xsci = xoff_sci_asec / siaf_ap.XSciScale + siaf_ap.XSciRef
-    ysci = yoff_sci_asec / siaf_ap.YSciScale + siaf_ap.YSciRef
+    # Offsets relative to center of mask
+    xoff_asec, yoff_asec = xy_rot(-1*xgrid_off, -1*ygrid_off, -1*field_rot)
+    xtel, ytel = siaf_ap.convert(xoff_asec, yoff_asec, 'idl', 'tel')
+
+    # Convert from aperture used to create mask into sci pixels for observe aperture
+    xsci, ysci = self.siaf_ap.convert(xtel, ytel, 'tel', 'sci')
 
     return xsci, ysci
 
@@ -4075,11 +4103,11 @@ def _calc_psfs_grid(self, sp=None, wfe_drift=0, osamp=1, npsf_per_full_fov=15,
         coronagrahic field of view.
     xsci_vals: None or ndarray
         Option to pass a custom grid values along x-axis in 'sci' coords.
-        If coronagraph, this instead corresponds to coronagraphic mask axis, 
+        If coronagraph, this instead corresponds to coronagraphic mask axis in arcsec, 
         which has a slight rotation relative to detector axis in MIRI.
     ysci_vals: None or ndarray
         Option to pass a custom grid values along y-axis in 'sci' coords.
-        If coronagraph, this instead corresponds to coronagraphic mask axis, 
+        If coronagraph, this instead corresponds to coronagraphic mask axis in arcsec, 
         which has a slight rotation relative to detector axis in MIRI.
     return_coords : None or str
         Option to also return coordinate values in desired frame 
@@ -4132,8 +4160,9 @@ def _calc_psfs_grid(self, sp=None, wfe_drift=0, osamp=1, npsf_per_full_fov=15,
         xsci_psf = xsci_psf.flatten()
         ysci_psf = ysci_psf.flatten()
 
-    # Convert everything to tel for good measure (shouldn't matter, though)
+    # Convert everything to tel for good measure to store in header
     xtel_psf, ytel_psf = siaf_ap_obs.convert(xsci_psf, ysci_psf, 'sci', 'tel')
+
     if use_coeff:
         hdul_psfs = self.calc_psf_from_coeff(sp=sp, coord_vals=(xtel_psf, ytel_psf), coord_frame='tel', 
                                              wfe_drift=wfe_drift, return_oversample=True, **kwargs)
@@ -4176,7 +4205,7 @@ def _calc_psfs_sgd(self, xoff_asec, yoff_asec, use_coeff=True, return_oversample
 
     if use_coeff:
         result = self.calc_psf_from_coeff(coord_frame='idl', coord_vals=(xoff_asec,yoff_asec), 
-                                          return_oversample=return_oversample, **kwargs)
+                                          return_oversample=return_oversample, siaf_ap=self.siaf_ap, **kwargs)
     else:
         log_prev = conf.logging_level
         setup_logging('WARN', verbose=False)
@@ -4205,154 +4234,15 @@ def _calc_psfs_sgd(self, xoff_asec, yoff_asec, use_coeff=True, return_oversample
 
     return result
 
-def _nrc_coron_psf_sums(self, coord_vals, coord_frame, return_max=False):
-    """
-    Function to analytically determine the sum and max value 
-    of a NIRCam off-axis coronagraphic PSF while partially
-    occulted by the coronagrpahic mask.
-    """
-
-    # Ensure correct scaling for off-axis PSFs
-    if not self.is_coron:
-        return None
-
-    apname = self._psf_coeff_mod['si_mask_apname']
-    siaf_ap = self.siaf_ap if apname is None else self.siaf[apname]
-    cx, cy = np.asarray(coord_vals)
-    if coord_frame=='idl':
-        cx_idl, cy_idl = (cx, cy)
-    else:
-        cx_idl, cy_idl = siaf_ap.convert(cx, cy, coord_frame, 'idl')
-
-    # Get mask transmission
-    trans = nrc_mask_trans(self.image_mask, cx_idl, cy_idl)
-    # Linear combination of min/max to determine PSF sum
-    # Get a and b values for each position
-    avals = trans**2
-    bvals = 1 - avals
-
-    # print(avals, bvals)
-
-    # Store PSF sums for later retrieval
-    try:
-        psf_sums_dict = self._psf_sums
-    except AttributeError:
-        psf_sums_dict = {}
-        self._psf_sums = psf_sums_dict
-
-    # Offset PSF sum
-    psf_off_sum = psf_sums_dict.get('psf_off', None)
-    psf_off_max = psf_sums_dict.get('psf_off_max', None)
-    if (psf_off_sum is None) or (psf_off_max is None):
-        psf = _calc_psf_from_coeff(self, return_oversample=False, return_hdul=False, 
-                                    coord_vals=(10,10), coord_frame='idl')
-        psf_off_sum = psf.sum()
-        psf_off_max = np.max(pad_or_cut_to_size(psf,10))
-        psf_sums_dict['psf_off'] = psf_off_sum
-        psf_sums_dict['psf_off_max'] = psf_off_max
-
-    # Central PSF sum(s)
-    if self.image_mask[-1] == 'R':
-        psf_cen_sum = psf_sums_dict.get('psf_cen', None)
-        psf_cen_max = psf_sums_dict.get('psf_cen_max', None)
-        if (psf_cen_sum is None) or (psf_cen_max is None):
-            psf = _calc_psf_from_coeff(self, return_oversample=False, return_hdul=False)
-            psf_cen_sum = psf.sum()
-            psf_sums_dict['psf_cen'] = psf_cen_sum
-            psf_sums_dict['psf_cen_max'] = np.max(pad_or_cut_to_size(psf,10))
-    elif self.image_mask[-1] == 'B':
-        # Build a list of bar offsets to interpolate scale factors
-        xvals = psf_sums_dict.get('psf_cen_xvals', None)
-        psf_cen_sum_arr = psf_sums_dict.get('psf_cen_sum_arr', None)
-        psf_cen_max_arr = psf_sums_dict.get('psf_cen_max_arr', None)
-
-        if (psf_cen_sum_arr is None) or (psf_cen_max_arr is None):
-            xvals = np.linspace(-8,8,9)
-            psf_sums_dict['psf_cen_xvals'] = xvals
-
-            psf_cen_sum_arr = []
-            psf_cen_max_arr = []
-            for xv in xvals:
-                psf= _calc_psf_from_coeff(self, return_oversample=False, return_hdul=False, 
-                                          coord_vals=(xv,0), coord_frame='idl')
-                psf_cen_sum_arr.append(psf.sum())
-                psf_cen_max_arr.append(np.max(pad_or_cut_to_size(psf,10)))
-            psf_cen_sum_arr = np.array(psf_cen_sum_arr)
-            psf_cen_max_arr = np.array(psf_cen_max_arr)
-            psf_sums_dict['psf_cen_sum_arr'] = psf_cen_sum_arr
-            psf_sums_dict['psf_cen_max_arr'] = psf_cen_max_arr
-
-        # Interpolation function
-        finterp = interp1d(xvals, psf_cen_sum_arr, kind='linear', fill_value='extrapolate')
-        psf_cen_sum = finterp(cx_idl)
-        finterp = interp1d(xvals, psf_cen_max_arr, kind='linear', fill_value='extrapolate')
-        psf_cen_max = finterp(cx_idl)
-    else:
-        _log.warn(f"Image mask not recognized: {self.image_mask}")
-        return None
-        
-    if return_max:
-        psf_max = avals * psf_off_max + bvals * psf_cen_max
-        return psf_max
-    else:
-        psf_sum = avals * psf_off_sum + bvals * psf_cen_sum
-        return psf_sum
-
-
-def _nrc_coron_rescale(self, res, coord_vals, coord_frame, sp=None):
-    """
-    Function for better scaling of NIRCam coronagraphic output for sources
-    that overlap the image masks. 
-    """
-
-    if coord_vals is None:
-        return res
-
-    nfield = np.size(coord_vals[0])
-    psf_sum = _nrc_coron_psf_sums(self, coord_vals, coord_frame)
-    if psf_sum is None:
-        return res
-
-    # Scale by spec obs countrate
-    if (sp is not None) and (not isinstance(sp, list)):
-        nspec = 1
-        obs = S.Observation(sp, self.bandpass, binset=self.bandpass.wave)
-        sp_counts = obs.countrate()
-    elif (sp is not None) and (isinstance(sp, list)):
-        nspec = len(sp)
-        if nspec==1:
-            obs = S.Observation(sp[0], self.bandpass, binset=self.bandpass.wave)
-            sp_counts = obs.countrate()
-        else:
-            sp_counts = []
-            for i, sp_norm in enumerate(sp):
-                obs = S.Observation(sp_norm, self.bandpass, binset=self.bandpass.wave)
-                sp_counts.append(obs.countrate())
-            sp_counts = np.array(sp_counts)
-    else:
-        nspec = 0
-        sp_counts = 1
-
-    if nspec>1 and nspec!=nfield:
-        _log.warn("Number of spectra should be 1 or equal number of field points")
-
-    # Scale by count rate
-    psf_sum *= sp_counts
-
-    # Re-scale PSF by total sums
-    if isinstance(res, fits.HDUList):
-        for i, hdu in enumerate(res):
-            hdu.data *= (psf_sum[i] / hdu.data.sum())
-    elif nfield==1:
-        res *= (psf_sum[0] / res.sum())
-    else:
-        for i, data in enumerate(res):
-            data *= (psf_sum[i] / data.sum())
-
-    return res
-
-
 def nrc_mask_trans(image_mask, x, y):
+    """ Compute the amplitude transmission appropriate for a BLC for some given pixel spacing
+    corresponding to the supplied Wavefront.
+
+    Based on the Krist et al. SPIE paper on NIRCam coronagraph design
+
+    *Note* : To get the actual transmission, these values should be squared.
+
+    """
 
     import scipy
 
@@ -4412,4 +4302,190 @@ def nrc_mask_trans(image_mask, x, y):
         transmission = (1 - (np.sin(sigmar) / sigmar) ** 2)
         transmission[y == 0] = 0 
 
+        transmission[np.abs(x) > 10] = 1.0
+
+    # Amplitude transmission (square to get intensity transmission; ie., photon throughput)
     return transmission
+
+
+def _transmission_map(self, coord_vals, coord_frame, siaf_ap=None):
+
+    if not self.is_coron:
+        return None
+
+    apname_mask = self._psf_coeff_mod['si_mask_apname']
+    if apname_mask is None:
+        apname_mask = self.aperturename
+    siaf_ap_mask = self.siaf[apname_mask]
+
+    # Assume cframe corresponds to siaf_ap input
+    siaf_ap = siaf_ap_mask if siaf_ap is None else siaf_ap
+    coord_frame = coord_frame.lower()
+
+    # Convert to common 'tel' coordinates
+    cx, cy = np.asarray(coord_vals)
+    if (siaf_ap.AperName != siaf_ap_mask.AperName):
+        cx_tel, cy_tel = siaf_ap.convert(cx, cy, coord_frame, 'tel')
+        cx_idl, cy_idl = siaf_ap_mask.convert(cx_tel, cy_tel, 'tel', 'idl')
+    elif coord_frame=='idl':
+        cx_idl, cy_idl = (cx, cy)
+    elif coord_frame in ['det', 'tel', 'sci']:
+        cx_idl, cy_idl = siaf_ap_mask.convert(cx, cy, coord_frame, 'idl')
+
+    # Get mask transmission
+    trans = nrc_mask_trans(self.image_mask, cx_idl, cy_idl)
+
+    return trans, cx_idl, cy_idl
+
+def _nrc_coron_psf_sums(self, coord_vals, coord_frame, siaf_ap=None, return_max=False, trans=None):
+    """
+    Function to analytically determine the sum and max value 
+    of a NIRCam off-axis coronagraphic PSF while partially
+    occulted by the coronagrpahic mask.
+
+    Keyword Args
+    ============
+    return_max : bool
+        By default, this function returns the PSF sums. Set this keyword
+        to True in order to return the PSF max values instead.
+    trans : float, ndarray, or None
+        Transmission is usually sampled from mask transmission function
+        corresponding to input coordinates. Instead, supply the transmission
+        value directly. 
+    """
+
+    # Ensure correct scaling for off-axis PSFs
+    if not self.is_coron:
+        return None
+
+    # Get mask transmission
+    t_temp, cx_idl, cy_idl = _transmission_map(self, coord_vals, coord_frame, siaf_ap=siaf_ap)
+    if trans is None:
+        trans = t_temp**2
+
+    # Linear combination of min/max to determine PSF sum
+    # Get a and b values for each position
+    avals = trans
+    bvals = 1 - avals
+
+    # print(avals, bvals)
+
+    # Store PSF sums for later retrieval
+    try:
+        psf_sums_dict = self._psf_sums
+    except AttributeError:
+        psf_sums_dict = {}
+        self._psf_sums = psf_sums_dict
+
+    # Offset PSF sum
+    psf_off_sum = psf_sums_dict.get('psf_off', None)
+    psf_off_max = psf_sums_dict.get('psf_off_max', None)
+    if (psf_off_sum is None) or (psf_off_max is None):
+        psf = _calc_psf_from_coeff(self, return_oversample=False, return_hdul=False, 
+                                   coord_vals=(10,10), coord_frame='idl')
+        psf_off_sum = psf.sum()
+        psf_off_max = np.max(pad_or_cut_to_size(psf,10))
+        psf_sums_dict['psf_off'] = psf_off_sum
+        psf_sums_dict['psf_off_max'] = psf_off_max
+
+    # Central PSF sum(s)
+    if self.image_mask[-1] == 'R':
+        psf_cen_sum = psf_sums_dict.get('psf_cen', None)
+        psf_cen_max = psf_sums_dict.get('psf_cen_max', None)
+        if (psf_cen_sum is None) or (psf_cen_max is None):
+            psf = _calc_psf_from_coeff(self, return_oversample=False, return_hdul=False)
+            psf_cen_sum = psf.sum()
+            psf_sums_dict['psf_cen'] = psf_cen_sum
+            psf_sums_dict['psf_cen_max'] = np.max(pad_or_cut_to_size(psf,10))
+    elif self.image_mask[-1] == 'B':
+        # Build a list of bar offsets to interpolate scale factors
+        xvals = psf_sums_dict.get('psf_cen_xvals', None)
+        psf_cen_sum_arr = psf_sums_dict.get('psf_cen_sum_arr', None)
+        psf_cen_max_arr = psf_sums_dict.get('psf_cen_max_arr', None)
+
+        if (psf_cen_sum_arr is None) or (psf_cen_max_arr is None):
+            xvals = np.linspace(-8,8,9)
+            psf_sums_dict['psf_cen_xvals'] = xvals
+
+            psf_cen_sum_arr = []
+            psf_cen_max_arr = []
+            for xv in xvals:
+                psf= _calc_psf_from_coeff(self, return_oversample=False, return_hdul=False, 
+                                          coord_vals=(xv,0), coord_frame='idl')
+                psf_cen_sum_arr.append(psf.sum())
+                psf_cen_max_arr.append(np.max(pad_or_cut_to_size(psf,10)))
+            psf_cen_sum_arr = np.array(psf_cen_sum_arr)
+            psf_cen_max_arr = np.array(psf_cen_max_arr)
+            psf_sums_dict['psf_cen_sum_arr'] = psf_cen_sum_arr
+            psf_sums_dict['psf_cen_max_arr'] = psf_cen_max_arr
+
+        # Interpolation function
+        finterp = interp1d(xvals, psf_cen_sum_arr, kind='linear', fill_value='extrapolate')
+        psf_cen_sum = finterp(cx_idl)
+        finterp = interp1d(xvals, psf_cen_max_arr, kind='linear', fill_value='extrapolate')
+        psf_cen_max = finterp(cx_idl)
+    else:
+        _log.warn(f"Image mask not recognized: {self.image_mask}")
+        return None
+        
+    if return_max:
+        psf_max = avals * psf_off_max + bvals * psf_cen_max
+        return psf_max
+    else:
+        psf_sum = avals * psf_off_sum + bvals * psf_cen_sum
+        return psf_sum
+
+
+def _nrc_coron_rescale(self, res, coord_vals, coord_frame, siaf_ap=None, sp=None):
+    """
+    Function for better scaling of NIRCam coronagraphic output for sources
+    that overlap the image masks. 
+    """
+
+    if coord_vals is None:
+        return res
+
+    nfield = np.size(coord_vals[0])
+    psf_sum = _nrc_coron_psf_sums(self, coord_vals, coord_frame, siaf_ap=siaf_ap)
+    if psf_sum is None:
+        return res
+
+    # Scale by countrate of observed spectrum
+    if (sp is not None) and (not isinstance(sp, list)):
+        nspec = 1
+        obs = S.Observation(sp, self.bandpass, binset=self.bandpass.wave)
+        sp_counts = obs.countrate()
+    elif (sp is not None) and (isinstance(sp, list)):
+        nspec = len(sp)
+        if nspec==1:
+            obs = S.Observation(sp[0], self.bandpass, binset=self.bandpass.wave)
+            sp_counts = obs.countrate()
+        else:
+            sp_counts = []
+            for i, sp_norm in enumerate(sp):
+                obs = S.Observation(sp_norm, self.bandpass, binset=self.bandpass.wave)
+                sp_counts.append(obs.countrate())
+            sp_counts = np.array(sp_counts)
+    else:
+        nspec = 0
+        sp_counts = 1
+
+    if nspec>1 and nspec!=nfield:
+        _log.warn("Number of spectra should be 1 or equal number of field points")
+
+    # Scale by count rate
+    psf_sum *= sp_counts
+
+    # Re-scale PSF by total sums
+    if isinstance(res, fits.HDUList):
+        for i, hdu in enumerate(res):
+            hdu.data *= (psf_sum[i] / hdu.data.sum())
+    elif nfield==1:
+        res *= (psf_sum[0] / res.sum())
+    else:
+        for i, data in enumerate(res):
+            data *= (psf_sum[i] / data.sum())
+
+    return res
+
+
