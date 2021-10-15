@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import os
 
 import scipy
+# from scipy.sparse.construct import random
 import scipy.stats
 from scipy.stats import arcsine
 from scipy.interpolate import interp1d
@@ -417,7 +418,7 @@ class OTE_WFE_Drift_Model(OTE_Linear_Model_WSS):
     def gen_delta_opds(self, delta_time, start_angle=-5, end_angle=45, 
                        do_thermal=True, do_frill=True, do_iec=True, 
                        case='BOL', return_wfe_amps=True, return_dopd_fin=True,
-                       **kwargs):
+                       random_seed=None, **kwargs):
         
         """Create series of delta OPDs
         
@@ -452,6 +453,8 @@ class OTE_WFE_Drift_Model(OTE_Linear_Model_WSS):
         return_dopd_fin : bool
             Option to exclude calculating final delta OPD in case we only
             want the final RMS WFE dictionary.
+        random_seed : int
+            Random seed to pass to IEC generation.
         """
         
         if (not return_wfe_amps) and (not return_dopd_fin):
@@ -482,7 +485,7 @@ class OTE_WFE_Drift_Model(OTE_Linear_Model_WSS):
         
         # Random IEC amplitudes
         if do_iec:
-            amp_iec = self.gen_iec_series(delta_time, **kwargs)
+            amp_iec = self.gen_iec_series(delta_time, random_seed=random_seed, **kwargs)
             if nz>1:
                 amp_iec[0] = 0
         else:
@@ -588,7 +591,7 @@ class OTE_WFE_Drift_Model(OTE_Linear_Model_WSS):
         kwargs['do_thermal'] = do_thermal
         kwargs['do_frill'] = do_frill
         kwargs['do_iec'] = False
-        for i in tqdm(islew):
+        for i in tqdm(islew, desc='Slews'):
             ang1 = slew_angles[0] if i==0 else ang2
             ang2 = slew_angles[i]
 
@@ -622,7 +625,7 @@ class OTE_WFE_Drift_Model(OTE_Linear_Model_WSS):
             kwargs['do_thermal'] = False
             kwargs['do_frill'] = False
             kwargs['do_iec'] = True
-            res = self.gen_delta_opds(delta_time, **kwargs)
+            res = self.gen_delta_opds(delta_time-delta_time[0], **kwargs)
             
             if return_wfe_amps:
                 dopds, wfe_dict = res
