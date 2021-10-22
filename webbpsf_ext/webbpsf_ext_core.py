@@ -75,11 +75,6 @@ class NIRCam_ext(webbpsf_NIRCam):
     oversample : int
         Factor to oversample during WebbPSF calculations.
         Default 2 for coronagraphy and 4 otherwise.
-    autogen : bool
-        Option to automatically generate all PSF coefficients upon
-        initialization. Otherwise, these need to be generated manually
-        with `gen_psf_coeff`, gen_wfedrift_coeff`, `gen_wfefield_coeff`,
-        and `gen_wfemask_coeff`. Default: False.
     """
 
     def __init__(self, filter=None, pupil_mask=None, image_mask=None, 
@@ -91,7 +86,7 @@ class NIRCam_ext(webbpsf_NIRCam):
         _init_inst(self, filter=filter, pupil_mask=pupil_mask, image_mask=image_mask,
                    fov_pix=fov_pix, oversample=oversample, **kwargs)
 
-        # No jitter for coronagraphy
+        # No jitter for coronagraphy by default
         # Otherwise, assume 5 mas / axis
         self.options['jitter'] = None if self.is_coron else 'gaussian'
         self.options['jitter_sigma'] = 0.005
@@ -864,6 +859,30 @@ class NIRCam_ext(webbpsf_NIRCam):
 # MIRI Subclass
 class MIRI_ext(webbpsf_MIRI):
     
+    """ MIRI instrument PSF coefficients
+    
+    Subclass of WebbPSF's MIRI class for generating polynomial coefficients
+    to cache and quickly generate PSFs for arbitrary spectral types as well
+    as WFE variations due to field-dependent OPDs and telescope thermal drifts.
+
+    Parameters
+    ==========
+    filter : str
+        Name of input filter.
+    pupil_mask : str, None
+        Pupil elements such as grisms or lyot stops (default: None).
+    image_mask : str, None
+        Specify which coronagraphic occulter (default: None).
+    fov_pix : int
+        Size of the PSF FoV in pixels (real SW or LW pixels).
+        The defaults depend on the type of observation.
+        Odd number place the PSF on the center of the pixel,
+        whereas an even number centers it on the "crosshairs."
+    oversample : int
+        Factor to oversample during WebbPSF calculations.
+        Default 2 for coronagraphy and 4 otherwise.
+    """
+
     def __init__(self, filter=None, pupil_mask=None, image_mask=None, 
                  fov_pix=None, oversample=None, **kwargs):
         
@@ -871,7 +890,7 @@ class MIRI_ext(webbpsf_MIRI):
         _init_inst(self, filter=filter, pupil_mask=pupil_mask, image_mask=image_mask,
                    fov_pix=fov_pix, oversample=oversample, **kwargs)
 
-        # No jitter for coronagraphy
+        # No jitter for coronagraphy by default
         # Otherwise assume 5 mas / axis
         self.options['jitter'] = None if self.is_coron else 'gaussian'
         self.options['jitter_sigma'] = 0.005
