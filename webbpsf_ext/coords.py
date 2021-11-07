@@ -638,11 +638,13 @@ class jwst_point(object):
         depending on `use_sgd` attribute (default: True).
     rand_seed : None or int
         Random seed to use for generating repeatable random offsets.
+    rand_seed_base : None or int
+        Use a separate random seed to produce telescope slew offset.
     """
     
     def __init__(self, ap_obs_name, ap_ref_name, ra_ref, dec_ref, pos_ang=0, 
         base_offset=(0,0), dith_offsets=[(0,0)], exp_nums=None,
-        base_std=None, dith_std=None, rand_seed=None):
+        base_std=None, dith_std=None, rand_seed=None, rand_seed_base=None):
 
         # SIAF objects configuration
         # Reference instrument and aperture
@@ -686,7 +688,7 @@ class jwst_point(object):
         
         # Generate self.position_offsets_act, which houses all position offsets
         # for calculating positions of objects
-        self.gen_random_offsets(rand_seed=rand_seed)
+        self.gen_random_offsets(rand_seed=rand_seed, rand_seed_base=rand_seed_base)
 
     @property
     def ndith(self):
@@ -891,7 +893,7 @@ class jwst_point(object):
         else:
             return out_all
         
-    def gen_random_offsets(self, rand_seed=None):
+    def gen_random_offsets(self, rand_seed=None, rand_seed_base=None, first_dith_zero=True):
         """Generate randomized pointing offsets for each dither position"""
         
         _log.info('Generating random pointing offsets...')
@@ -902,9 +904,10 @@ class jwst_point(object):
             rand_seed = rng.integers(0, 2**32-1)
         
         # Get initial point offset
+        rand_seed_base = rand_seed if rand_seed_base is None else rand_seed_base
         _log.info(f'Pointing uncertainty: {self.base_std:.1f} mas')
         self.base_offset_act = get_idl_offset(base_offset=self.base_offset, base_std=self.base_std,
-                                              dith_offset=(0,0), dith_std=0, rand_seed=rand_seed)
+                                              dith_offset=(0,0), dith_std=0, rand_seed=rand_seed_base)
         
         # Get dither positions, including initial location 
         offsets_actual = []
@@ -917,9 +920,9 @@ class jwst_point(object):
             # produce the same random position, which we want.
             if (i>0) and (not np.allclose([dith_xy], self.dith_offsets[i-1])):
                 rand_seed_i += 1
-
             # First position is slew, so no additional dither uncertainty
-            dith_std = 0 if (i==0) else self.dith_std
+            dith_std = 0 if (first_dith_zero and i==0) else self.dith_std
+
             _log.info(f'  Pos {i} dither uncertainty: {dith_std:.1f} mas')
             offset = get_idl_offset(base_offset=self.base_offset_act, base_std=0,
                                     dith_offset=dith_xy, dith_std=dith_std, rand_seed=rand_seed_i)
