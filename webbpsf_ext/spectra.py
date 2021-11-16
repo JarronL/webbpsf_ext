@@ -1074,7 +1074,7 @@ class planets_sb12(object):
         self._waveunits = 'um'
 
         # Distance (10 pc)
-        self._distance = 10
+        self._distance = 10.0
 
     @property
     def mdot(self):
@@ -1105,7 +1105,7 @@ class planets_sb12(object):
         return self._distance
     @distance.setter
     def distance(self, value):
-        self._flux *= (self._distance/value)**2
+        self._flux = self._flux * (self._distance/value)**2
         self._distance = value
 
     @property
