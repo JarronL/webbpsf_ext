@@ -3603,25 +3603,21 @@ def _calc_psf_from_coeff(self, sp=None, return_oversample=True, return_hdul=True
     if wfe_drift is None: 
         wfe_drift = 0
 
-    # Only pass 'off' coord frame to coronagraphic mask function
-    coord_frame_input = coord_frame
-    if coord_frame=='idl_cen':
-        coord_frame = 'idl'
-
     # Modify PSF coefficients based on field-dependence
     # Ignore if there is a focal plane mask
     # No need for SI WFE field dependence if coronagraphy, but this allows us
     # to enable `include_si_wfe` for NIRCam PSF calculation
     nfield = None
     if self.image_mask is None:
-        cf_mod, nfield = _coeff_mod_wfe_field(self, coord_vals, coord_frame)
+        cf_mod, nfield = _coeff_mod_wfe_field(self, coord_vals, coord_frame, 
+                                              siaf_ap=siaf_ap)
         psf_coeff_mod += cf_mod
     nfield = 1 if nfield is None else nfield
 
     # Modify PSF coefficients based on field-dependence with a focal plane mask
     nfield_mask = None
     if self.image_mask is not None:
-        cf_mod, nfield_mask = _coeff_mod_wfe_mask(self, coord_vals, coord_frame_input,
+        cf_mod, nfield_mask = _coeff_mod_wfe_mask(self, coord_vals, coord_frame,
                                                   siaf_ap=siaf_ap)
         psf_coeff_mod += cf_mod
     nfield = nfield if nfield_mask is None else nfield_mask
@@ -3685,7 +3681,7 @@ def _calc_psf_from_coeff(self, sp=None, return_oversample=True, return_hdul=True
                 cunits = 'pixels' if ('sci' in coord_frame) or ('det' in coord_frame) else 'arcsec'
                 hdr['XVAL']     = (xvals[ii], f'[{cunits}] Input X coordinate')
                 hdr['YVAL']     = (yvals[ii], f'[{cunits}] Input Y coordinate')
-                hdr['CFRAME']   = (coord_frame_input, 'Specified coordinate frame')
+                hdr['CFRAME']   = (coord_frame, 'Specified coordinate frame')
                 hdr['WFEDRIFT'] = (wfe_drift, '[nm] WFE drift amplitude')
                 hdul.append(fits.ImageHDU(data=psf, header=hdr))
             # Append wavelength solution
@@ -3716,7 +3712,7 @@ def _calc_psf_from_coeff(self, sp=None, return_oversample=True, return_hdul=True
                 cunits = 'pixels' if ('sci' in coord_frame) or ('det' in coord_frame) else 'arcsec'
                 hdr['XVAL']   = (coord_vals[0], f'[{cunits}] Input X coordinate')
                 hdr['YVAL']   = (coord_vals[1], f'[{cunits}] Input Y coordinate')
-                hdr['CFRAME'] = (coord_frame_input, 'Specified coordinate frame')
+                hdr['CFRAME'] = (coord_frame, 'Specified coordinate frame')
             else:
                 cunits = 'pixels'
                 hdr['XVAL']   = (hdr['DET_X'], f'[{cunits}] Input X coordinate')
