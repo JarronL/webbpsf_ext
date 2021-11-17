@@ -493,22 +493,25 @@ class OTE_WFE_Drift_Model(OTE_Linear_Model_WSS):
         
         
         # Add OPD deltas
-        delta_opd_fin = np.zeros([nz,ny,nx])
-        if do_thermal:
-            amp = np.reshape(amp_thermal, [-1,1,1])
-            delta_opd_fin += self.dopd_thermal.reshape([1,ny,nx]) * amp
-        if do_frill:
-            amp = np.reshape(amp_frill, [-1,1,1])
-            delta_opd_fin += self.dopd_frill.reshape([1,ny,nx]) * amp
-        if do_iec:
-            amp = np.reshape(amp_iec, [-1,1,1])
-            delta_opd_fin += self.dopd_iec.reshape([1,ny,nx]) * amp
-            
-        if nz==1:
-            delta_opd_fin = delta_opd_fin[0]
-            
-        # Get final RMS in nm
-        rms_tot = np.array(self.calc_rms(delta_opd_fin)) * 1e9
+        if return_dopd_fin:
+            delta_opd_fin = np.zeros([nz,ny,nx])
+            if do_thermal:
+                amp = np.reshape(amp_thermal, [-1,1,1])
+                delta_opd_fin += self.dopd_thermal.reshape([1,ny,nx]) * amp
+            if do_frill:
+                amp = np.reshape(amp_frill, [-1,1,1])
+                delta_opd_fin += self.dopd_frill.reshape([1,ny,nx]) * amp
+            if do_iec:
+                amp = np.reshape(amp_iec, [-1,1,1])
+                delta_opd_fin += self.dopd_iec.reshape([1,ny,nx]) * amp
+                
+            if nz==1:
+                delta_opd_fin = delta_opd_fin[0]
+                
+            # Get final RMS in nm
+            rms_tot = np.asarray(self.calc_rms(delta_opd_fin)) * 1e9
+        else:
+            rms_tot = np.sqrt(amp_thermal**2 + amp_frill**2 + amp_iec**2)
         
         wfe_amps = {
             'thermal': amp_thermal,
@@ -569,7 +572,8 @@ class OTE_WFE_Drift_Model(OTE_Linear_Model_WSS):
             from -0.5*amplitude to +0.5*amplitude.
         period : float
             Period in minutes of IEC oscillations. Usually 3-5 minutes.
-
+        random_seed : int
+            Random seed to pass to IEC generation.
         """
 
         if (not return_wfe_amps) and (not return_dopd_fin):
@@ -587,11 +591,12 @@ class OTE_WFE_Drift_Model(OTE_Linear_Model_WSS):
         # Build delta OPDs for each slew angle
         kwargs['case'] = case
         kwargs['return_wfe_amps'] = return_wfe_amps
-        kwargs['return_dopd_fin'] = True
+        kwargs['return_dopd_fin'] = return_dopd_fin
         kwargs['do_thermal'] = do_thermal
         kwargs['do_frill'] = do_frill
         kwargs['do_iec'] = False
-        for i in tqdm(islew, desc='Slews'):
+        iter_func = tqdm(islew, desc='Slews') if return_dopd_fin else islew
+        for i in iter_func:
             ang1 = slew_angles[0] if i==0 else ang2
             ang2 = slew_angles[i]
 
@@ -599,16 +604,20 @@ class OTE_WFE_Drift_Model(OTE_Linear_Model_WSS):
             tvals = tvals - tvals[0]
             res = self.gen_delta_opds(tvals, start_angle=ang1, end_angle=ang2, **kwargs)
 
-            if return_wfe_amps:
+            if return_wfe_amps and return_dopd_fin:
                 dopds, wfe_dict = res
-            else:
+            elif return_dopd_fin:
                 dopds = res
+            elif return_wfe_amps:
+                wfe_dict = res
                 
             # Accumulate delta OPD images
-            if i==0:
-                dopds_fin = dopds + 0.0
-            else:
-                dopds_fin[i:] += dopds
+            if return_dopd_fin:
+                if i==0:
+                    dopds_fin = dopds + 0.0
+                else:
+                    dopds_fin[i:] += dopds
+                del dopds
 
             # Add in drift amplitudes for thermal and frill components
             if return_wfe_amps:
@@ -618,8 +627,6 @@ class OTE_WFE_Drift_Model(OTE_Linear_Model_WSS):
                     for k in wfe_dict.keys():
                         wfe_dict_fin[k][i:] += wfe_dict[k]
                         
-            del dopds
-                        
         # Get IEC values
         if do_iec:
             kwargs['do_thermal'] = False
@@ -627,22 +634,30 @@ class OTE_WFE_Drift_Model(OTE_Linear_Model_WSS):
             kwargs['do_iec'] = True
             res = self.gen_delta_opds(delta_time-delta_time[0], **kwargs)
             
-            if return_wfe_amps:
+            if return_wfe_amps and return_dopd_fin:
                 dopds, wfe_dict = res
                 wfe_dict_fin['iec'] = wfe_dict['iec']
-            else:
+            elif return_dopd_fin:
                 dopds = res
-                
+            elif return_wfe_amps:
+                wfe_dict = res
+                wfe_dict_fin['iec'] = wfe_dict['iec']
+
             # Add IEC OPDs
-            dopds_fin += dopds
-            del dopds
+            if return_dopd_fin:
+                dopds_fin += dopds
+                del dopds
             
         if 'WARN' not in log_prev:
             setup_logging(log_prev, verbose=False)
 
         # Calculate RMS values on final delta OPDs
         if return_wfe_amps:
-            wfe_dict_fin['total'] = self.calc_rms(dopds_fin)*1e9
+            if return_dopd_fin:
+                rms_tot = self.calc_rms(dopds_fin)*1e9
+            else:
+                rms_tot = np.sqrt(wfe_dict_fin['thermal']**2 + wfe_dict_fin['frill']**2 + wfe_dict_fin['iec']**2)
+            wfe_dict_fin['total'] = rms_tot
 
         if return_wfe_amps and return_dopd_fin:
             return dopds_fin, wfe_dict_fin
