@@ -1285,7 +1285,7 @@ def convolve_image(hdul_sci_image, hdul_psfs, return_hdul=False,
             - XIND_REF, YIND_REF : Alternative for (XCEN, YCEN)
     hdul_psfs : HDUList
         Multi-extension FITS. Each HDU element is a different PSF for
-        some location within some field of view. Must have some pixel
+        some location within some field of view. Must have same pixel
         scale as hdul_sci_image.
 
     Keyword Args
@@ -1414,14 +1414,13 @@ def convolve_image(hdul_sci_image, hdul_psfs, return_hdul=False,
 
     # Scale to specified output sampling
     output_sampling = 1 if output_sampling is None else output_sampling
-    if output_sampling != 1:
-        scale = hdr_im['OSAMP'] / output_sampling
-        im_conv = frebin(im_conv, scale=scale)
+    scale = output_sampling / hdr_im['OSAMP']
+    im_conv = frebin(im_conv, scale=scale)
 
     if return_hdul:
         hdul = deepcopy(hdul_sci_image)
         hdul[0].data = im_conv
-        hdr_im['OSAMP'] = output_sampling
+        hdul[0].header['OSAMP'] = output_sampling
         return hdul
     else:
         return im_conv
