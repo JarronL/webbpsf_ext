@@ -639,3 +639,51 @@ def bp_wise(filter):
     bp = S.ArrayBandpass(tbl['col1']*1e4, tbl['col2'], name=name)
 
     return bp
+
+def bp_gaia(filter, release='DR2'):
+    """GAIA Bandpass
+
+    Create a bandpass class for GAIA filter to generate synthetic photometry.
+
+    Parameters
+    ==========
+    filter : str
+        Filters 'g', 'bp', or 'rp'
+    
+    """
+
+    dir = _bp_dir / 'GAIA/'
+    names = ['w_nm', 'gPb', 'gPb_Error', 'bpPb', 'bpPb_Error', 'rpPb', 'rpPb_Error']
+
+    if release.upper()=='DR2':
+        file = dir / 'GaiaDR2_RevisedPassbands.dat'
+    elif release.upper()=='EDR3':
+        file = dir / 'GaiaEDR3_Passbands.dat'
+    else:
+        raise ValueError(f"release='{release}' not recognized. Only valid releases are 'DR2' or 'EDR3'.")
+
+    if filter.lower()=='g':
+        fcol = 'gPb'
+    elif filter.lower()=='bp':
+        fcol = 'bpPb'
+    elif filter.lower()=='rp':
+        fcol = 'rpPb'
+    else:
+        raise ValueError(f"Filter '{filter}' not recognized. Either 'g', 'bp', or 'rp'.")
+
+    tbl = ascii.read(file, names=names)
+    w = tbl['w_nm'] * 10  # Convert to Angstrom
+    th = tbl[fcol]
+
+    igood = th<=1
+    w = w[igood]
+    th = th[igood]
+    th[th<0] = 0
+    th[0] = 0
+    th[-1] = 0
+
+    bp = S.ArrayBandpass(w, th, name=filter)
+
+    return bp
+
+
