@@ -2067,6 +2067,11 @@ def _calc_psf_with_shifts(self, calc_psf_func, **kwargs):
     weights /= weights.sum()
     src = {'wavelengths': wave_um*1e-6, 'weights': weights}
 
+    # NIRCam grism pupils aren't recognized by WebbPSF
+    if (self.name.upper()=='NIRCAM') and self.is_grism:
+        grism_temp = self.pupil_mask
+        self.pupil_mask = None
+
     # Perform PSF calculation
     kw_list = [
         'nlambda', 'monochromatic',
@@ -2080,6 +2085,10 @@ def _calc_psf_with_shifts(self, calc_psf_func, **kwargs):
     for kw in kw_list:
         if kw in kwargs.keys(): kwargs2[kw] = kwargs[kw]
     hdul = calc_psf_func(source=src, **kwargs2)
+
+    # Return grism
+    if (self.name.upper()=='NIRCAM') and self.is_grism:
+        self.pupil_mask = grism_temp
 
     # Specify image oversampling relative to detector sampling
     for hdu in hdul:
@@ -2109,142 +2118,142 @@ def _calc_psf_with_shifts(self, calc_psf_func, **kwargs):
     return hdul
 
 def _calc_psf_webbpsf(self, calc_psf_func, add_distortion=None, fov_pixels=None, oversample=None, 
-        wfe_drift=None, coord_vals=None, coord_frame='tel', **kwargs):
+    wfe_drift=None, coord_vals=None, coord_frame='tel', **kwargs):
 
-        """ Compute a WebbPSF PSF
+    """ Compute a WebbPSF PSF
 
-        Slight modification of inherent WebbPSF `calc_psf` function. If add_distortion, fov_pixels,
-        and oversample are not specified, then we automatically use the associated attributes.
-        """
+    Slight modification of inherent WebbPSF `calc_psf` function. If add_distortion, fov_pixels,
+    and oversample are not specified, then we automatically use the associated attributes.
+    """
 
-        # Automatically use already defined properties
-        add_distortion = self.include_distortions if add_distortion is None else add_distortion
-        fov_pixels = self.fov_pix if fov_pixels is None else fov_pixels
+    # Automatically use already defined properties
+    add_distortion = self.include_distortions if add_distortion is None else add_distortion
+    fov_pixels = self.fov_pix if fov_pixels is None else fov_pixels
 
-        kwargs['add_distortion'] = add_distortion
-        kwargs['fov_pixels'] = fov_pixels
+    kwargs['add_distortion'] = add_distortion
+    kwargs['fov_pixels'] = fov_pixels
 
-        # If there are distortion, compute some fov_pixels, which will get cropped later
-        npix_extra = 5
-        if add_distortion:
-            kwargs['fov_pixels'] += 2 * npix_extra
+    # If there are distortion, compute some fov_pixels, which will get cropped later
+    npix_extra = 5
+    if add_distortion:
+        kwargs['fov_pixels'] += 2 * npix_extra
 
-        # Figure out sampling (always want >=4 for Lyot/coronagraphy)
-        try:  # is_lyot may not always be a valid attribute
-            is_lyot = self.is_lyot
-        except AttributeError:
-            is_lyot = False
-        try:  # is_coron may not always be a valid attribute
-            is_coron = self.is_coron
-        except AttributeError:
-            is_coron = False
-        if is_lyot or is_coron:
-            if oversample is None:
-                if self.oversample>=4: # we're good!
-                    oversample = self.oversample
-                else: # different oversample and detector_oversample
-                    _log.info(f'For coronagraphy, setting oversample=4 and detector_oversample={oversample}')
-                    kwargs['detector_oversample'] = self.oversample
-                    oversample = 4
-            elif oversample<4: # no changes, but send informational message
-                _log.warn('oversample={oversample} may produce imprecise results for coronagraphy. Suggest >=4.')
-        else:
-            oversample = self.oversample if oversample is None else oversample
+    # Figure out sampling (always want >=4 for Lyot/coronagraphy)
+    try:  # is_lyot may not always be a valid attribute
+        is_lyot = self.is_lyot
+    except AttributeError:
+        is_lyot = False
+    try:  # is_coron may not always be a valid attribute
+        is_coron = self.is_coron
+    except AttributeError:
+        is_coron = False
+    if is_lyot or is_coron:
+        if oversample is None:
+            if self.oversample>=4: # we're good!
+                oversample = self.oversample
+            else: # different oversample and detector_oversample
+                _log.info(f'For coronagraphy, setting oversample=4 and detector_oversample={oversample}')
+                kwargs['detector_oversample'] = self.oversample
+                oversample = 4
+        elif oversample<4: # no changes, but send informational message
+            _log.warn('oversample={oversample} may produce imprecise results for coronagraphy. Suggest >=4.')
+    else:
+        oversample = self.oversample if oversample is None else oversample
 
-        # Note: output image oversampling is overriden by 'detector_oversample'
-        # This simply specifies FFT ovesampling
-        kwargs['oversample'] = oversample
+    # Note: output image oversampling is overriden by 'detector_oversample'
+    # This simply specifies FFT ovesampling
+    kwargs['oversample'] = oversample
 
-        # Drift OPD
-        wfe_drift = 0 if wfe_drift is None else wfe_drift
-        if wfe_drift != 0:
-            # Create copies
-            pupilopd_orig = deepcopy(self.pupilopd)
-            pupil_orig    = deepcopy(self.pupil)
+    # Drift OPD
+    wfe_drift = 0 if wfe_drift is None else wfe_drift
+    if wfe_drift != 0:
+        # Create copies
+        pupilopd_orig = deepcopy(self.pupilopd)
+        pupil_orig    = deepcopy(self.pupil)
 
-            # Get OPD info and convert to OTE LM
-            opd_dict = self.get_opd_info(HDUL_to_OTELM=True)
-            opd      = opd_dict['pupilopd']
-            # Perform OPD drift and store in pupilopd and pupil attributes
-            wfe_dict = self.drift_opd(wfe_drift, opd=opd)
-            self.pupilopd = wfe_dict['opd']
-            self.pupil    = wfe_dict['opd']
+        # Get OPD info and convert to OTE LM
+        opd_dict = self.get_opd_info(HDUL_to_OTELM=True)
+        opd      = opd_dict['pupilopd']
+        # Perform OPD drift and store in pupilopd and pupil attributes
+        wfe_dict = self.drift_opd(wfe_drift, opd=opd)
+        self.pupilopd = wfe_dict['opd']
+        self.pupil    = wfe_dict['opd']
 
-        # Get new sci coord
-        if coord_vals is not None:
-            siaf_ap = self.siaf[self.aperturename]
-            xorig, yorig = self.detector_position
-            xnew, ynew = coord_vals
+    # Get new sci coord
+    if coord_vals is not None:
+        siaf_ap = self.siaf[self.aperturename]
+        xorig, yorig = self.detector_position
+        xnew, ynew = coord_vals
 
-            coron_shift_x_orig = self.options.get('coron_shift_x', 0)
-            coron_shift_y_orig = self.options.get('coron_shift_y', 0)
-            bar_offset_orig = self.options.get('bar_offset', None)
-            self.options['bar_offset'] = 0
+        coron_shift_x_orig = self.options.get('coron_shift_x', 0)
+        coron_shift_y_orig = self.options.get('coron_shift_y', 0)
+        bar_offset_orig = self.options.get('bar_offset', None)
+        self.options['bar_offset'] = 0
 
-            # bar_offset_orig = self.options.get('b')
+        # bar_offset_orig = self.options.get('b')
 
-            xidl, yidl = siaf_ap.convert(xnew, ynew, coord_frame, 'idl')
-            xsci, ysci = siaf_ap.convert(xnew, ynew, coord_frame, 'sci')
-            self.detector_position = (xsci, ysci)
+        xidl, yidl = siaf_ap.convert(xnew, ynew, coord_frame, 'idl')
+        xsci, ysci = siaf_ap.convert(xnew, ynew, coord_frame, 'sci')
+        self.detector_position = (xsci, ysci)
 
-            # For coronagraphy, perform mask shift
-            if self.is_coron:
-                # Mask shift information
+        # For coronagraphy, perform mask shift
+        if self.is_coron:
+            # Mask shift information
 
-                field_rot = 0 if self._rotation is None else self._rotation
+            field_rot = 0 if self._rotation is None else self._rotation
 
-                # Convert to mask shifts (arcsec)
-                # xoff_asec = (xsci - siaf_ap.XSciRef) * siaf_ap.XSciScale  # asec offset from reference
-                # yoff_asec = (ysci - siaf_ap.YSciRef) * siaf_ap.YSciScale  # asec offset from reference
-                xoff_asec, yoff_asec = (xidl, yidl)
-                xoff_mask, yoff_mask = xy_rot(-1*xoff_asec, -1*yoff_asec, field_rot)
+            # Convert to mask shifts (arcsec)
+            # xoff_asec = (xsci - siaf_ap.XSciRef) * siaf_ap.XSciScale  # asec offset from reference
+            # yoff_asec = (ysci - siaf_ap.YSciRef) * siaf_ap.YSciScale  # asec offset from reference
+            xoff_asec, yoff_asec = (xidl, yidl)
+            xoff_mask, yoff_mask = xy_rot(-1*xoff_asec, -1*yoff_asec, field_rot)
 
-                # print(xnew, ynew, coord_frame)
-                # print(xsci, ysci, siaf_ap.AperName)
-                # print(siaf_ap.XSciRef, siaf_ap.YSciRef)
-                # print(xoff_asec, yoff_asec)
-                # print(xoff_mask, yoff_mask)
+            # print(xnew, ynew, coord_frame)
+            # print(xsci, ysci, siaf_ap.AperName)
+            # print(siaf_ap.XSciRef, siaf_ap.YSciRef)
+            # print(xoff_asec, yoff_asec)
+            # print(xoff_mask, yoff_mask)
 
-                # Shift mask in opposite direction
-                self.options['coron_shift_x'] = xoff_mask
-                self.options['coron_shift_y'] = yoff_mask
+            # Shift mask in opposite direction
+            self.options['coron_shift_x'] = xoff_mask
+            self.options['coron_shift_y'] = yoff_mask
 
-        # Perform PSF calculation
-        return_hdul = kwargs.pop('return_hdul', True)
-        return_oversample = kwargs.pop('return_oversample', True)
-        hdul = _calc_psf_with_shifts(self, calc_psf_func, **kwargs)
+    # Perform PSF calculation
+    return_hdul = kwargs.pop('return_hdul', True)
+    return_oversample = kwargs.pop('return_oversample', True)
+    hdul = _calc_psf_with_shifts(self, calc_psf_func, **kwargs)
 
-        # Reset pupil and OPD
-        if wfe_drift != 0:
-            self.pupilopd = pupilopd_orig
-            self.pupil    = pupil_orig
+    # Reset pupil and OPD
+    if wfe_drift != 0:
+        self.pupilopd = pupilopd_orig
+        self.pupil    = pupil_orig
 
-        # Return options
-        if coord_vals is not None:
-            self.detector_position = (xorig, yorig)
-            self.options['coron_shift_x'] = coron_shift_x_orig
-            self.options['coron_shift_y'] = coron_shift_y_orig
-            self.options['bar_offset'] = bar_offset_orig
+    # Return options
+    if coord_vals is not None:
+        self.detector_position = (xorig, yorig)
+        self.options['coron_shift_x'] = coron_shift_x_orig
+        self.options['coron_shift_y'] = coron_shift_y_orig
+        self.options['bar_offset'] = bar_offset_orig
 
-        # Crop distorted borders
-        if add_distortion:
-            osamp = hdul[0].header['DET_SAMP']
-            npix_over = npix_extra * osamp
-            hdul[0].data = hdul[0].data[npix_over:-npix_over,npix_over:-npix_over]
-            hdul[2].data = hdul[2].data[npix_over:-npix_over,npix_over:-npix_over]
-            hdul[1].data = hdul[1].data[npix_extra:-npix_extra,npix_extra:-npix_extra]
-            hdul[3].data = hdul[3].data[npix_extra:-npix_extra,npix_extra:-npix_extra]
+    # Crop distorted borders
+    if add_distortion:
+        osamp = hdul[0].header['DET_SAMP']
+        npix_over = npix_extra * osamp
+        hdul[0].data = hdul[0].data[npix_over:-npix_over,npix_over:-npix_over]
+        hdul[2].data = hdul[2].data[npix_over:-npix_over,npix_over:-npix_over]
+        hdul[1].data = hdul[1].data[npix_extra:-npix_extra,npix_extra:-npix_extra]
+        hdul[3].data = hdul[3].data[npix_extra:-npix_extra,npix_extra:-npix_extra]
 
-        # Check if we set return_hdul=False
-        if return_hdul:
-            res = hdul
-        else:
-            # If just returning a single image, determine oversample and distortion
-            res = hdul[2].data if add_distortion else hdul[0].data
-            if not return_oversample:
-                res = frebin(res, scale=1/self.oversample)
+    # Check if we set return_hdul=False
+    if return_hdul:
+        res = hdul
+    else:
+        # If just returning a single image, determine oversample and distortion
+        res = hdul[2].data if add_distortion else hdul[0].data
+        if not return_oversample:
+            res = frebin(res, scale=1/self.oversample)
 
-        return res
+    return res
 
 
 def _inst_copy(self):

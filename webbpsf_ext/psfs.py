@@ -237,7 +237,7 @@ def gen_image_from_coeff(inst, coeff, coeff_hdr, sp_norm=None, nwaves=None,
         for psf_fit in psf_list:
             # If GRISMC (along columns) rotate image by 90 deg CW 
             if 'GRISMC' in pupil:
-                psf_fit = np.rot90(psf_fit, k=1) 
+                psf_fit = np.rot90(psf_fit, k=1, axes=(1,2)) 
             elif (inst.name=='NIRCam') and (inst.module=='B'): 
                 # Flip right to left to disperse in correct orientation
                 psf_fit = psf_fit[:,:,::-1]
@@ -259,7 +259,7 @@ def gen_image_from_coeff(inst, coeff, coeff_hdr, sp_norm=None, nwaves=None,
                 im = psf_fit[i]
                 spec_over[:,intx:intx+fov_pix_over] += im*(1.-fracx) + np.roll(im,1,axis=1)*fracx
 
-            spec_over[spec_over<__epsilon] = 0 #__epsilon
+            spec_over[spec_over<__epsilon] = 0 
 
             # Rotate spectrum to its V2/V3 coordinates
             spec_bin = krebin(spec_over, (fov_pix,npix_spec))
