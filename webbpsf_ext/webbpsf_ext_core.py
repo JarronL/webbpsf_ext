@@ -243,14 +243,16 @@ class NIRCam_ext(webbpsf_NIRCam):
         ndeg = self._ndeg
         if ndeg is None:
             if self.quick:
-                if  self.filter[-1]=='W2':
+                if  self.filter[-2:]=='W2':
                     ndeg = 9
                 elif self.filter[-1]=='W':
                     ndeg = 8
                 elif self.filter[-1]=='M':
                     ndeg = 6
-                else:
+                elif self.filter[-1]=='N':
                     ndeg = 4
+                else:
+                    raise ValueError(f'{self.filter} not recognized as narrow, medium, wide, or double wide.')
             else:
                 ndeg = 9
         return ndeg
@@ -351,16 +353,21 @@ class NIRCam_ext(webbpsf_NIRCam):
     @property
     def bandpass(self):
         """ Return bandpass throughput """
-        kwargs = {
-            'ice_scale': self._ice_scale,
-            'nvr_scale': self._nvr_scale,
-            'ote_scale': self._ote_scale,
-            'nc_scale' : self._nc_scale,
-        }
-        bp = nircam_filter(self.filter, pupil=self.pupil_mask, mask=self.image_mask,
-                           module=self.module, grism_order=self._grism_order,
-                           ND_acq=self.ND_acq, coron_substrate=self.coron_substrate, 
-                           **kwargs)
+        try:
+            kwargs = {
+                'ice_scale': self._ice_scale,
+                'nvr_scale': self._nvr_scale,
+                'ote_scale': self._ote_scale,
+                'nc_scale' : self._nc_scale,
+            }            
+            bp = nircam_filter(self.filter, pupil=self.pupil_mask, mask=self.image_mask,
+                                module=self.module, grism_order=self._grism_order,
+                                ND_acq=self.ND_acq, coron_substrate=self.coron_substrate, 
+                                **kwargs)
+        except AttributeError:
+            bp = nircam_filter(self.filter, pupil=self.pupil_mask, mask=self.image_mask,
+                               module=self.module)
+        
         return bp
 
     def get_bar_offset(self, narrow=False):
@@ -440,7 +447,7 @@ class NIRCam_ext(webbpsf_NIRCam):
 
         return im
 
-    def get_opd_info(self, opd=None, HDUL_to_OTELM=True):
+    def get_opd_info(self, opd=None, pupil=None, HDUL_to_OTELM=True):
         """
         Parse out OPD information for a given OPD, which can be a file name, tuple (file,slice), 
         HDUList, or OTE Linear Model. Returns dictionary of some relevant information for 
@@ -452,7 +459,7 @@ class NIRCam_ext(webbpsf_NIRCam):
             >>> inst.pupilopd = opd_new
             >>> inst.pupil = opd_new
         """
-        return _get_opd_info(self, opd=opd, HDUL_to_OTELM=HDUL_to_OTELM)
+        return _get_opd_info(self, opd=opd, pupil=pupil, HDUL_to_OTELM=HDUL_to_OTELM)
 
     def drift_opd(self, wfe_drift, opd=None):
         """
@@ -1134,7 +1141,7 @@ class MIRI_ext(webbpsf_MIRI):
         
         return im
         
-    def get_opd_info(self, opd=None, HDUL_to_OTELM=True):
+    def get_opd_info(self, opd=None, pupil=None, HDUL_to_OTELM=True):
         """
         Parse out OPD information for a given OPD, which 
         can be a file name, tuple (file,slice), HDUList,
@@ -1149,7 +1156,7 @@ class MIRI_ext(webbpsf_MIRI):
             >>> inst.pupilopd = opd_new
             >>> inst.pupil = opd_new
         """
-        return _get_opd_info(self, opd=opd, HDUL_to_OTELM=HDUL_to_OTELM)
+        return _get_opd_info(self, opd=opd, pupil=pupil, HDUL_to_OTELM=HDUL_to_OTELM)
     
     def drift_opd(self, wfe_drift, opd=None):
         """
@@ -1563,11 +1570,15 @@ def _init_inst(self, filter=None, pupil_mask=None, image_mask=None,
         self.pupil_mask_list = self.pupil_mask_list + ['GR150C', 'GR150R']
 
     # Option to use `pupil` instead of `pupil_mask`
-    if (pupil_mask is None) and (kwargs.get('pupil') is not None):
-        pupil_mask = kwargs.get('pupil')
+    kw_pupil = kwargs.get('pupil')
+    kw_mask  = kwargs.get('mask')
+    if (pupil_mask is None) and (kw_pupil is not None) and isinstance(kw_pupil, str):
+        _log.warn('Deprecation warning: Use `pupil_mask` keyword rather than `pupil` to set pupil mask.')
+        # pupil_mask = kwargs.get('pupil')
     # Option to use `mask` instead of `image_mask`
-    if (image_mask is None) and (kwargs.get('mask') is not None):
-        image_mask = kwargs.get('mask')
+    if (image_mask is None) and (kw_mask is not None):
+        _log.warn('Deprecation warning: Use `image_mask` keyword rather than `mask` to set image mask.')
+        # image_mask = kwargs.get('mask')
 
     # Ensure CIRCLYOT or WEDGELYOT in case coron masks were specified
     if self.name=='NIRCam' and (pupil_mask is not None) and ('MASK' in pupil_mask):
@@ -1597,31 +1608,44 @@ def _init_inst(self, filter=None, pupil_mask=None, image_mask=None,
     
     # Settings for fov_pix and oversample
     # Default odd for normal imaging, even for coronagraphy
-    # TODO: Do these even/odd settings make sense?
     if fov_pix is None:
+        # TODO: Do these even/odd settings make sense?
         # fov_pix = 128 if self.is_coron else 129
         fov_pix = 257
     self._fov_pix = fov_pix
     self._oversample = oversample
-    
-    # Setting these to one choose default values at runtime
-    self._npsf = None
-    self._ndeg = None
-    
+
     # Legendre polynomials are more stable
-    self.use_legendre = True
-    
+    # self.use_legendre = True
+    self.use_legendre = kwargs.get('use_legendre', True)    
+
     # Turning on quick perform fits over filter bandpasses independently
     # The smaller wavelength range requires fewer monochromaic wavelengths
     # and lower order polynomial fits
     self._quick = None
+    self.quick = kwargs.get('quick', self.quick)
+
+    # Setting these to None to choose default values at runtime
+    self._npsf = None
+    self._ndeg = None
+    self.npsf = kwargs.get('npsf', self.npsf)
+    self.ndeg = kwargs.get('ndeg', self.ndeg)
     
     # Set up initial OPD file info
     opd_name = f'OPD_RevW_ote_for_{self.name}_predicted.fits'
     opd_name = _check_fitsgz(self, opd_name)
     self._opd_default = (opd_name, 0)
     self.pupilopd = self._opd_default
-    
+
+    # Update telescope pupil and pupil OPD
+    kw_pupil    = kwargs.get('pupil')
+    kw_pupilopd = kwargs.get('pupilopd')
+    if (kw_pupil is not None) or (kw_pupilopd is not None):
+        opd_dict = self.get_opd_info(opd=kw_pupilopd, pupil=kw_pupil)
+        otelm = opd_dict['pupilopd']
+        self.pupilopd = otelm
+        self.pupil    = otelm
+
     # Name to save array of oversampled coefficients
     self._save_dir = None
     self._save_name = None
@@ -1790,7 +1814,7 @@ def _gen_save_name(self, wfe_drift=0):
     return fname
 
 
-def _get_opd_info(self, opd=None, HDUL_to_OTELM=True):
+def _get_opd_info(self, opd=None, pupil=None, HDUL_to_OTELM=True):
     """
     Parse out OPD information for a given OPD, which can be a 
     file name, tuple (file,slice), HDUList, or OTE Linear Model. 
@@ -1808,6 +1832,9 @@ def _get_opd_info(self, opd=None, HDUL_to_OTELM=True):
     # Pupil OPD file name
     if opd is None:
         opd = self.pupilopd
+
+    if pupil is None:
+        pupil = self.pupil
         
     # If OPD is None or a string, make into tuple
     if opd is None:  # Default OPD
@@ -1854,15 +1881,14 @@ def _get_opd_info(self, opd=None, HDUL_to_OTELM=True):
         #header['WFEDRIFT'] = (self.wfe_drift, "WFE drift amount [nm]")
 
         name = 'Modified from ' + opd_name
-        opd = OTE_Linear_Model_WSS(name=name, opd=hdul, opd_index=opd_num, transmission=self.pupil)
+        opd = OTE_Linear_Model_WSS(name=name, opd=hdul, opd_index=opd_num, transmission=pupil)        
         
     setup_logging(log_prev, verbose=False)
 
     out_dict = {'opd_name':opd_name, 'opd_num':opd_num, 'opd_str':opd_str, 'pupilopd':opd}
     return out_dict
 
-def _drift_opd(self, wfe_drift, opd=None, 
-               wfe_therm=None, wfe_frill=None, wfe_iec=None):
+def _drift_opd(self, wfe_drift, opd=None, wfe_therm=None, wfe_frill=None, wfe_iec=None):
     """
     A quick method to drift the pupil OPD. This function applies 
     some WFE drift to input OPD file by breaking up the wfe_drift 
@@ -2485,8 +2511,6 @@ def _gen_psf_coeff(self, nproc=None, wfe_drift=0, force=False, save=True,
             raise e
         else:
             _log.info('Closing multiprocess pool.')
-
-        del inst_copy, worker_arguments
     else:
         # Pass arguments to the helper function
         hdu_arr = []
@@ -2495,6 +2519,8 @@ def _gen_psf_coeff(self, nproc=None, wfe_drift=0, force=False, save=True,
             if hdu is None:
                 raise RuntimeError('Returned None values. Issue with WebbPSF??')
             hdu_arr.append(hdu)
+
+    del inst_copy, worker_arguments
     t1 = time.time()
 
     # Ensure PSF sum is not larger than 1.0
