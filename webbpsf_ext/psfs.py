@@ -214,17 +214,17 @@ def gen_image_from_coeff(inst, coeff, coeff_hdr, sp_norm=None, nwaves=None,
 
     # Grism spectroscopy
     if is_grism:
-        pupil = inst.pupil_mask
-        if 'GRISM0' in pupil:
-            pupil = 'GRISMR'
-        elif 'GRISM90' in pupil:
-            pupil = 'GRISMC'
+        pupil_mask = inst.pupil_mask
+        if 'GRISM0' in pupil_mask:
+            pupil_mask = 'GRISMR'
+        elif 'GRISM90' in pupil_mask:
+            pupil_mask = 'GRISMC'
 
         # spectral resolution in um/pixel
         # res is in pixels per um and dw is inverse
         grism_order = inst._grism_order
         if inst.name=='NIRCam':
-            res, dw = nircam_grism_res(pupil, inst.module, grism_order)
+            res, dw = nircam_grism_res(pupil_mask, inst.module, grism_order)
         elif inst.name=='NIRISS':
             res, dw = niriss_grism_res(grism_order)
 
@@ -235,16 +235,13 @@ def gen_image_from_coeff(inst, coeff, coeff_hdr, sp_norm=None, nwaves=None,
         spec_list = []
         spec_list_over = []
         for psf_fit in psf_list:
-            # If GRISMC (along columns) rotate image by 90 deg CW 
-            if 'GRISMC' in pupil:
+            # If GRISMC (along columns) rotate image by 90 deg CW to disperse left-to-right
+            if 'GRISMC' in pupil_mask:
                 psf_fit = np.rot90(psf_fit, k=1, axes=(1,2)) 
-            elif (inst.name=='NIRCam') and (inst.module=='B'): 
-                # Flip right to left to disperse in correct orientation
-                psf_fit = psf_fit[:,:,::-1]
 
             # Create oversampled spectral image
             spec_over = np.zeros([fov_pix_over, npix_spec_over])
-            # Place each PSF at its dispersed location
+            # Place each PSF at its dispersed location (left-to-right)
             for i, w in enumerate(wgood):
                 # Separate shift into an integer and fractional shift
                 delx = oversample * (w-w1) / dw # Number of oversampled pixels to shift
@@ -257,17 +254,20 @@ def gen_image_from_coeff(inst, coeff, coeff_hdr, sp_norm=None, nwaves=None,
                 # TODO: Benchmark and compare these two different methods
                 # spec_over[:,intx:intx+fov_pix_over] += fshift(psf_fit[i], delx=fracx, interp='cubic')
                 im = psf_fit[i]
-                spec_over[:,intx:intx+fov_pix_over] += im*(1.-fracx) + np.roll(im,1,axis=1)*fracx
+                im_part1 = im*(1.-fracx)
+                im_part2 = np.roll(im,1,axis=1)*fracx
+                im_part2[:,0] = 0 # Right side of PSF rolls over to left side; set to 0 instead
+                spec_over[:,intx:intx+fov_pix_over] += (im_part1 + im_part2)
 
             spec_over[spec_over<__epsilon] = 0 
 
             # Rotate spectrum to its V2/V3 coordinates
             spec_bin = krebin(spec_over, (fov_pix,npix_spec))
-            if 'GRISMC' in pupil: # Rotate image 90 deg CCW
+            if 'GRISMC' in pupil_mask: # Rotate image 90 deg CCW to disperse bottom-to-top
                 spec_over = np.rot90(spec_over, k=-1)
                 spec_bin = np.rot90(spec_bin, k=-1)
             elif (inst.name=='NIRCam') and (inst.module=='B'): 
-                # Flip right to left for sci coords
+                # Flip for sci coords to disperse right-to-left
                 spec_over = spec_over[:,::-1]
                 spec_bin = spec_bin[:,::-1]
 
@@ -280,7 +280,7 @@ def gen_image_from_coeff(inst, coeff, coeff_hdr, sp_norm=None, nwaves=None,
         w1_spec = w1 - dw_over*fov_pix_over/2
         wspec_over = np.arange(npix_spec_over)*dw_over + w1_spec
         wspec = wspec_over.reshape((npix_spec,-1)).mean(axis=1)
-        if (inst.name=='NIRCam') and ('GRISMR' in pupil) and (inst.module=='B'): 
+        if (inst.name=='NIRCam') and ('GRISMR' in pupil_mask) and (inst.module=='B'): 
             # Flip wavelength for sci coords
             wspec = wspec[::-1]
 
