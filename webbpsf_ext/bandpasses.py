@@ -218,7 +218,7 @@ def nircam_filter(filter, pupil=None, mask=None, module=None, ND_acq=False,
     bp_name = filter
 
     # For narrowband/mediumband filters in pupil wheel, add wide blocking filters
-    if filter in ['F162M', 'F164N', 'F323N', 'F405N', 'F466N', 'F470N']:
+    if include_blocking and (filter in ['F162M', 'F164N', 'F323N', 'F405N', 'F466N', 'F470N']):
         fdir2 = filt_dir / 'NRC_filters_only'
         if filter in ['F162M', 'F164N']:
             f2 = f'F150W2_FM.xlsx_filteronly_mod{mod}_sorted.txt'
@@ -227,8 +227,10 @@ def nircam_filter(filter, pupil=None, mask=None, module=None, ND_acq=False,
         elif filter in ['F405N', 'F466N','F470N']:
             f2 = f'F444W_FM.xlsx_filteronly_mod{mod}_sorted.txt'
 
-        bp2 = S.FileBandpass(str(fdir2 / f2))
-        th_new = bp.throughput * np.interp(bp.wave, bp2.wave, bp2.throughput, left=0, right=0)
+        tbl2 = ascii.read(str(fdir2 / f2))
+        w2 = tbl2['microns'].data * 1e4
+        th2 = tbl2['transmission'].data
+        th_new = bp.throughput * np.interp(bp.wave, w2, th2, left=0, right=0)
         bp = S.ArrayBandpass(bp.wave, th_new, name=bp.name)
 
     # Select channel (SW or LW) for minor decisions later on
