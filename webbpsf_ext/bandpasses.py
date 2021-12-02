@@ -206,12 +206,13 @@ def nircam_filter(filter, pupil=None, mask=None, module=None, ND_acq=False,
     """
     if module is None: 
         module = 'A'
+    else:
+        module = module.upper()
 
     # Select filter file and read
     filter = filter.upper()
-    mod = module.lower()
     filt_dir = _bp_dir
-    filt_file = f'{filter}_nircam_plus_ote_throughput_mod{mod}_sorted.txt'
+    filt_file = f'{filter}_nircam_plus_ote_throughput_mod{module.lower()}_sorted.txt'
 
     _log.debug('Reading file: '+filt_file)
     bp = S.FileBandpass(str(filt_dir / filt_file))
@@ -221,11 +222,11 @@ def nircam_filter(filter, pupil=None, mask=None, module=None, ND_acq=False,
     if include_blocking and (filter in ['F162M', 'F164N', 'F323N', 'F405N', 'F466N', 'F470N']):
         fdir2 = filt_dir / 'NRC_filters_only'
         if filter in ['F162M', 'F164N']:
-            f2 = f'F150W2_FM.xlsx_filteronly_mod{mod}_sorted.txt'
+            f2 = f'F150W2_FM.xlsx_filteronly_mod{module}_sorted.txt'
         elif filter=='F323N':
-            f2 = f'F322W2_FM.xlsx_filteronly_mod{mod}_sorted.txt'
+            f2 = f'F322W2_FM.xlsx_filteronly_mod{module}_sorted.txt'
         elif filter in ['F405N', 'F466N','F470N']:
-            f2 = f'F444W_FM.xlsx_filteronly_mod{mod}_sorted.txt'
+            f2 = f'F444W_FM.xlsx_filteronly_mod{module}_sorted.txt'
 
         tbl2 = ascii.read(str(fdir2 / f2))
         w2 = tbl2['microns'].data * 1e4
