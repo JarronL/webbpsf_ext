@@ -1542,7 +1542,11 @@ def _check_fitsgz(self, opd_file):
     inst_str = self.name
 
     # .fits or .fits.gz?
-    opd_dir = os.path.join(self._datapath,'OPD')
+    if 'JWST_OTE_OPD' in opd_file:
+        # Location of JWST_OTE_OPD_RevAA_prelaunch_predicted.fits.gz
+        opd_dir = webbpsf.utils.get_webbpsf_data_path()
+    else:
+        opd_dir = os.path.join(self._datapath,'OPD')
     opd_fullpath = os.path.join(opd_dir, opd_file)
 
     # Check if file exists 
@@ -1632,7 +1636,8 @@ def _init_inst(self, filter=None, pupil_mask=None, image_mask=None,
     self.ndeg = kwargs.get('ndeg', self.ndeg)
     
     # Set up initial OPD file info
-    opd_name = f'OPD_RevW_ote_for_{self.name}_predicted.fits'
+    # opd_name = f'OPD_RevW_ote_for_{self.name}_predicted.fits'
+    opd_name = 'JWST_OTE_OPD_RevAA_prelaunch_predicted.fits'
     opd_name = _check_fitsgz(self, opd_name)
     self._opd_default = (opd_name, 0)
     self.pupilopd = self._opd_default

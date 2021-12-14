@@ -639,7 +639,10 @@ class jwst_point(object):
     rand_seed : None or int
         Random seed to use for generating repeatable random offsets.
     rand_seed_base : None or int
-        Use a separate random seed to produce telescope slew offset.
+        Use a separate random seed for telescope slew offset.
+        Then, `rand_seed` corresponds only to relative dithers.
+        Useful for multiple exposures with same initial slew, but
+        independent dither pattern realizations. 
     """
     
     def __init__(self, ap_obs_name, ap_ref_name, ra_ref, dec_ref, pos_ang=0, 

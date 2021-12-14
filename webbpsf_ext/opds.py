@@ -51,7 +51,11 @@ def OPDFile_to_HDUList(file, slice=0):
         elif 'FGS' in file:
             inst = 'FGS'
 
-        opd_dir = os.path.join(get_webbpsf_data_path(),inst,'OPD')
+        if 'JWST_OTE_OPD' in file:
+            # Location of JWST_OTE_OPD_RevAA_prelaunch_predicted.fits.gz
+            opd_dir = get_webbpsf_data_path()
+        else:
+            opd_dir = os.path.join(get_webbpsf_data_path(),inst,'OPD')
         hdul = fits.open(os.path.join(opd_dir, file))
     ndim = len(hdul[0].data.shape)
 
