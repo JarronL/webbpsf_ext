@@ -77,9 +77,10 @@ requirements = [
     'matplotlib>=3.3.0',
     'scipy>=1.5.0',
     'pysynphot>=2.0.0',
-    'poppy>=0.9.2',
-    'webbpsf>=0.9.2',
+    'poppy>=1.0.1',
+    'webbpsf>=1.0.0',
     'tqdm>4',
+    'astropy>=4.2',
 ]
 
 setup_requirements = ['pytest-runner', ]
