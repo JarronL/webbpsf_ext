@@ -42,7 +42,7 @@ _log = logging.getLogger('webbpsf_ext')
 from .version import __version__
 
 # WebbPSF and Poppy stuff
-from .utils import webbpsf, poppy, S
+from .utils import check_fitsgz, webbpsf, poppy, S
 from webbpsf import MIRI as webbpsf_MIRI
 from webbpsf import NIRCam as webbpsf_NIRCam
 from webbpsf.opds import OTE_Linear_Model_WSS
@@ -1534,28 +1534,6 @@ def _check_list(value, temp_list, var_name=None):
                          .format(var_name, value, ', '.join(temp_list2))
         raise ValueError(err_str)
 
-def _check_fitsgz(self, opd_file):
-    """
-    WebbPSF FITS files can be either .fits or compressed .gz. 
-    Search for .fits by default, then .fits.gz.
-    """
-    inst_str = self.name
-
-    # .fits or .fits.gz?
-    opd_dir = os.path.join(self._datapath,'OPD')
-    opd_fullpath = os.path.join(opd_dir, opd_file)
-
-    # Check if file exists 
-    if not os.path.exists(opd_fullpath):
-        opd_file_alt = opd_file + '.gz'
-        opd_path_alt = os.path.join(opd_dir, opd_file_alt)
-        if not os.path.exists(opd_path_alt):
-            err_msg = f'Cannot find either {opd_file} or {opd_file_alt} in {opd_dir}'
-            raise OSError(err_msg)
-        else:
-            opd_file = opd_file_alt
-
-    return opd_file
 
 def _init_inst(self, filter=None, pupil_mask=None, image_mask=None, 
                fov_pix=None, oversample=None, **kwargs):
@@ -1632,8 +1610,12 @@ def _init_inst(self, filter=None, pupil_mask=None, image_mask=None,
     self.ndeg = kwargs.get('ndeg', self.ndeg)
     
     # Set up initial OPD file info
-    opd_name = f'OPD_RevW_ote_for_{self.name}_predicted.fits'
-    opd_name = _check_fitsgz(self, opd_name)
+    opd_name = 'JWST_OTE_OPD_RevAA_prelaunch_predicted.fits'
+    try:
+        opd_name = check_fitsgz(opd_name)
+    except OSError:
+        opd_name = f'OPD_RevW_ote_for_{self.name}_predicted.fits'
+        opd_name = check_fitsgz(opd_name, self.name)
     self._opd_default = (opd_name, 0)
     self.pupilopd = self._opd_default
 
@@ -2498,7 +2480,8 @@ def _gen_psf_coeff(self, nproc=None, wfe_drift=0, force=False, save=True,
         hdu_arr = []
         try:
             with mp.Pool(nproc) as pool:
-                for res in tqdm(pool.imap(_wrap_coeff_for_mp, worker_arguments), total=npsf, desc='Single PSFs', leave=False):
+                for res in tqdm(pool.imap(_wrap_coeff_for_mp, worker_arguments), 
+                                total=npsf, desc='Monochromatic PSFs', leave=False):
                     hdu_arr.append(res)
                 pool.close()
             if hdu_arr[0] is None:
@@ -2514,7 +2497,7 @@ def _gen_psf_coeff(self, nproc=None, wfe_drift=0, force=False, save=True,
     else:
         # Pass arguments to the helper function
         hdu_arr = []
-        for wa in tqdm(worker_arguments, desc='Single PSFs', leave=False):
+        for wa in tqdm(worker_arguments, desc='Monochromatic PSFs', leave=False):
             hdu = _wrap_coeff_for_mp(wa)
             if hdu is None:
                 raise RuntimeError('Returned None values. Issue with WebbPSF??')

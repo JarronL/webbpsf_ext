@@ -39,3 +39,57 @@ S.refs.setref(area = 25.78e4) # cm^2 according to jwst_pupil_RevW_npix1024.fits.
 
 # Progress bar
 from tqdm.auto import trange, tqdm
+
+
+def check_fitsgz(opd_file, inst_str=None):
+    """
+    WebbPSF FITS files can be either .fits or compressed .gz. 
+    Search for .fits by default, then .fits.gz.
+
+    Parameters
+    ==========
+    opd_file : str
+        Name of FITS file, either .fits or .fits.gz
+    inst_str : None or str
+        If OPD file is instrument-specific, then specify here.
+        Will look in instrument OPD directory. If set to None,
+        then also checks `opd_file` for an instrument-specific
+        string to determine if to look in instrument OPD directory,
+        otherwise assume file name is in webbpsf data base directory.
+    """
+    from webbpsf.utils import get_webbpsf_data_path
+
+    # Check if instrument name is in OPD file name
+    # If so, then this is in instrument OPD directory
+    # Otherwise, exists in webbpsf_data top directory
+
+    if inst_str is None:
+        inst_names = ['NIRCam', 'NIRISS', 'NIRSpec', 'MIRI', 'FGS']
+        for iname in inst_names:
+            if iname in opd_file:
+                inst_str = iname
+
+    # Get file directory
+    if inst_str is None:
+        # Location of JWST_OTE_OPD_RevAA_prelaunch_predicted.fits.gz
+        opd_dir = get_webbpsf_data_path()
+    else:
+        opd_dir = os.path.join(get_webbpsf_data_path(),inst_str,'OPD')
+    opd_fullpath = os.path.join(opd_dir, opd_file)
+
+    # Check if file exists 
+    # .fits or .fits.gz?
+    if not os.path.exists(opd_fullpath):
+        if '.gz' in opd_file:
+            opd_file_alt = opd_file[:-3]
+        else:
+            opd_file_alt = opd_file + '.gz'
+        opd_path_alt = os.path.join(opd_dir, opd_file_alt)
+        if not os.path.exists(opd_path_alt):
+            err_msg = f'Cannot find either {opd_file} or {opd_file_alt} in {opd_dir}'
+            raise OSError(err_msg)
+        else:
+            opd_file = opd_file_alt
+
+    return opd_file
+

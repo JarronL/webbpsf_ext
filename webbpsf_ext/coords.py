@@ -250,8 +250,8 @@ def ap_radec(ap_obs, ap_ref, coord_ref, pa, base_off=(0,0), dith_off=(0,0),
     pa : float
         Position angle in degrees measured from North to V3 axis in North to East direction.
         
-    Keywords
-    --------
+    Keyword Args
+    ------------
     base_off : list or tuple
         X/Y offset of overall aperture offset (see APT pointing file)
     dither_off : list or tuple
@@ -325,8 +325,8 @@ def radec_to_coord(coord_objs, siaf_ref_name, coord_ref, pa_ref,
     pa : float
         Position angle in degrees measured from North to V3 axis in North to East direction.
         
-    Keywords
-    --------
+    Keyword Args
+    ------------
     frame_out : str
         One of 'tel' (arcsec), 'sci' (pixels), or 'det' (pixels).
     base_off : list or tuple
@@ -356,8 +356,8 @@ def radec_to_v2v3(coord_objs, siaf_ref_name, coord_ref, pa_ref, frame_out='tel',
     pa : float
         Position angle in degrees measured from North to V3 axis in North to East direction.
         
-    Keywords
-    --------
+    Keyword Args
+    ------------
     frame_out : str
         One of 'tel' (arcsec), 'sci' (pixels), or 'det' (pixels).
     base_off : list or tuple
@@ -408,8 +408,8 @@ def v2v3_to_pixel(ap_obs, v2_obj, v3_obj, frame='sci'):
     v3_obj : ndarray
         V3 locations of stellar sources.
 
-    Keywords
-    ========
+    Keyword Args
+    ============
     frame : str
         'det' or 'sci' coordinate frame. 'det' is always full frame reference.
         'sci' is relative to subarray size if not a full frame aperture.
@@ -639,7 +639,10 @@ class jwst_point(object):
     rand_seed : None or int
         Random seed to use for generating repeatable random offsets.
     rand_seed_base : None or int
-        Use a separate random seed to produce telescope slew offset.
+        Use a separate random seed for telescope slew offset.
+        Then, `rand_seed` corresponds only to relative dithers.
+        Useful for multiple exposures with same initial slew, but
+        independent dither pattern realizations. 
     """
     
     def __init__(self, ap_obs_name, ap_ref_name, ra_ref, dec_ref, pos_ang=0, 
