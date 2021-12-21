@@ -1,0 +1,8 @@
+include LICENSE
+include README.md
+
+recursive-include tests *
+recursive-include throughputs *
+recursive-include spectral_data *
+recursive-exclude * __pycache__
+recursive-exclude * *.py[co]
