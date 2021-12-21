@@ -20,7 +20,7 @@ import logging
 _log = logging.getLogger('webbpsf_ext')
 
 from . import __path__
-_spec_dir = __path__[0] + '/spectra/'
+_spec_dir = __path__[0] + '/spectral_data/'
 
 def BOSZ_filename(Teff, metallicity, log_g, res, carbon=0, alpha=0):
     """ Generate filename for BOSZ spectrum. """
