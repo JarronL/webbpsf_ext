@@ -1,5 +1,2 @@
-include LICENSE
-include README.md
-
-recursive-include throughputs *
-recursive-include spectral_data *
+recursive-include webbpsf_ext/spectral_data *
+recursive-include webbpsf_ext/throughputs *
