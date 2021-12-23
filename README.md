@@ -21,6 +21,14 @@ Currently, only NIRCam and MIRI instrument classes are supported via the `NIRCam
 1. `gen_wfefield_coeff`: Science instruments generally have field-dependent wavefront errors, which have been carefully measured in ground-based cryovac test campaigns ([SI WFE](https://webbpsf.readthedocs.io/en/latest/jwst.html#si-wfe)). These aberrations are expected to be static throughout the JWST mission lifetime. Similar to the above function, we generate PSF coefficients at each of the sampled positions and create a `RegularGridInterpolator` function to quickly determine new coefficient residuals at arbitrary locations.
 1. `gen_wfemask_coeff`: For coronagraphic masks, slight changes in the PSF location relative to the image plane mask can substantially alter the PSF speckle pattern. This function generates a number of PSF coefficients at a variety of positions, then fits polynomials to the residuals to track how the PSF changes across the mask's field of view. Special care is taken near the 10-20mas region in order to provide accurate sampling of the SGD offsets.
 
+## Installing with pip
+
+Download via pip:
+
+```bash
+pip install webbpsf_ext
+```
+
 ## Installing from source
 
 To get the most up to date version of `webbpsf_ext`, install directly from the GitHub source.
@@ -38,7 +46,7 @@ cd webbpsf_ext
 pip install .
 ```
 
-**Preferred:** For development purposes, you can use editable installations:
+For development purposes, you can use editable installations:
 
 ```bash
 cd webbpsf_ext
