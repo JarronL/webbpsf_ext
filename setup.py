@@ -73,8 +73,7 @@ if sys.argv[-1] == 'test':
 # with open('HISTORY.rst') as history_file:
 #     history = history_file.read()
 
-requirements = [
-    'Click>=6.0',
+install_requires = [
     'numpy>=1.19.0',
     'matplotlib>=3.3.0',
     'scipy>=1.5.0',
@@ -111,7 +110,7 @@ setup(
         #   3 - Alpha
         #   4 - Beta
         #   5 - Production/Stable
-        'Development Status :: 4 - Beta',
+        'Development Status :: 5 - Production/Stable',
 
         # Indicate who your project is intended for
         'Intended Audience :: Developers',
@@ -135,13 +134,12 @@ setup(
     #packages=find_packages(exclude=['contrib', 'docs', 'tests']),
     packages=find_packages(include=['webbpsf_ext']),
     include_package_data=True,
-    # package_data={'webbpsf_ext': ['throughputs/*', 'spectra/*']},
 
     # List run-time dependencies here.  These will be installed by pip when
     # your project is installed. For an analysis of "install_requires" vs pip's
     # requirements files see:
     # https://packaging.python.org/en/latest/requirements.html
-    install_requires=requirements,
+    install_requires=install_requires,
 
     # List additional groups of dependencies here (e.g. development
     # dependencies). You can install these using the following syntax,
@@ -155,7 +153,7 @@ setup(
     # installed, specify them here.  If using Python 2.6 or less, then these
     # have to be included in MANIFEST.in as well.
     #package_data={
-    #    'pynrc': ['package_data.dat'],
+    #    'webbpsf_ext': ['package_data.dat'],
     #},
 
     setup_requires=setup_requirements,

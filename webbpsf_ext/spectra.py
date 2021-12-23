@@ -55,8 +55,7 @@ def download_BOSZ_spectrum(Teff, metallicity, log_g, res, carbon=0, alpha=0):
 
     import requests
 
-    model_dir = _spec_dir + 'bosz_grids/'
-    res_dir = model_dir + 'R{}/'.format(res)
+    res_dir = os.path.join(_spec_dir, 'bosz_grids', 'R{}'.format(res))
 
     # Create resolution directory if it doesn't exists
     if not os.path.isdir(res_dir):
@@ -85,8 +84,8 @@ def download_BOSZ_spectrum(Teff, metallicity, log_g, res, carbon=0, alpha=0):
         req.raise_for_status()
 
     # Save file to directory
-    _log.info(f'Saving file to: {res_dir}')
     outpath = os.path.join(res_dir, fname)
+    _log.info(f'Saving file to: {outpath}')
     open(outpath, 'wb').write(req.content)
 
 
@@ -975,10 +974,11 @@ class planets_sb12(object):
         # Directory of atmospheric files
         if base_dir is not None:
             self._base_dir = base_dir
-        self.sub_dir = self._base_dir  + 'SB.' + self.atmo + '/'
 
-        # Extract tar.gz file if directory does not exist
-        self._extract_dir()
+        # Download and extract tar.gz file if directory does not exist
+        if not os.path.isdir(self.sub_dir):
+            tar_filename = f'SB.{self.atmo}.tar.gz'
+            self._download_tar(extract=True, remove=True, tar_filename=tar_filename)
 
         # Find and read appropriate file
         self._get_file()
@@ -999,15 +999,54 @@ class planets_sb12(object):
         self.rin = accr_rin
         self.truncated = truncated
 
-    def _extract_dir(self):
+    def _download_tar(self, extract=True, remove=True, tar_filename=None):
+        """Download and extract tar file"""
+        import requests
+
+        if tar_filename is None:
+            tar_filename = f'SB.{self.atmo}.tar.gz'
+
+        tar_path = os.path.join(self._base_dir, tar_filename)
+
+        # check if tar file already exists
+        if not os.path.exists(tar_path):
+            # URL location
+            url_base = 'http://mips.as.arizona.edu/~jleisenring/spiegel/'
+            url_path = os.path.join(url_base, tar_filename)
+
+            # Make request
+            _log.info(f'Downloading file: {tar_filename}')
+            req = requests.get(url_path, allow_redirects=True)
+
+            # Raise exception if file not found or other HTTP error
+            if req.status_code != requests.codes.ok:
+                req.raise_for_status()
+
+            # Save file to directory
+            _log.info(f'Saving file to: {tar_path}')
+            open(tar_path, 'wb').write(req.content)
+
+        if extract:
+            self._extract_dir(tar_path=tar_path, remove=remove)
+
+    def _extract_dir(self, tar_path=None, remove=False):
         """Check if directory exists or is still .tar.gz"""
         import tarfile
 
-        tar_file = self._base_dir  + 'SB.' + self.atmo + '.tar.gz'
+        if tar_path is None:
+            tar_path = os.path.join(self._base_dir, f'SB.{self.atmo}.tar.gz')
+
         if not os.path.isdir(self.sub_dir):
-            tar = tarfile.open(tar_file, "r:gz")
+            tar = tarfile.open(tar_path, "r:gz")
             tar.extractall(self._base_dir)
             tar.close()
+
+        # Remove tar file
+        if remove:
+            try: 
+                os.remove(tar_path)
+            except FileNotFoundError: 
+                pass
 
     def _get_file(self):
         """Find the file closest to the input parameters"""
@@ -1040,8 +1079,10 @@ class planets_sb12(object):
 
     def _read_file(self):
         """Read in the file data"""
+
         # Read in the file's content row-by-row (saved as a string)
-        with open(self.sub_dir + self.file) as f:
+        file_path = os.path.join(self.sub_dir, self.file)
+        with open(file_path) as f:
             content = f.readlines()
         content = [x.strip('\n') for x in content]
 
@@ -1075,6 +1116,10 @@ class planets_sb12(object):
 
         # Distance (10 pc)
         self._distance = 10.0
+
+    @property 
+    def sub_dir(self):
+        return os.path.join(self._base_dir, f'SB.{self.atmo}')
 
     @property
     def mdot(self):

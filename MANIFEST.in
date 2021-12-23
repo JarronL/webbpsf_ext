@@ -1,2 +1,17 @@
 recursive-include webbpsf_ext/spectral_data *
 recursive-include webbpsf_ext/throughputs *
+
+recursive-include tests *
+recursive-exclude * __pycache__
+
+recursive-include docs *.rst conf.py Makefile make.bat *.jpg *.png *.gif
+
+recursive-exclude * *.py[co]
+global-exclude .DS_Store
+
+global-exclude *.tar.gz
+global-exclude spec*.txt
+global-exclude am*.fits
+
+prune notebooks
+prune dev_utils
