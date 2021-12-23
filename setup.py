@@ -87,6 +87,11 @@ install_requires = [
 setup_requirements = ['pytest-runner', ]
 test_requirements = ['pytest', ]
 
+# read the contents of your README file
+from pathlib import Path
+this_directory = Path(__file__).parent
+long_description = (this_directory / "README.md").read_text()
+
 setup(
     name='webbpsf_ext',
 
@@ -94,7 +99,8 @@ setup(
     version=version,
 
     description="WebbPSF Extensions",
-    long_description="",
+    long_description=long_description,
+    long_description_content_type='text/markdown',
 
     # The project's main homepage.
     url='https://github.com/JarronL/webbpsf_ext',

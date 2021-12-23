@@ -25,7 +25,7 @@ time to calculate . Since the change to the PSF coefficients varies smoothly
 with respect to WFE drift components, it's simple to parameterize the coefficient
 residuals.
 
-Developed by Jarron Leisenring at University of Arizona (2015-21).
+Developed by Jarron Leisenring at University of Arizona (2015-2021).
 """
 
 import os
