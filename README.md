@@ -2,6 +2,8 @@
 
 ## Extending JWST PSF generation
 
+[![PyPI Version](https://img.shields.io/pypi/v/webbpsf_ext.svg)](https://pypi.python.org/pypi/webbpsf_ext)
+
 *Authors*: Jarron Leisenring (U. of Arizona, Steward Observatory)
 
 `webbpsf_ext` provides some enhancements to the [WebbPSF](https://webbpsf.readthedocs.io) package for PSF creation. This follows the [pyNRC](https://github.com/JarronL/pynrc) implementation for storing and retrieving JWST PSFs. In particular, this module generates and saves polynomial coefficients to quickly create unique instrument PSFs as a function of wavelength, focal plane position, wavefront error drift from thermal distortions.
