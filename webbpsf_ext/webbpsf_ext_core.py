@@ -1622,11 +1622,16 @@ def _init_inst(self, filter=None, pupil_mask=None, image_mask=None,
     # Update telescope pupil and pupil OPD
     kw_pupil    = kwargs.get('pupil')
     kw_pupilopd = kwargs.get('pupilopd')
-    if (kw_pupil is not None) or (kw_pupilopd is not None):
-        opd_dict = self.get_opd_info(opd=kw_pupilopd, pupil=kw_pupil)
-        otelm = opd_dict['pupilopd']
-        self.pupilopd = otelm
-        self.pupil    = otelm
+    # if (kw_pupil is not None) or (kw_pupilopd is not None):
+    #     opd_dict = self.get_opd_info(opd=kw_pupilopd, pupil=kw_pupil)
+    #     otelm = opd_dict['pupilopd']
+    #     self.pupilopd = otelm
+    #     self.pupil    = otelm
+    if kw_pupil is not None:
+        self.pupil = kw_pupil
+    if kw_pupilopd is not None:
+        self.pupilopd = kw_pupilopd
+
 
     # Name to save array of oversampled coefficients
     self._save_dir = None
@@ -1801,7 +1806,7 @@ def _get_opd_info(self, opd=None, pupil=None, HDUL_to_OTELM=True):
     Parse out OPD information for a given OPD, which can be a 
     file name, tuple (file,slice), HDUList, or OTE Linear Model. 
     Returns dictionary of some relevant information for logging purposes.
-    The dictionary has an OPD version as an OTE LM.
+    The dictionary has an OPD version as an OTE_Linear_Model_WSS object.
     
     This outputs an OTE Linear Model. 
     In order to update instrument class:
@@ -1846,7 +1851,8 @@ def _get_opd_info(self, opd=None, pupil=None, HDUL_to_OTELM=True):
         opd_str = 'OPDcustomFITS'
     elif isinstance(opd, poppy.OpticalElement):
         # OTE Linear Model
-        opd_name = 'OPD from OTE LM'
+        # opd_name = 'OPD from OTE LM'
+        opd_name = opd.name
         opd_num = 0
         opd_str = 'OPDcustomLM'
     else:
@@ -1863,7 +1869,9 @@ def _get_opd_info(self, opd=None, pupil=None, HDUL_to_OTELM=True):
         #header['WFEDRIFT'] = (self.wfe_drift, "WFE drift amount [nm]")
 
         name = 'Modified from ' + opd_name
-        opd = OTE_Linear_Model_WSS(name=name, opd=hdul, opd_index=opd_num, transmission=pupil)        
+        opd = OTE_Linear_Model_WSS(name=name, transmission=pupil,
+                                   opd=hdul, opd_index=opd_num, 
+                                   v2v3=self._tel_coords())
         
     setup_logging(log_prev, verbose=False)
 
