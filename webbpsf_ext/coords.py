@@ -937,7 +937,7 @@ class jwst_point(object):
     def plot_main_apertures(self, fill=False, **kwargs):
         """ Plot main SIAF telescope apertures.
         
-        Other matplotlib standard parameters may be passed in via **kwargs
+        Other matplotlib standard parameters may be passed in via ``**kwargs``
         to adjust the style of the displayed lines.
 
         Parameters
@@ -974,7 +974,7 @@ class jwst_point(object):
     def plot_inst_apertures(self, subarrays=False, fill=False, **kwargs):
         """ Plot all apertures in this instrument's SIAF.
         
-        Other matplotlib standard parameters may be passed in via **kwargs
+        Other matplotlib standard parameters may be passed in via ``**kwargs``
         to adjust the style of the displayed lines.
 
         Parameters
@@ -1026,7 +1026,9 @@ class jwst_point(object):
         return self.siaf_inst.plot(subarrays=subarrays, fill=fill, **kwargs)
     
     def plot_ref_aperture(self, fill=False, **kwargs):
-        """
+        """ Plot reference aperture
+
+
         Parameters
         -----------
         names : list of strings
@@ -1074,7 +1076,8 @@ class jwst_point(object):
         siaf_ap._attitude_matrix = None
         
     def plot_obs_aperture(self, fill=False, **kwargs):
-        """
+        """ Plot observed aperture
+
         Parameters
         -----------
         names : list of strings

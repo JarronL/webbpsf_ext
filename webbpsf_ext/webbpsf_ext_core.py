@@ -1151,6 +1151,7 @@ class MIRI_ext(webbpsf_MIRI):
         
         This outputs an OTE Linear Model. 
         In order to update instrument class:
+
             >>> opd_dict = inst.get_opd_info()
             >>> opd_new = opd_dict['pupilopd']
             >>> inst.pupilopd = opd_new
@@ -1168,6 +1169,7 @@ class MIRI_ext(webbpsf_MIRI):
         maps, which can then be passed directly to create unique PSFs.
         
         This outputs an OTE Linear Model. In order to update instrument class:
+        
             >>> opd_dict = inst.drift_opd()
             >>> inst.pupilopd = opd_dict['opd']
             >>> inst.pupil = opd_dict['opd']
