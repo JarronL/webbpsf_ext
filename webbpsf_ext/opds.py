@@ -83,25 +83,36 @@ class OTE_WFE_Drift_Model(OTE_Linear_Model_WSS):
         Parameters
         ----------
         opdfile : str or fits.HDUList
-            FITS file to load an OPD from. The OPD must be specified in microns.
+            FITS file to load an OPD from. The OPD data must be specified in microns.
         opd_index : int, optional
-            FITS extension to load OPD from
+            Index of a datacube to load OPD from, if the selected 
+            extension contains a datacube.
         transmission : str or None
             FITS file for pupil mask, with throughput from 0-1. 
             If not explicitly provided, will be inferred from 
             wherever is nonzero in the OPD file.
-        slice : int, optional
-            Slice of a datacube to load OPD from, if the selected 
-            extension contains a datacube.
         segment_mask_file : str
-            FITS file for pupil mask, with throughput from 0-1. If not 
-            explicitly provided, will use JWpupil_segments.fits
+            FITS file for pupil mask, with throughput from 0-1. If not explicitly provided, will
+            use JWpupil_segments_RevW_npix1024.fits, or equivalent for other value of npix
         zero : bool
             Set an OPD to precisely zero everywhere.
         rm_ptt : bool
             Remove piston, tip, and tilt? This is mostly for visualizing 
             the higher order parts of the LOM. Default: False.
-
+        v2v3 : tuple of 2 astropy.Quantities
+            Tuple giving V2,v3 coordinates as quantities, typically in arcminutes, or None to default to
+            the master chief ray location between the two NIRCam modules.
+        include_nominal_field_dependence : bool
+            Include the Zernike polynomial model for OTE field dependence for the nominal OTE.
+            Note, if OPD is None, then this will be ignored and the nominal field dependence will be disabled.
+        control_point_fieldpoint: str
+            A parameter used in the field dependence model for a misaligned secondary mirror.
+            Name of the field point where the OTE MIMF control point is located, on instrument defined by "control_point_instr".
+            Default: 'nrca3_full'.
+            The OTE control point is the field point to which the OTE has been aligned and defines the field angles
+            for the field-dependent SM pose aberrations.
+        npix : int
+            Size of OPD: npix x npix
         """
         
         # Initialize OTE_Linear_Model_WSS

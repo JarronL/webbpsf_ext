@@ -93,9 +93,10 @@ conf = Conf()
 from .logging_utils import setup_logging#, restart_logging
 setup_logging(conf.default_logging_level, verbose=False)
 
+# Load a bunch of shortcuts to various functions of interest
 from .bandpasses import miri_filter, nircam_filter, bp_2mass, bp_wise, bp_gaia
 from .webbpsf_ext_core import MIRI_ext, NIRCam_ext
-from .spectra import stellar_spectrum
+from .spectra import stellar_spectrum, companion_spec, source_spectrum
 from .coords import jwst_point
 
 def _reload(name="webbpsf_ext"):
@@ -115,6 +116,6 @@ def _reload(name="webbpsf_ext"):
     del sys.modules['webbpsf_ext.obs_nircam'] 
     """
     import imp
-    imp.load_module(name,*imp.find_module(name))
+    imp.load_module(name, *imp.find_module(name))
 
     print("{} reloaded".format(name)) 

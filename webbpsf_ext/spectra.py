@@ -1357,7 +1357,7 @@ def linder_table(file=None, **kwargs):
     ----------
     file : string
         Location and name of Linder et al file. 
-        Default is 'BEX_evol_mags_-3_MH_0.00.dat'
+        Default is ``BEX_evol_mags_-3_MH_0.00.dat``.
     """
 
     # Default file to read and load
