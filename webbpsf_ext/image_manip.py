@@ -431,7 +431,8 @@ def rotate_offset(data, angle, cen=None, cval=0.0, order=1,
         two axes.
     reshape : bool, optional
         If `reshape` is True, the output shape is adapted so that the input
-        array is contained completely in the output. Default is True.
+        array is contained completely in the output. The `cen` coordiante
+        is now the center of the array. Default is True.
     order : int, optional
         The order of the spline interpolation, default is 1.
         The order has to be in the range 0-5.
@@ -496,6 +497,7 @@ def rotate_offset(data, angle, cen=None, cval=0.0, order=1,
         interp='quintic'
 
     # Pad and then shift array
+    # Places `cen` position at center of image
     new_shape = (int(ny+2*abs(dely)), int(nx+2*abs(delx)))
     images_shift = []
     for im in data:
@@ -504,33 +506,33 @@ def rotate_offset(data, angle, cen=None, cval=0.0, order=1,
         images_shift.append(im_new)
     images_shift = np.asarray(images_shift)
     
-    # Remove additional dimension in the case of single image
-    #images_shift = images_shift.squeeze()
-    
-    # Rotate images
-    # TODO: Should reshape=True or reshape=reshape?
-    images_shrot = rotate(images_shift, angle, reshape=True, **kwargs)
-    
     if reshape:
-        return images_shrot.squeeze()
+        # Rotate around current center and expand to full size
+        images_fin = rotate(images_shift, angle, reshape=True, **kwargs)
     else:
-        # Shift back to it's location
+        # Perform cropping
         if recenter:
-            images_rot = images_shrot
+            # Keeping 'cen' position in center; no need to reshape to larger size
+            images_rot = rotate(images_shift, angle, reshape=False, **kwargs)
         else:
+            # Reshape to larger size due to image shifting
+            images_shrot = rotate(images_shift, angle, reshape=True, **kwargs)
             images_rot = []
+            # Shift 'cen' back to original location
             for im in images_shrot:
                 im_new = shift_func(im, -1*delx, -1*dely, pad=True, cval=cval, interp=interp)
                 images_rot.append(im_new)
             images_rot = np.asarray(images_rot)
     
+        # Perform cropping
         images_fin = []
         for im in images_rot:
             im_new = pad_or_cut_to_size(im, (ny,nx))
             images_fin.append(im_new)
         images_fin = np.asarray(images_fin)
     
-        return images_fin.squeeze()
+    # Drop out single-valued dimensions
+    return images_fin.squeeze()
 
 def frebin(image, dimensions=None, scale=None, total=True):
     """Fractional rebin
