@@ -308,11 +308,86 @@ def ap_radec(ap_obs, ap_ref, coord_ref, pa, base_off=(0,0), dith_off=(0,0),
         return
 
 
+def convert_to_sky(coords, siaf_obs_name, radec_ref, pa_v3, frame_in='sci'):
+    """ Convert coordinates to RA/Dec
+    
+
+
+    Parameters
+    ==========
+    coord_objs : tuple 
+        (xvals, yvals) positions, where xvals and yvals can be numpy arrays
+        or single values.
+    siaf_obs_name : str
+        Observed SIAF aperture name (e.g., 'NRCA1_FULL').
+    radec_ref : tuple
+        RA and Dec corresponding to aperture's reference point.
+    pa_v3 : float
+        Position angle in degrees measured from North to V3 axis in North to East direction.
+    frame_in : str
+        One of 'tel' (arcsec), 'idl' (arcsec), 'sci' (pixels), or 'det' (pixels).
+
+    Returns
+    =======
+    RA and Dec arrays.
+
+    Example
+    =======
+
+    >>> hdul = fits.open(file)
+    pheader = hdul[0].header
+    fheader = hdul[1].header
+    hdul.close
+
+    # Get SIAF info
+    siaf = pysiaf.Siaf('NIRCam')
+    siaf_obs_name = pheader.get('APERNAME')
+
+    # V3 PA
+    pa_v3 = fheader.get('V3I_YANG')
+    # RA/Dec located at aperture reference position
+    ra_ref = fheader.get('RA_REF')
+    dec_ref = fheader.get('DEC_REF')
+
+    coords_sci = np.random.random_sample(size=(2,100)) * 2040 + 4
+    ra, dec = convert_to_sky(coords_sci, siaf_obs_name, (ra_ref, dec_ref), pa_v3)
+    """
+
+   # SIAF object setup
+    siaf_ref = si_match.get(siaf_obs_name[0:3])
+    apsiaf = siaf_ref[siaf_obs_name]
+
+    xvals, yvals = coords
+
+    # RA/Dec located at aperture reference position
+    ra_ref, dec_ref = radec_ref
+    # V2/V3 aperture reference
+    v2_ref, v3_ref = apsiaf.reference_point('tel')
+
+    # Create attitude matrix
+    att = pysiaf.utils.rotations.attitude(v2_ref, v3_ref, ra_ref, dec_ref, pa_v3)
+    try:
+        # Only works for pysiaf v0.12+
+        apsiaf.set_attitude_matrix(att)
+        # Convert to sky coordinates
+        ra_deg, dec_deg = apsiaf.convert(xvals, yvals, frame_in, 'sky')
+    except AttributeError:
+        # Get V2/V3 positions of each pixel position
+        if frame_in=='tel':
+            v2_all, v3_all = (xvals, yvals)
+        else:
+            v2_all, v3_all = apsiaf.convert(xvals, yvals, frame_in, 'tel')
+        # Use attitude matrix to convert to RA/Dec
+        ra_deg, dec_deg = pysiaf.utils.rotations.pointing(att, v2_all, v3_all)
+
+    return (ra_deg, dec_deg)
+
+
 def radec_to_coord(coord_objs, siaf_ref_name, coord_ref, pa_ref, 
                    frame_out='tel', base_off=(0,0), dith_off=(0,0)):
     """RA/Dec to 'tel' (arcsec), 'sci' (pixels), or 'det' (pixels)
     
-    Convert a series of RA/Dec positions to telescope V2/V3 coordinates (in arcsec).
+    Convert a series of RA/Dec positions to coordinate frame.
     
     Parameters
     ----------
@@ -335,12 +410,12 @@ def radec_to_coord(coord_objs, siaf_ref_name, coord_ref, pa_ref,
         Additional offset from dithering (see APT pointing file)
     """
 
-    return radec_to_v2v3(coord_objs, siaf_ref_name, coord_ref, pa_ref, frame_out=frame_out, 
-                         base_off=base_off, dith_off=dith_off)
+    return radec_to_v2v3(coord_objs, siaf_ref_name, coord_ref, pa_ref, 
+                         frame_out=frame_out, base_off=base_off, dith_off=dith_off)
 
 
-def radec_to_v2v3(coord_objs, siaf_ref_name, coord_ref, pa_ref, frame_out='tel',
-                  base_off=(0,0), dith_off=(0,0)):
+def radec_to_v2v3(coord_objs, siaf_ref_name, coord_ref, pa_ref, 
+                  frame_out='tel', base_off=(0,0), dith_off=(0,0)):
     """RA/Dec to V2/V3
     
     Convert a series of RA/Dec positions to telescope V2/V3 coordinates (in arcsec).
@@ -835,6 +910,66 @@ class jwst_point(object):
             _log.warning("Neither get_cenpos nor get_vert were set to True. Nothing to return.")
             return
 
+    def frame_to_radec(self, coord_objs, frame_in='tel', idl_offsets=None):
+        """Aperture coordinate frame to RA/Dec
+
+        Convert a series of SAIF coordiante positions to RA/Dec sky coordinates 
+        for the observed aperture. Will return a list of RA/Dec coordinate pairs 
+        for all objects at each position.
+
+        Parameters
+        ----------
+        coord_objs : tuple 
+            (xvals, yvals) positions (deg), where xvals and yvas are numpy arrays.
+        frame_in : str
+            One of 'tel' (arcsec), 'idl' (arcsec), 'sci' (pixels), or 'det' (pixels).
+        idl_offsets : None or list of 2-element array
+            Option to specify custom offset locations. Normally this is set to None, and
+            we return RA/Dec for all telescope point positions defined in 
+            `self.position_offsets_act`. However, we can specify offsets here (in 'idl')
+            coordinates if you're only interested in a single position or want a custom
+            location.
+        """
+
+        siaf_ap = self.siaf_ap_obs
+
+        # RA and Dec of ap ref location and the objects in the field
+        ra_ref, dec_ref = (self.ra_obs, self.dec_obs)
+        xvals, yvals = coord_objs
+
+        # Field offset as specified in APT Special Requirements
+        # These appear to be defined in 'idl' coords
+        if idl_offsets is None:
+            idl_offsets = self.position_offsets_act
+
+        out_all = []
+        # For each dither position
+        for idl_off in idl_offsets:
+            # Attitude correction matrix relative to observed aperture
+            att = self.attitude_matrix(idl_off=idl_off, ap_siaf_ref=siaf_ap, coord_ref=(ra_ref, dec_ref))
+
+            try:
+                # Use internal pysiaf conversion wrapper (v0.12+)
+                siaf_ap.set_attitude_matrix(att)
+                ra_deg, dec_deg = siaf_ap.convert(xvals, yvals, frame_in, 'sky')
+                siaf_ap._attitude_matrix = None
+            except AttributeError:
+                # Get V2/V3 positions of each pixel position
+                if frame_in=='tel':
+                    v2_all, v3_all = (xvals, yvals)
+                else:
+                    v2_all, v3_all = siaf_ap.convert(xvals, yvals, frame_in, 'tel')
+                # Use attitude matrix to convert to RA/Dec
+                ra_deg, dec_deg = pysiaf.utils.rotations.pointing(att, v2_all, v3_all)
+
+            out_all.append((ra_deg, dec_deg))
+
+        if len(out_all)==1:
+            return out_all[0]
+        else:
+            return out_all
+
+
     def radec_to_frame(self, coord_objs, frame_out='tel', idl_offsets=None):
         """RA/Dec to aperture coordinate frame
 
@@ -847,7 +982,7 @@ class jwst_point(object):
         coord_objs : tuple 
             (RA, Dec) positions (deg), where RA and Dec are numpy arrays.
         frame_out : str
-            One of 'tel' (arcsec), 'sci' (pixels), or 'det' (pixels).
+            One of 'tel' (arcsec), 'idl' (arcsec), 'sci' (pixels), or 'det' (pixels).
         idl_offsets : None or list of 2-element array
             Option to specify custom offset locations. Normally this is set to None, and
             we return RA/Dec for all telescope point positions defined in 
