@@ -177,16 +177,17 @@ def nircam_filter(filter, pupil=None, mask=None, module=None, ND_acq=False,
         Modify NIRCam non-volatile residue. This is a scale factor relative 
         to 0.280 um thickness already built into filter throughput curves. 
         If set to None, then assumes a scale factor of 1.0. 
-        Setting nvr_scale=0 will remove these contributions.
+        Setting ``nvr_scale=0`` will remove these contributions.
     ote_scale : float
         Scale factor of OTE contaminants relative to End of Life model. 
-        This is the same as setting ice_scale. Will override ice_scale value.
+        This is the same as setting ``ice_scale``. 
+        Will override ``ice_scale`` value.
     nc_scale : float
         Scale factor for NIRCam contaminants relative to End of Life model.
         This model assumes 0.189 um of NVR and 0.050 um of water ice on
         the NIRCam optical elements. Setting this keyword will remove all
         NVR contributions built into the NIRCam filter curves.
-        Overrides nvr_scale value.
+        Overrides ``nvr_scale`` value.
     grism_order : int
         Option to use 2nd order grism throughputs instead. Useful if
         someone wanted to overlay the 2nd order contributions onto a 
