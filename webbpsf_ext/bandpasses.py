@@ -147,8 +147,92 @@ def nircam_com_nd(wave_out=None):
         return np.interp(wave_out, wdata, odata, left=0, right=0)
 
 
+def qe_nircam(channel, module, wave=None):
+    """ NIRCam QE
+
+    Generate NIRCam QE curve 
+    """
+
+    from .maths import jl_poly
+
+    if channel=='SW':
+        if wave is None:
+            sw_wavelength = np.arange(0.5,2.8,0.001)
+        else:
+            sw_wavelength = wave
+        sw_coeffs = np.array([0.65830,-0.05668,0.25580,-0.08350])
+        sw_exponential = 100.
+        sw_wavecut = 2.38
+
+        sw_qe = jl_poly(sw_wavelength, sw_coeffs)
+        red = sw_wavelength > sw_wavecut
+        sw_qe[red] = sw_qe[red] * np.exp((sw_wavecut-sw_wavelength[red])*sw_exponential)
+
+        sw_qe[0] = 0
+        sw_qe[-1] = 0
+
+        sw_qe[sw_qe<0] = 0
+        bp_qe = S.ArrayBandpass(wave=1e4*sw_wavelength, throughput=sw_qe)
+
+    else:
+        if wave is None:
+            lw_wavelength = np.arange(2.25,5.5,0.001)
+        else:
+            lw_wavelength = wave
+
+        lw_coeffs_a = np.array([0.934871,0.051541,-0.281664,0.243867,-0.086009,0.014509,-0.001])
+        lw_factor_a = 0.88
+        lw_coeffs_b = np.array([2.9104951,-2.182822,0.7075635,-0.071767])
+
+        if module.upper()=='A':
+            lw_qe = lw_factor_a * jl_poly(lw_wavelength, lw_coeffs_a)
+        else:
+            lw_qe = jl_poly(lw_wavelength, lw_coeffs_b)
+
+        # lw_exponential = 100.
+        # lw_wavecut = 5.3
+        # red = lw_wavelength > lw_wavecut
+        # lw_qe[red] = lw_qe[red] * np.exp((lw_wavecut-lw_wavelength[red])*lw_exponential)
+
+        lw_qe[0] = 0
+        lw_qe[-1] = 0
+
+        lw_qe[lw_qe<0] = 0
+        bp_qe = S.ArrayBandpass(wave=1e4*lw_wavelength, throughput=lw_qe)
+
+    return bp_qe
+
+def qe_nirspec(wave=None):
+
+    from scipy.interpolate import interp1d
+
+    file = f'qe_nirspec.csv'
+    file_path = str(_bp_dir / file)
+
+    names = ['wave', 'throughput']
+    data  = ascii.read(file_path, data_start=1, names=names)
+
+    if wave is None:
+        wave = data['wave']
+        th = data['throughput']
+    else:
+        func = interp1d(data['wave'], data['throughput'], kind='cubic', 
+                        fill_value='extrapolate')
+        th = func(wave)
+
+    lw_exponential = 1
+    lw_wavecut = 5.5
+    red = wave > lw_wavecut
+    th[red] = th[red] * np.exp((lw_wavecut-wave[red])*lw_exponential)
+
+    th[th<0] = 0
+    bp = S.ArrayBandpass(wave*1e4, th)
+
+    return bp
+
+
 def nircam_filter(filter, pupil=None, mask=None, module=None, ND_acq=False,
-    ice_scale=None, nvr_scale=None, ote_scale=None, nc_scale=None,
+    ice_scale=0, nvr_scale=0, ote_scale=None, nc_scale=None, fix_lwqe=False,
     grism_order=1, coron_substrate=False, include_blocking=True, **kwargs):
     """Read filter bandpass.
 
@@ -170,24 +254,28 @@ def nircam_filter(filter, pupil=None, mask=None, module=None, ND_acq=False,
     ND_acq : bool
         ND acquisition square in coronagraphic mask.
     ice_scale : float
+        **Set to 0 for measured flight levels.**
         Add in additional OTE H2O absorption. This is a scale factor
         relative to 0.0131 um thickness. Also includes about 0.0150 um of
         photolyzed Carbon.
     nvr_scale : float
+        **Set to 0 for measured flight levels.**
         Modify NIRCam non-volatile residue. This is a scale factor relative 
         to 0.280 um thickness already built into filter throughput curves. 
         If set to None, then assumes a scale factor of 1.0. 
         Setting ``nvr_scale=0`` will remove these contributions.
     ote_scale : float
-        Scale factor of OTE contaminants relative to End of Life model. 
+        **Set to 0 for measured flight levels.**
+        Scale factor of OTE contaminants relative to pre-flight model. 
         This is the same as setting ``ice_scale``. 
         Will override ``ice_scale`` value.
     nc_scale : float
-        Scale factor for NIRCam contaminants relative to End of Life model.
+        **Set to 0 for measured flight levels.**
+        Scale factor for NIRCam contaminants relative to pre-flight model.
         This model assumes 0.189 um of NVR and 0.050 um of water ice on
-        the NIRCam optical elements. Setting this keyword will remove all
-        NVR contributions built into the NIRCam filter curves.
-        Overrides ``nvr_scale`` value.
+        the NIRCam optical elements. Setting this keyword will remove
+        NVR contributions already built into the NIRCam filter curves.
+        Will override ``nvr_scale`` value.
     grism_order : int
         Option to use 2nd order grism throughputs instead. Useful if
         someone wanted to overlay the 2nd order contributions onto a 
@@ -238,6 +326,15 @@ def nircam_filter(filter, pupil=None, mask=None, module=None, ND_acq=False,
     # Select channel (SW or LW) for minor decisions later on
     channel = 'SW' if bp.avgwave()/1e4 < 2.3 else 'LW'
 
+    # Fix QE
+    if fix_lwqe and (channel=='LW'):
+        bp_qe_orig = qe_nircam(channel, module, wave=bp.wave/1e4)
+        bp_qe_new  = qe_nirspec(wave=bp.wave/1e4)
+        th_new = bp.throughput
+        indnz = bp_qe_orig.throughput>0
+        th_new[indnz] = th_new[indnz] * bp_qe_new.throughput[indnz] / bp_qe_orig.throughput[indnz]
+        bp = S.ArrayBandpass(bp.wave, th_new, name=bp.name)
+
     # Select which wavelengths to keep
     igood = bp_igood(bp, min_trans=0.005, fext=0.1)
     wgood = (bp.wave)[igood]
@@ -250,7 +347,8 @@ def nircam_filter(filter, pupil=None, mask=None, module=None, ND_acq=False,
         # Grism transmission curve follows a 3rd-order polynomial
         # The following coefficients assume that wavelength is in um
         if (module == 'A') and (grism_order==1):
-            cf_g = np.array([0.068695897, -0.943894294, 4.1768413, -5.306475735])
+            cf_g = 1.14 * np.array([-0.44941915, -1.10918236, 1.09376196, -0.26981016, 0.02065479])[::-1]
+            # cf_g = np.array([0.068695897, -0.943894294, 4.1768413, -5.306475735])
         elif (module == 'B') and (grism_order==1):
             cf_g = np.array([0.050758635, -0.697433006, 3.086221627, -3.92089596])
         elif (module == 'A') and (grism_order==2):
