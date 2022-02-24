@@ -258,7 +258,8 @@ def BOSZ_spectrum(Teff, metallicity, log_g, res=2000, interpolate=True,
 
 
     name = 'BOSZ(Teff={},z={},logG={})'.format(Teff, metallicity, log_g)
-    sp = S.ArraySpectrum(wfin[:-1], ffin[:-1], 'angstrom', 'flam', name=name)
+    sp = S.ArraySpectrum(wave=wfin[:-1], flux=ffin[:-1], 
+                         waveunits='angstrom', fluxunits='flam', name=name)
 
     return sp
 
