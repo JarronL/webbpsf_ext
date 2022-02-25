@@ -2499,8 +2499,6 @@ def _gen_psf_coeff(self, nproc=None, wfe_drift=0, force=False, save=True,
         except Exception as e:
             _log.error('Caught an exception during multiprocess.')
             _log.info('Closing multiprocess pool.')
-            pool.terminate()
-            pool.close()
             raise e
         else:
             _log.info('Closing multiprocess pool.')
