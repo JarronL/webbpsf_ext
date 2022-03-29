@@ -3,6 +3,8 @@ from pathlib import Path
 import numpy as np
 from astropy.io import fits, ascii
 
+from webbpsf_ext.maths import jl_poly
+
 from .utils import webbpsf, S
 
 import logging
@@ -46,7 +48,6 @@ def bp_igood(bp, min_trans=0.001, fext=0.05):
 def miri_filter(filter, **kwargs):
     
     """
-    No need to include pupil for the 
     """
     
     filter = filter.upper()
@@ -126,7 +127,7 @@ def nircam_com_nd(wave_out=None):
     """
     fname = 'NDspot_ODvsWavelength.txt'
     path_ND = _bp_dir / fname
-    data = ascii.read(path_ND)
+    data = ascii.read(path_ND, format='basic')
 
     wdata = data[data.colnames[0]].data # Wavelength (um)
     odata = data[data.colnames[1]].data # Optical Density
@@ -145,6 +146,82 @@ def nircam_com_nd(wave_out=None):
         return wdata, odata
     else:
         return np.interp(wave_out, wdata, odata, left=0, right=0)
+
+
+def nircam_grism_si_ar(module, return_bp=False):
+    """NIRCam grism Si and AR coating transmission data"""
+
+    from scipy.signal import savgol_filter
+
+    # Si plus AR coating transmission
+    fname_ar = 'grism_si_2ar.txt' if module=='A' else 'grism_si_1ar.txt'
+    path_ar = _bp_dir / fname_ar
+    data = ascii.read(path_ar, format='csv')
+    wdata = data[data.colnames[0]].data # Wavelength (um)
+    tdata = data[data.colnames[1]].data / 100
+
+    # Smooth the data, which was data-thiefed from jpeg images
+    tdata = savgol_filter(tdata, 10, 3)
+
+    if return_bp:
+        bp = S.ArrayBandpass(wave=1e4*wdata, throughput=tdata)
+        return bp
+    else:
+        return wdata, tdata
+
+def nircam_grism_th(module, grism_order=1, wave_out=None, return_bp=False):
+    """NIRCam grism throughput"""
+
+    from scipy.interpolate import interp1d
+
+    # Si plus AR coating transmission
+    wdata, tdata = nircam_grism_si_ar(module, return_bp=False)
+
+    # coefficients are only valid for 2.3-5.1 um
+    if (module == 'A') and (grism_order==1):
+        # [x^5, x^4, x^3, x^2, x^1, x^0]
+        # Tom G's blaze angle of 6.16 deg
+        cf_g = np.array([-0.01840, +0.36099, -2.74690, +9.95251, -16.66533, +10.27616])
+    elif (module == 'B') and (grism_order==1):
+        # Blaze angle of 5.75 deg
+        # cf_g = np.array([-0.007171, +0.133052, -0.908749, +2.634983, -2.429473, -0.391573])
+        # Original PC Grate simulation (9/15/2014)
+        cf_g = np.array([+0.00307, +0.01745, -0.61644, +3.23555, -4.34493])
+    elif (module == 'A') and (grism_order==2):
+        # TODO: Update with blaze angle of 6.16 deg
+        cf_g = np.array([+0.04732, -0.77837, +4.77879, -12.97625, +13.15022])
+    elif (module == 'B') and (grism_order==2):
+        cf_g = np.array([+0.04732, -0.77837, +4.77879, -12.97625, +13.15022])
+
+    # Grism blaze function
+    gdata = jl_poly(wdata, cf_g[::-1])
+    # Assumes Si transmission, so divide by 0.7 
+    # since Si transmission accounted for in tdata
+    gdata /= 0.7
+    # Multiply by 0.85 for groove shadowing
+    gdata *= 0.85
+
+    # Create total throughput interpolation function
+    th_data = tdata*gdata
+    th_func = interp1d(wdata, th_data, kind='cubic', fill_value=0)
+    
+    if wave_out is None:
+        # Blaze function coefficients are only valid for 2.3-5.1 um
+        wave_out = wdata[(wdata>=2.3) & (wdata<=5.1)]
+        return_wave = True
+    else:
+        return_wave = False
+
+    trans = th_func(wave_out)
+    trans[trans < 0] = 0
+    
+    if return_bp:
+        bp = S.ArrayBandpass(wave=1e4*wave_out, throughput=trans)
+        return bp
+    elif return_wave:
+        return wdata, trans
+    else:
+        return trans
 
 
 def qe_nircam(channel, module, wave=None):
@@ -210,7 +287,7 @@ def qe_nirspec(wave=None):
     file_path = str(_bp_dir / file)
 
     names = ['wave', 'throughput']
-    data  = ascii.read(file_path, data_start=1, names=names)
+    data  = ascii.read(file_path, data_start=1, names=names, format='csv')
 
     if wave is None:
         wave = data['wave']
@@ -317,7 +394,7 @@ def nircam_filter(filter, pupil=None, mask=None, module=None, ND_acq=False,
         elif filter in ['F405N', 'F466N','F470N']:
             f2 = f'F444W_FM.xlsx_filteronly_mod{module}_sorted.txt'
 
-        tbl2 = ascii.read(str(fdir2 / f2))
+        tbl2 = ascii.read(str(fdir2 / f2), format='basic')
         w2 = tbl2['microns'].data * 1e4
         th2 = tbl2['transmission'].data
         th_new = bp.throughput * np.interp(bp.wave, w2, th2, left=0, right=0)
@@ -344,22 +421,8 @@ def nircam_filter(filter, pupil=None, mask=None, module=None, ND_acq=False,
 
     # Read in grism throughput and multiply filter bandpass
     if (pupil is not None) and ('GRISM' in pupil):
-        # Grism transmission curve follows a 3rd-order polynomial
-        # The following coefficients assume that wavelength is in um
-        if (module == 'A') and (grism_order==1):
-            cf_g = 1.14 * np.array([-0.44941915, -1.10918236, 1.09376196, -0.26981016, 0.02065479])[::-1]
-            # cf_g = np.array([0.068695897, -0.943894294, 4.1768413, -5.306475735])
-        elif (module == 'B') and (grism_order==1):
-            cf_g = np.array([0.050758635, -0.697433006, 3.086221627, -3.92089596])
-        elif (module == 'A') and (grism_order==2):
-            cf_g = np.array([0.05172, -0.85065, 5.22254, -14.18118, 14.37131])
-        elif (module == 'B') and (grism_order==2):
-            cf_g = np.array([0.03821, -0.62853, 3.85887, -10.47832, 10.61880])
-
-        # Create polynomial function for grism throughput from coefficients
-        p = np.poly1d(cf_g)
-        th_grism = p(bp.wave/1e4)
-        th_grism[th_grism < 0] = 0
+        th_grism = nircam_grism_th(module, grism_order=grism_order, 
+                                   wave_out=bp.wave/1e4, return_bp=False)
 
         # Multiply filter throughput by grism
         th_new = th_grism * bp.throughput
@@ -517,7 +580,7 @@ def nircam_filter(filter, pupil=None, mask=None, module=None, ND_acq=False,
     if ((ice_scale is not None) or (nvr_scale is not None)) and ('LW' in channel):
         fname = _bp_dir / 'ote_nc_sim_1.00.txt'
         names = ['Wave', 't_ice', 't_nvr', 't_sys']
-        data  = ascii.read(fname, data_start=1, names=names)
+        data  = ascii.read(fname, data_start=1, names=names, format='basic')
 
         wtemp = data['Wave']
         wtemp = np.insert(wtemp, 0, [1.0]) # Estimates for w<2.5um
@@ -790,7 +853,7 @@ def bp_gaia(filter, release='DR2'):
     else:
         raise ValueError(f"Filter '{filter}' not recognized. Either 'g', 'bp', or 'rp'.")
 
-    tbl = ascii.read(file, names=names)
+    tbl = ascii.read(file, names=names, format='basic')
     w = tbl['w_nm'] * 10  # Convert to Angstrom
     th = tbl[fcol]
 
