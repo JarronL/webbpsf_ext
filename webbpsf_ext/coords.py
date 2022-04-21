@@ -214,16 +214,19 @@ def NIRCam_V2V3_limits(module, channel='LW', pupil=None, rederive=False, return_
             v3_min, v3_max = v2v3_limits[name]['V3']
     else: # Or use preset coordinates
         if module=='A':
-            v2_min, v2_max, v3_min, v3_max = (0.2, 2.7, -9.5, -7.0)
+            v2_min, v2_max, v3_min, v3_max = (0.3, 2.6, -9.35, -7.1)
         else:
-            v2_min, v2_max, v3_min, v3_max = (-2.7, -0.2, -9.5, -7.0)
+            v2_min, v2_max, v3_min, v3_max = (-2.6, -0.3, -9.35, -7.1)
+
+        # Offset Lyot field of view coverage
+        if (pupil is not None) and ('LYOT' in pupil):
+            v3_min += 0.8
+            v3_max += 0.8
 
         if return_corners:
             return np.array([v2_min, v2_min, v2_max, v2_max]), np.array([v3_min, v3_max, v3_min, v3_max])
 
-    return v2_min, v2_max, v3_min, v3_max 
-
-
+    return v2_min, v2_max, v3_min, v3_max
 
 
 def ap_radec(ap_obs, ap_ref, coord_ref, pa, base_off=(0,0), dith_off=(0,0),
