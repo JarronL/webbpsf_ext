@@ -2304,6 +2304,8 @@ def _inst_copy(self):
     inst._detector = self._detector
     inst._detector_position = self._detector_position
     inst._aperturename = self._aperturename
+    inst._detector_geom_info = deepcopy(self._detector_geom_info)
+
 
     # Other options
     inst.options = self.options
