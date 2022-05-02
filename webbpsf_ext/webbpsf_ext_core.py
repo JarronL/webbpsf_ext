@@ -2304,6 +2304,8 @@ def _inst_copy(self):
     inst._detector = self._detector
     inst._detector_position = self._detector_position
     inst._aperturename = self._aperturename
+    inst._detector_geom_info = deepcopy(self._detector_geom_info)
+
 
     # Other options
     inst.options = self.options
@@ -2944,7 +2946,9 @@ def _gen_wfefield_coeff(self, force=False, save=True, return_results=False, retu
     # Want full detector footprint, not just subarray aperture
     if self.name=='NIRCam':
         pupil = self.pupil_mask
-        v2_min, v2_max, v3_min, v3_max = NIRCam_V2V3_limits(module, channel=channel, pupil=pupil, rederive=True, border=1)
+        v23_lims = NIRCam_V2V3_limits(module, channel=channel, pupil=pupil, 
+                                      rederive=True, border=1)
+        v2_min, v2_max, v3_min, v3_max = v23_lims
         igood = v3_all > v3_min
         v2_all = np.append(v2_all[igood], [v2_min, v2_max, v2_min, v2_max])
         v3_all = np.append(v3_all[igood], [v3_min, v3_min, v3_max, v3_max])
@@ -2970,6 +2974,15 @@ def _gen_wfefield_coeff(self, force=False, save=True, return_results=False, retu
         v2_all = np.append(v2_all, [v2_min, v2_max, v2_min, v2_max])
         v3_all = np.append(v3_all, [v3_min, v3_min, v3_max, v3_max])
         npos = len(v2_all)
+
+    # WebbPSF includes some strict NIRCam V2/V3 limits for OTE field position
+    #   V2: -2.6 to 2.6
+    #   V3: -9.4 to -6.2
+    # Make sure we don't violate those limits
+    v2_all[v2_all<-2.6] = -2.58
+    v2_all[v2_all>2.6]  = +2.58
+    v3_all[v3_all<-9.4] = -9.38
+    v3_all[v3_all>-6.2] = -6.22
 
     # Convert V2/V3 positions to sci coords for specified aperture
     apname = self.aperturename
