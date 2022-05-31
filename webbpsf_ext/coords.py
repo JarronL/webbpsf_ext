@@ -404,7 +404,7 @@ def radec_to_coord(coord_objs, siaf_ref_name, coord_ref, pa_ref,
     siaf_ref_name : str
         Reference SIAF aperture name (e.g., 'NRCALL_FULL') 
     coord_ref : list or tuple
-        RA and Dec towards which reference SIAF points
+        RA and Dec of SIAF reference point
     pa : float
         Position angle in degrees measured from North to V3 axis in North to East direction.
         
@@ -435,7 +435,7 @@ def radec_to_v2v3(coord_objs, siaf_ref_name, coord_ref, pa_ref,
     siaf_ref_name : str
         Reference SIAF aperture name (e.g., 'NRCALL_FULL') 
     coord_ref : list or tuple
-        RA and Dec towards which reference SIAF points
+        RA and Dec of SIAF reference point
     pa : float
         Position angle in degrees measured from North to V3 axis in North to East direction.
         
