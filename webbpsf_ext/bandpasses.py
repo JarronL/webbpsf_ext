@@ -182,11 +182,13 @@ def nircam_grism_th(module, grism_order=1, wave_out=None, return_bp=False):
         # [x^5, x^4, x^3, x^2, x^1, x^0]
         # Tom G's blaze angle of 6.16 deg
         cf_g = np.array([-0.01840, +0.36099, -2.74690, +9.95251, -16.66533, +10.27616])
+        # Original PC Grate simulation (9/15/2014)
+        # cf_g = np.array([+0.00307, +0.01745, -0.61644, +3.23555, -4.34493])
     elif (module == 'B') and (grism_order==1):
         # Blaze angle of 5.75 deg
-        # cf_g = np.array([-0.007171, +0.133052, -0.908749, +2.634983, -2.429473, -0.391573])
+        cf_g = np.array([-0.007171, +0.133052, -0.908749, +2.634983, -2.429473, -0.391573])
         # Original PC Grate simulation (9/15/2014)
-        cf_g = np.array([+0.00307, +0.01745, -0.61644, +3.23555, -4.34493])
+        # cf_g = np.array([+0.00307, +0.01745, -0.61644, +3.23555, -4.34493])
     elif (module == 'A') and (grism_order==2):
         # TODO: Update with blaze angle of 6.16 deg
         cf_g = np.array([+0.04732, -0.77837, +4.77879, -12.97625, +13.15022])
@@ -199,7 +201,9 @@ def nircam_grism_th(module, grism_order=1, wave_out=None, return_bp=False):
     # since Si transmission accounted for in tdata
     gdata /= 0.7
     # Multiply by 0.85 for groove shadowing
-    gdata *= 0.85
+    # gdata *= 0.85
+    #Update from D. Jaffe suggest only 3% loss from groove shadowing (May 2022)
+    gdata *= 0.97
 
     # Create total throughput interpolation function
     th_data = tdata*gdata
@@ -705,7 +709,7 @@ def nircam_grism_wref(pupil='GRISM', module='A'):
     elif 'GRISM90' in pupil:
         pupil = 'GRISMC'
 
-    # Mean spectral dispersion in number of pixels per um
+    # Reference wavelengths in um
     if ('GRISMC' in pupil) and (module == 'A'):
         wref = 3.978
     elif ('GRISMR' in pupil)  and (module == 'A'):
