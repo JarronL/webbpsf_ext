@@ -146,3 +146,5 @@ def setup_logging(level='INFO', filename=None, verbose=True):
 
     conf.logging_filename = filename
     restart_logging(verbose=verbose)
+
+    # webbpsf.setup_logging(level=level)
