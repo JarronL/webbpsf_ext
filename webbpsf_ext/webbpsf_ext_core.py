@@ -141,16 +141,12 @@ class NIRCam_ext(webbpsf_NIRCam):
 
     @property
     def is_lyot(self):
-        """
-        Is a Lyot mask in the pupil wheel?
-        """
+        """Is a Lyot mask in the pupil wheel?"""
         pupil = self.pupil_mask
         return (pupil is not None) and ('LYOT' in pupil)
     @property
     def is_coron(self):
-        """
-        Observation with coronagraphic mask (incl Lyot stop)?
-        """
+        """Observation with coronagraphic mask (incl Lyot stop)?"""
         mask = self.image_mask
         return self.is_lyot and ((mask is not None) and ('MASK' in mask))
     @property
@@ -2341,6 +2337,10 @@ def _wrap_coeff_for_mp(args):
 
     args => (inst,w,fov_pix,oversample)
     """
+    # Change log levels to WARNING for webbpsf_ext, WebbPSF, and POPPY
+    log_prev = conf.logging_level
+    setup_logging('WARN', verbose=False)
+
     # No multiprocessing for monochromatic wavelengths
     mp_prev = poppy.conf.use_multiprocessing
     poppy.conf.use_multiprocessing = False
@@ -2362,6 +2362,7 @@ def _wrap_coeff_for_mp(args):
 
     # Return to previous setting
     poppy.conf.use_multiprocessing = mp_prev
+    setup_logging(log_prev, verbose=False)
 
     # Return distorted PSF
     if inst.include_distortions:
@@ -2434,7 +2435,11 @@ def _gen_psf_coeff(self, nproc=None, wfe_drift=0, force=False, save=True,
         if return_results:
             return data, hdr
         else:
-            del self.psf_coeff, self.psf_coeff_header
+            try:
+                del self.psf_coeff, self.psf_coeff_header
+            except AttributeError:
+                pass
+
             self.psf_coeff = data
             self.psf_coeff_header = hdr
             return
@@ -2649,7 +2654,10 @@ def _gen_psf_coeff(self, nproc=None, wfe_drift=0, force=False, save=True,
             hdu.writeto(outfile, overwrite=True)
 
     if return_results==False:
-        del self.psf_coeff, self.psf_coeff_header
+        try:
+            del self.psf_coeff, self.psf_coeff_header
+        except AttributeError:
+            pass
         self.psf_coeff = coeff_all
         self.psf_coeff_header = hdr
     extras_dict = {'images' : images, 'waves': waves}

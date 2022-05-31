@@ -138,19 +138,20 @@ def fshift(inarr, delx=0, dely=0, pad=False, cval=0.0, interp='linear', **kwargs
         # Check if fracx and fracy are effectively 0
         fxis0 = np.isclose(fracx,0, atol=1e-5)
         fyis0 = np.isclose(fracy,0, atol=1e-5)
-        # If fractional shifts are significant
-        # use bi-linear interpolation between four pixels
         
-        if interp=='linear':
-            if not (fxis0 and fyis0):
-                # Break bi-linear interpolation into four parts
-                # to avoid NaNs unnecessarily affecting integer shifted dimensions
-                part1 = out * ((1-fracx)*(1-fracy))
-                part2 = 0 if fyis0 else np.roll(out,1,axis=0)*((1-fracx)*fracy)
-                part3 = 0 if fxis0 else np.roll(out,1,axis=1)*((1-fracy)*fracx)
-                part4 = 0 if (fxis0 or fyis0) else np.roll(np.roll(out, 1, axis=1), 1, axis=0) * fracx*fracy
+        if fxis0 and fyis0:
+            # If fractional shifts are 0, no need for interpolation
+            # Just perform whole pixel shifts
+            pass
+        elif interp=='linear':
+            # Break bi-linear interpolation into four parts
+            # to avoid NaNs unnecessarily affecting integer shifted dimensions
+            part1 = out * ((1-fracx)*(1-fracy))
+            part2 = 0 if fyis0 else np.roll(out,1,axis=0)*((1-fracx)*fracy)
+            part3 = 0 if fxis0 else np.roll(out,1,axis=1)*((1-fracy)*fracx)
+            part4 = 0 if (fxis0 or fyis0) else np.roll(np.roll(out, 1, axis=1), 1, axis=0) * fracx*fracy
 
-                out = part1 + part2 + part3 + part4
+            out = part1 + part2 + part3 + part4
         elif interp=='cubic' or interp=='quintic':
             fracx = 0 if fxis0 else fracx
             fracy = 0 if fxis0 else fracy

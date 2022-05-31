@@ -4,7 +4,7 @@ webbpsf_ext - A Toolset for extending WebbPSF functionality
 
 webbpsf_ext uses WebbPSF (https://webbpsf.readthedocs.io) to generate a series of 
 monochromatic PSF simulations, then produces polynomial fits to each pixel. 
-Storing the coefficients rather than a library of PSFS allows for quick generation 
+Storing the coefficients rather than a library of PSFs allows for quick generation 
 (via matrix multiplication) of PSF images for an arbitrary number of wavelengths 
 (subject to hardware memory limitations, of course). 
 
@@ -25,7 +25,7 @@ time to calculate . Since the change to the PSF coefficients varies smoothly
 with respect to WFE drift components, it's simple to parameterize the coefficient
 residuals.
 
-Developed by Jarron Leisenring at University of Arizona (2015-2021).
+Developed by Jarron Leisenring at University of Arizona (2015-2022).
 """
 
 import os
