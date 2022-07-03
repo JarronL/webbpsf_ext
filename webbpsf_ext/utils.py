@@ -93,3 +93,27 @@ def check_fitsgz(opd_file, inst_str=None):
 
     return opd_file
 
+def get_one_siaf(filename=None, instrument='NIRCam'):
+    """
+    Convenience function to import a SIAF XML file to override the
+    default pysiaf aperture information.
+
+    Parameters
+    ==========
+    filename : str or None
+        Name of SIAF file (e.g., 'NIRCam_SIAF.xml').
+        If not set, returns default SIAF object.
+    instrument : str
+        Name of instrument associated with XML file. 
+    """
+    siaf_object = pysiaf.Siaf(instrument)
+
+    if filename is None:
+        return siaf_object
+    else:
+        aperture_collection_NRC_base = pysiaf.read.read_jwst_siaf(filename=filename)
+        siaf_object.apertures = aperture_collection_NRC_base
+        siaf_object.description = os.path.basename(filename)
+        siaf_object.observatory = 'JWST'
+        return siaf_object
+
