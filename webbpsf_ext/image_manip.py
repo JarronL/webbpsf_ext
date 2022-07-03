@@ -259,6 +259,9 @@ def pad_or_cut_to_size(array, new_shape, fill_val=0.0, offset_vals=None,
         or (ypix,xpix) direction for 2D/3D prior to cropping or expansion.
     shift_func : function
         Function to use for shifting. Usually either `fshift` or `fourier_imshift`.
+    interp : str
+        Type of interpolation to use during the sub-pixel shift for `fshift`. 
+        Valid values are 'linear', 'cubic', and 'quintic'.
 
     Returns
     -------
