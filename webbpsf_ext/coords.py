@@ -8,11 +8,7 @@ from .utils import pysiaf
 
 # Define these here rather than calling multiple times
 # since it takes some time to generate these.
-siaf_nrc = pysiaf.Siaf('NIRCam')
-siaf_nis = pysiaf.Siaf('NIRISS')
-siaf_mir = pysiaf.Siaf('MIRI')
-siaf_nrs = pysiaf.Siaf('NIRSpec')
-siaf_fgs = pysiaf.Siaf('FGS')
+from .utils import siaf_nrc, siaf_nis, siaf_mir, siaf_fgs, siaf_nrs
 si_match = {'NRC': siaf_nrc, 'NIS': siaf_nis, 'MIR': siaf_mir, 'NRS': siaf_nrs, 'FGS': siaf_fgs}
 
 
@@ -147,7 +143,9 @@ def get_NRC_v2v3_limits(pupil=None, border=10, return_corners=False, **kwargs):
         Otherwise, values are chosen to be a square in V2/V3.
     """
     
-    siaf = pysiaf.Siaf('NIRCam')
+    from copy import deepcopy
+
+    siaf = deepcopy(siaf_nrc)
     siaf.generate_toc()
 
     names_dict = {

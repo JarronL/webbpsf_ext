@@ -15,6 +15,7 @@ from astropy.io import fits
 from poppy.utils import krebin
 
 from .utils import S
+from .utils import siaf_nrc, siaf_nis, siaf_mir, siaf_fgs, siaf_nrs
 
 # Program bar
 from tqdm.auto import trange, tqdm
@@ -1002,17 +1003,16 @@ def distort_image(hdulist_or_filename, ext=0, to_frame='sci', fill_value=0,
     from scipy.interpolate import RegularGridInterpolator
 
     def _get_default_siaf(instrument, aper_name):
-
-        # Create new naming because SIAF requires special capitalization
-        if instrument == "NIRCAM":
-            siaf_name = "NIRCam"
-        elif instrument == "NIRSPEC":
-            siaf_name = "NIRSpec"
-        else:
-            siaf_name = instrument
+        si_match = {
+            'NIRCAM' : siaf_nrc, 
+            'NIRSPEC': siaf_nis, 
+            'MIRI'   : siaf_mir, 
+            'NIRISS' : siaf_nrs, 
+            'FGS'    : siaf_fgs,
+            }
 
         # Select a single SIAF aperture
-        siaf = pysiaf.Siaf(siaf_name)
+        siaf = si_match[instrument.upper()]
         aper = siaf.apertures[aper_name]
 
         return aper
@@ -1314,7 +1314,17 @@ def convolve_image(hdul_sci_image, hdul_psfs, return_hdul=False,
 
     # Get SIAF aperture info
     hdr_psf = hdul_psfs[0].header
-    siaf = pysiaf.siaf.Siaf(hdr_psf['INSTRUME'])
+
+    si_match = {
+        'NIRCAM' : siaf_nrc, 
+        'NIRSPEC': siaf_nis, 
+        'MIRI'   : siaf_mir, 
+        'NIRISS' : siaf_nrs, 
+        'FGS'    : siaf_fgs,
+        }
+
+    # Select a single SIAF aperture
+    siaf = si_match[hdr_psf['INSTRUME'].upper()]
     siaf_ap_psfs = siaf[hdr_psf['APERNAME']]
 
     if crop_zeros:
@@ -1419,8 +1429,11 @@ def convolve_image(hdul_sci_image, hdul_psfs, return_hdul=False,
         im_conv[iy1:iy2,ix1:ix2] = im_conv_crop
 
     # Scale to specified output sampling
-    output_sampling = 1 if output_sampling is None else output_sampling
-    scale = output_sampling / hdr_im['OSAMP']
+    if output_sampling is None:
+        scale = 1
+        output_sampling = hdr_im['OSAMP']
+    else:
+        scale = output_sampling / hdr_im['OSAMP']
     im_conv = frebin(im_conv, scale=scale)
 
     if return_hdul:

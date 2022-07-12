@@ -1,4 +1,5 @@
 # Import libraries
+from copy import deepcopy
 import numpy as np
 import matplotlib
 import matplotlib.pyplot as plt
@@ -7,6 +8,14 @@ import os, sys
 import six
 
 import webbpsf, poppy, pysiaf
+
+# Define these here rather than calling multiple times
+# since it takes some time to generate these.
+siaf_nrc = pysiaf.Siaf('NIRCam')
+siaf_nis = pysiaf.Siaf('NIRISS')
+siaf_mir = pysiaf.Siaf('MIRI')
+siaf_nrs = pysiaf.Siaf('NIRSpec')
+siaf_fgs = pysiaf.Siaf('FGS')
 
 on_rtd = os.environ.get('READTHEDOCS') == 'True'
 # Preferred matplotlib settings
@@ -106,7 +115,15 @@ def get_one_siaf(filename=None, instrument='NIRCam'):
     instrument : str
         Name of instrument associated with XML file. 
     """
-    siaf_object = pysiaf.Siaf(instrument)
+    si_match = {
+        'NIRCAM' : siaf_nrc, 
+        'NIRSPEC': siaf_nis, 
+        'MIRI'   : siaf_mir, 
+        'NIRISS' : siaf_nrs, 
+        'FGS'    : siaf_fgs,
+        }
+
+    siaf_object = deepcopy(si_match[instrument.upper()])
 
     if filename is None:
         return siaf_object
