@@ -75,6 +75,22 @@ class NIRCam_ext(webbpsf_NIRCam):
     oversample : int
         Factor to oversample during WebbPSF calculations.
         Default 2 for coronagraphy and 4 otherwise.
+
+    Keyword Args
+    ============
+    fovmax_wfedrift : int or None
+        Maximum allowed size for coefficient modifications associated
+        with WFE drift. Default is 256. Any pixels beyond this size will 
+        be considered to have 0 residual difference
+    fovmax_wfemask : int or None
+        Maximum allowed size for coefficient modifications associated
+        with focal plane masks. Default is 256. Any pixels beyond this size will 
+        be considered to have 0 residual difference
+    fovmax_wfefield : int or None
+        Maximum allowed size for coefficient modifications due to field point
+        variations such as distortion. Default is 128. Any pixels beyond this 
+        size will be considered to have 0 residual difference
+
     """
 
     def __init__(self, filter=None, pupil_mask=None, image_mask=None, 
@@ -884,6 +900,22 @@ class MIRI_ext(webbpsf_MIRI):
     oversample : int
         Factor to oversample during WebbPSF calculations.
         Default 2 for coronagraphy and 4 otherwise.
+
+    Keyword Args
+    ============
+    fovmax_wfedrift : int or None
+        Maximum allowed size for coefficient modifications associated
+        with WFE drift. Default is 256. Any pixels beyond this size will 
+        be considered to have 0 residual difference
+    fovmax_wfemask : int or None
+        Maximum allowed size for coefficient modifications associated
+        with focal plane masks. Default is 256. Any pixels beyond this size will 
+        be considered to have 0 residual difference
+    fovmax_wfefield : int or None
+        Maximum allowed size for coefficient modifications due to field point
+        variations such as distortion. Default is 128. Any pixels beyond this 
+        size will be considered to have 0 residual difference
+
     """
 
     def __init__(self, filter=None, pupil_mask=None, image_mask=None, 
@@ -1637,9 +1669,9 @@ def _init_inst(self, filter=None, pupil_mask=None, image_mask=None,
 
     # Max FoVs for calculating drift and field-dependent coefficient residuals
     # Any pixels beyond this size will be considered to have 0 residual difference
-    self._fovmax_wfedrift = 256
-    self._fovmax_wfefield = 128
-    self._fovmax_wfemask  = 256
+    self._fovmax_wfedrift = kwargs.get('fovmax_wfedrift', 256)
+    self._fovmax_wfefield = kwargs.get('fovmax_wfefield', 128)
+    self._fovmax_wfemask  = kwargs.get('fovmax_wfemask', 256)
 
     self.psf_coeff = None
     self.psf_coeff_header = None
