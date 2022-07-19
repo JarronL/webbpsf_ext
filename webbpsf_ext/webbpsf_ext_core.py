@@ -4023,7 +4023,7 @@ def _coeff_mod_wfe_mask(self, coord_vals, coord_frame, siaf_ap=None):
 
     cf_fit = self._psf_coeff_mod.get('si_mask', None) 
 
-    # Coord values are set, but not coefficients supplied
+    # Coord values are set, but no coefficients supplied
     if (coord_vals is not None) and (cf_fit is None):
         _log.warning("You must run `gen_wfemask_coeff` first before setting the coord_vals parameter for masked focal planes.")
         _log.info("`calc_psf_from_coeff` will continue without mask field dependency.")
@@ -4416,11 +4416,11 @@ def _transmission_map(self, coord_vals, coord_frame, siaf_ap=None):
     siaf_ap = siaf_ap_mask if siaf_ap is None else siaf_ap
     coord_frame = coord_frame.lower()
 
-    # Convert to common 'tel' coordinates
+    # Convert to 'idl' coordinates
     cx, cy = np.asarray(coord_vals)
     if (siaf_ap.AperName != siaf_ap_mask.AperName):
         cx_tel, cy_tel = siaf_ap.convert(cx, cy, coord_frame, 'tel')
-        cx_idl, cy_idl = siaf_ap_mask.convert(cx_tel, cy_tel, 'tel', 'idl')
+        cx_idl, cy_idl = siaf_ap_mask.tel_to_idl(cx_tel, cy_tel)
     elif coord_frame=='idl':
         cx_idl, cy_idl = (cx, cy)
     elif coord_frame in ['det', 'tel', 'sci']:
