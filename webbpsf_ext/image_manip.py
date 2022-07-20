@@ -436,7 +436,7 @@ def rotate_offset(data, angle, cen=None, cval=0.0, order=1,
         two axes.
     reshape : bool, optional
         If `reshape` is True, the output shape is adapted so that the input
-        array is contained completely in the output. The `cen` coordiante
+        array is contained completely in the output. The `cen` coordinate
         is now the center of the array. Default is True.
     order : int, optional
         The order of the spline interpolation, default is 1.
