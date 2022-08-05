@@ -873,3 +873,27 @@ def bp_gaia(filter, release='DR2'):
     return bp
 
 
+def filter_width(bp):
+    """Return wavelength positions of filter edges at half max"""
+
+    w, th = (bp.wave / 1e4, bp.throughput)
+    wavg = bp.avgwave() / 1e4
+
+    # Throughput at the effective wavelength
+    th_mid = np.interp(wavg, w, th)
+    th_half = th_mid / 2
+
+    ind1 = (w<wavg) & (th<(th_mid+th_half) / 2)  & (th>th_half / 2)
+    ind2 = (w>wavg) & (th<(th_mid+th_half) / 2)  & (th>th_half / 2)
+    w_res = []
+    for ind in [ind1, ind2]:
+        w_arr, th_arr = (w[ind], th[ind])
+
+        # Sort by ascending throughput values
+        isort = np.argsort(th_arr)
+        w_arr = w_arr[isort]
+        th_arr = th_arr[isort]
+
+        w_res.append(np.interp(th_half, th_arr, w_arr))
+
+    return np.array(w_res)
