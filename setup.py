@@ -74,7 +74,7 @@ if sys.argv[-1] == 'test':
 #     history = history_file.read()
 
 install_requires = [
-    'numpy~>1.22',
+    'numpy>=1.22',
     'matplotlib>=3.3.0',
     'scipy>=1.5.0',
     'pysynphot>=2.0.0',
