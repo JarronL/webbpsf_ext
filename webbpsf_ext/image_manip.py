@@ -72,7 +72,7 @@ def fshift(inarr, delx=0, dely=0, pad=False, cval=0.0, interp='linear', **kwargs
             return inarr
 
         # separate shift into an integer and fraction shift
-        intx = np.int(delx)
+        intx = int(delx)
         fracx = delx - intx
         if fracx < 0:
             fracx += 1
@@ -112,8 +112,8 @@ def fshift(inarr, delx=0, dely=0, pad=False, cval=0.0, interp='linear', **kwargs
         ny, nx = shape
 
         # separate shift into an integer and fraction shift
-        intx = np.int(delx)
-        inty = np.int(dely)
+        intx = int(delx)
+        inty = int(dely)
         fracx = delx - intx
         fracy = dely - inty
         if fracx < 0:
@@ -217,8 +217,8 @@ def fourier_imshift(image, xshift, yshift, pad=False, cval=0.0, **kwargs):
     
         # Pad ends with zeros
         if pad:
-            padx = np.abs(np.int(xshift)) + 5
-            pady = np.abs(np.int(yshift)) + 5
+            padx = np.abs(int(xshift)) + 5
+            pady = np.abs(int(yshift)) + 5
             pad_vals = ([pady]*2,[padx]*2)
             im = np.pad(image,pad_vals,'constant',constant_values=cval)
         else:
