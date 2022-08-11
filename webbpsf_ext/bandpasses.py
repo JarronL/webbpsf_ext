@@ -438,7 +438,7 @@ def nircam_filter(filter, pupil=None, mask=None, module=None, ND_acq=False,
         # Convert to Angstrom
         dw *= 10000 # Angstrom
 
-        npts = np.int(wrange/dw)+1
+        npts = int(wrange/dw)+1
         warr = np.linspace(w1, w1+dw*npts, npts)
         bp = bp.resample(warr)
 
@@ -461,7 +461,7 @@ def nircam_filter(filter, pupil=None, mask=None, module=None, ND_acq=False,
         dw = 1. / res # um/pixel
         dw *= 10000   # Angstrom/pixel
 
-        npts = np.int(wrange/dw)+1
+        npts = int(wrange/dw)+1
         warr = np.linspace(w1, w1+dw*npts, npts)
         bp = bp.resample(warr)
 
