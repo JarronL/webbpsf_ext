@@ -134,7 +134,7 @@ def fshift(inarr, delx=0, dely=0, pad=False, cval=0.0, interp='linear', **kwargs
             out = inarr.copy()
 
         # shift by integer portion
-        out = np.roll(np.roll(out, intx, axis=1), inty, axis=0)
+        out = np.roll(out, (inty, intx), axis=(0,1))
     
         # Check if fracx and fracy are effectively 0
         fxis0 = np.isclose(fracx,0, atol=1e-5)
