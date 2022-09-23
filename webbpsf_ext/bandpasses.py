@@ -370,7 +370,7 @@ def nircam_filter(filter, pupil=None, mask=None, module=None, ND_acq=False,
         Include wide-band blocking filter for those filters in pupil wheel.
         These include: 'F162M', 'F164N', 'F323N', 'F405N', 'F466N', 'F470N'
     add_flight : bool
-        Temporary fix to include ~20% increased throughput to roughly match
+        Temporary fix to include ~10% increased throughput to roughly match
         the measurements from flight.
 
     Returns
@@ -660,7 +660,7 @@ def nircam_filter(filter, pupil=None, mask=None, module=None, ND_acq=False,
     # Include 20% improvements measured in flight?
     # TODO: Remove when input bandpasses are updated
     if add_flight:
-        tarr *= 1.2
+        tarr *= 1.1
     # Check [0,1] limits
     tarr[tarr<0] = 0
     tarr[tarr>1] = 1
