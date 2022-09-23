@@ -915,11 +915,15 @@ def model_to_hdulist(args_model, sp_star, bandpass):
     # Convert to photons/sec/pixel
     im *= bandpass.equivwidth() * S.refs.PRIMARY_AREA
     # If input units are per arcsec^2 then scale by pixel scale
-    # This will be ph/sec for each oversampled pixel
+    # This will give ph/sec for each pixel
     if ('arcsec' in units_list[1]) or ('asec' in units_list[1]):
         im *= scale0**2
     elif 'mas' in units_list[1]:
         im *= (scale0*1000)**2
+    elif 'sr' in units_list[1].lower():
+        # Steradians to arcsec^2
+        sr_to_asec2 = (3600*180/np.pi)**2 # [asec^2 / sr]
+        im *= (scale0**2 / sr_to_asec2) 
 
     # Save into HDUList
     hdulist[0].data = im
