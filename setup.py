@@ -74,14 +74,11 @@ if sys.argv[-1] == 'test':
 #     history = history_file.read()
 
 install_requires = [
-    'numpy>=1.22',
-    'matplotlib>=3.3.0',
-    'scipy>=1.5.0',
-    'pysynphot>=2.0.0',
-    'poppy>=1.0.1',
-    'webbpsf>=1.0.0',
     'tqdm>4',
-    'astropy>=4.2',
+    'pysynphot>=2.0.0',
+    'poppy>=1.0.3',
+    'webbpsf>=1.1.0',
+    'pysiaf>=0.18.0',
 ]
 
 setup_requirements = ['pytest-runner', ]
@@ -133,6 +130,7 @@ setup(
         'Programming Language :: Python :: 3.7',
         'Programming Language :: Python :: 3.8',
         'Programming Language :: Python :: 3.9',
+        'Programming Language :: Python :: 3.10',
     ],
 
     # You can just specify the packages manually here if your project is
