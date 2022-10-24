@@ -1670,3 +1670,102 @@ def crop_zero_rows_cols(image, symmetric=True, return_indices=False):
     else:
         return im_new
 
+def bp_fix(im, sigclip=5, niter=1, pix_shift=1, rows=True, cols=True, 
+           bpmask=None, return_mask=False, verbose=False, in_place=True):
+    """ Find and fix bad pixels in image with median of surrounding values
+    
+    Paramters
+    ---------
+    im : ndarray
+        Single image
+    sigclip : int
+        How many sigma from mean doe we fix?
+    niter : int
+        How many iterations for sigma clipping? 
+        Ignored if bpmask is set.
+    pix_shift : int
+        We find bad pixels by comparing to neighbors and replacing.
+        E.g., if set to 1, use immediate adjacents neighbors.
+        Replaces with a median of surrounding pixels.
+    rows : bool
+        Compare to row pixels? Setting to False will ignore pixels
+        along rows during comparison. Recommended to increase
+        ``pix_shift`` parameter if using only rows or cols.
+    cols : bool
+        Compare to column pixels? Setting to False will ignore pixels
+        along columns during comparison. Recommended to increase
+        ``pix_shift`` parameter if using only rows or cols.
+    bpmask : boolean array
+        Use a pre-determined bad pixel mask for fixing.
+    return_mask : bool
+        If True, then also return a masked array of bad
+        pixels where a value of 1 is "bad".
+    verbose : bool
+        Print number of fixed pixels per iteration
+    in_place : bool
+        Do in-place corrections of input array.
+        Otherwise, return a copy.
+    """
+
+    from . import robust
+    
+    def shift_array(arr_out, pix_shift, rows=True, cols=True):
+        '''Create an array of shifted values'''
+
+        shift_arr = []
+        sh_vals = np.arange(pix_shift*2+1) - pix_shift
+        # Set shifting of columns and rows
+        xsh_vals = sh_vals if rows else [0]
+        ysh_vals = sh_vals if cols else [0]
+        for i in xsh_vals:
+            for j in ysh_vals:
+                if (i != 0) or (j != 0):
+                    shift_arr.append(fshift(arr_out, delx=i, dely=j))
+        shift_arr = np.asarray(shift_arr)
+        return shift_arr
+    
+    # Only single iteration if bpmask is set
+    if bpmask is not None:
+        niter = 1
+    
+    if in_place:
+        arr_out = im
+    else:
+        arr_out = im.copy()
+    maskout = np.zeros(im.shape, dtype='bool')
+    
+    for ii in range(niter):
+        # Create an array of shifted values
+        shift_arr = shift_array(arr_out, pix_shift, rows=rows, cols=cols)
+    
+        # Take median of shifted values
+        shift_med = np.nanmedian(shift_arr, axis=0)
+        if bpmask is None:
+            # Difference of median and reject outliers
+            diff = arr_out - shift_med
+            shift_std = robust.medabsdev(shift_arr, axis=0)
+
+            indbad = diff > (sigclip*shift_std)
+            # indgood = robust.mean(diff, Cut=sigclip, return_mask=True)
+            # indbad = ~indgood
+
+        else:
+            indbad = bpmask
+
+        # Mark anything that is a NaN
+        indbad[np.isnan(arr_out)] = True
+        
+        # Set output array and mask values 
+        arr_out[indbad] = shift_med[indbad]
+        maskout[indbad] = True
+        
+        if verbose:
+            print(f'Bad Pixels fixed: {indbad.sum()}')
+
+        if indbad.sum()==0:
+            break
+            
+    if return_mask:
+        return arr_out, maskout
+    else:
+        return arr_out
