@@ -24,7 +24,7 @@ For additional information about the original IDL routines, see:
 from __future__ import division, print_function#, unicode_literals
 
 import numpy as np
-from numpy import median
+from numpy import median, nanmedian
 
 import logging
 _log = logging.getLogger('webbpsf_ext')
