@@ -4423,8 +4423,14 @@ def _transmission_map(self, coord_vals, coord_frame, siaf_ap=None):
         cx_idl, cy_idl = siaf_ap_mask.tel_to_idl(cx_tel, cy_tel)
     elif coord_frame=='idl':
         cx_idl, cy_idl = (cx, cy)
-    elif coord_frame in ['det', 'tel', 'sci']:
-        cx_idl, cy_idl = siaf_ap_mask.convert(cx, cy, coord_frame, 'idl')
+    elif coord_frame=='tel':
+        cx_idl, cy_idl = siaf_ap_mask.tel_to_idl(cx, cy)
+    elif coord_frame=='det':
+        cx_idl, cy_idl = siaf_ap_mask.det_to_idl(cx, cy)
+    elif coord_frame=='sci':
+        cx_idl, cy_idl = siaf_ap_mask.sci_to_idl(cx, cy)
+    # elif coord_frame in ['det', 'tel', 'sci']:
+    #     cx_idl, cy_idl = siaf_ap_mask.convert(cx, cy, coord_frame, 'idl')
 
     # Get mask transmission
     trans = nrc_mask_trans(self.image_mask, cx_idl, cy_idl)
