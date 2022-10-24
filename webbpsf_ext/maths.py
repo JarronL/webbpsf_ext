@@ -398,6 +398,7 @@ def binned_statistic(x, values, func=np.mean, bins=10):
     
     """
 
+    from scipy import stats
     values_flat = values.ravel()
     
     try: # This will be successful if x is not already a list of indices
@@ -414,13 +415,12 @@ def binned_statistic(x, values, func=np.mean, bins=10):
             # Make sure bins encompass full set of input values
             ind_bin = (x>=bins.min()) & (x<=bins.max())
             x = x[ind_bin]
-            values_flat = values_flat[ind_bin]
+            values_flat = values_flat[ind_bin.flatten()]
             if np.isclose(bsize.min(), bsize.max()):
                 igroups = hist_indices(x, bins=bins, return_more=False)
                 res = np.array([func(values_flat[ind]) for ind in igroups])
             else:
                 # If non-uniform bins, just use scipy.stats.binned_statistic
-                from scipy import stats 
                 res, _, _ = stats.binned_statistic(x, values, func, bins)
     except:
         # Assume that input is a list of indices
