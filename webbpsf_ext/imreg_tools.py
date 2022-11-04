@@ -632,7 +632,10 @@ def find_offsets2(input, xoff_pix, yoff_pix, psf_sh_all,
 
 
 def find_offsets_phase(input, psf, crop=65, rin=0, rout=None, dxy_fine=0.01, prog_leave=False):
-    """Use phase_cross_correlation"""
+    """Use phase_cross_correlation to determine offset 
+    
+    Returns offset required to register input image[s] onto psf image.
+    """
 
     # Check if input is a dictionary 
     is_dict = True if isinstance(input, dict) else False
@@ -649,7 +652,10 @@ def find_offsets_phase(input, psf, crop=65, rin=0, rout=None, dxy_fine=0.01, pro
 
     xsh0_pix = []
     ysh0_pix = []
-    iter_vals = tqdm(keys,leave=prog_leave) if is_dict else tqdm(input,leave=prog_leave)
+    if prog_leave:
+        iter_vals = tqdm(keys) if is_dict else tqdm(input)
+    else:
+        iter_vals = keys if is_dict else input
     for val in iter_vals:
         if is_dict:
             d = input[val]
@@ -670,11 +676,14 @@ def find_offsets_phase(input, psf, crop=65, rin=0, rout=None, dxy_fine=0.01, pro
         # Zero-out bad pixels
         im[~ind_mask] = 0
 
-        # Cubic interplotion of cross correlation image onto a finer grid
+        # Initial offset required to move im onto psf_sub
         ysh, xsh = phase_cross_correlation(psf_sub, im, upsample_factor=1/dxy_fine, 
                                            return_error=False)
         
-        # Perform shift on PSF and add residuals
+        # Shift PSF in opposite direction to register onto im.
+        # We do this under the assumption that PSF is more ideal (no bad pixels) compared to im,
+        # so there will less fourier artifacts after the shift.
+        # Then find any residual necessary moves.
         psf_sh = pad_or_cut_to_size(fourier_imshift(psf, -1*xsh, -1*ysh), crop)
         del_ysh, del_xsh = phase_cross_correlation(psf_sh, im, upsample_factor=1/dxy_fine, 
                                                    return_error=False)
