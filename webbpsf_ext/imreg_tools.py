@@ -409,7 +409,8 @@ def find_max_crosscorr(corr, xsh_arr, ysh_arr, sub_sample):
 
 
 def gen_psf_offsets(psf, crop=65, xlim_pix=(-3,3), ylim_pix=(-3,3), dxy=0.05,
-    psf_osamp=1, shift_func=fourier_imshift, ipc_vals=None):
+    psf_osamp=1, shift_func=fourier_imshift, ipc_vals=None, kipc=None,
+    prog_leave=False):
     """
     
     Add IPC:
@@ -440,7 +441,7 @@ def gen_psf_offsets(psf, crop=65, xlim_pix=(-3,3), ylim_pix=(-3,3), dxy=0.05,
 
     # Create a series of shifted PSFs to compare to images
     psf_sh_all = []
-    for xoff, yoff in tqdm(zip(xoff_all, yoff_all), total=len(xoff_all)):
+    for xoff, yoff in tqdm(zip(xoff_all, yoff_all), total=len(xoff_all), leave=prog_leave):
         xoff_over = xoff*psf_osamp
         yoff_over = yoff*psf_osamp
         crop_over = crop*psf_osamp
@@ -452,12 +453,14 @@ def gen_psf_offsets(psf, crop=65, xlim_pix=(-3,3), ylim_pix=(-3,3), dxy=0.05,
     psf_sh_all = np.asarray(psf_sh_all)
     
     # Add IPC
-    if ipc_vals is not None:
-        if isinstance(ipc_vals, (tuple, list, np.ndarray)):
-            a1, a2 = ipc_vals
-        else:
-            a1, a2 = ipc_vals, 0
-        kipc = np.array([[a2,a1,a2], [a1,1-4*(a1+a2),a1], [a2,a1,a2]])
+    if kipc is not None or ipc_vals is not None:
+        # Build kernel if it wasn't already specified
+        if kipc is None:
+            if isinstance(ipc_vals, (tuple, list, np.ndarray)):
+                a1, a2 = ipc_vals
+            else:
+                a1, a2 = ipc_vals, 0
+            kipc = np.array([[a2,a1,a2], [a1,1-4*(a1+a2),a1], [a2,a1,a2]])
         psf_sh_all = add_ipc(psf_sh_all, kernel=kipc)
     
 
@@ -469,12 +472,14 @@ def gen_psf_offsets(psf, crop=65, xlim_pix=(-3,3), ylim_pix=(-3,3), dxy=0.05,
     return xoff_pix, yoff_pix, psf_sh_all
 
 
-def crop_observation(im_full, ap, xysub, return_xy=False, 
-                     delx=0, dely=0, shift_func=fourier_imshift, 
-                     interp='cubic', **kwargs):
+def crop_observation(im_full, ap, xysub, delx=0, dely=0, 
+                     shift_func=fourier_imshift, interp='cubic',
+                     return_xy=False, **kwargs):
     """Crop aperture around reference location
     
     Options to shift array by some offset.
+
+    if xysub is an array, dimensions should be [nysub,nxsub]
     """
         
     sh_orig = im_full.shape
@@ -485,7 +490,10 @@ def crop_observation(im_full, ap, xysub, return_xy=False,
 
     
     # Cut out postage stamp from full frame image
-    ny_sub = nx_sub = xysub
+    if isinstance(xysub, (list, tuple, np.ndarray)):
+        ny_sub, nx_sub = xysub
+    else:
+        ny_sub = nx_sub = xysub
     xc, yc = (ap.XSciRef, ap.YSciRef)
     x1, x2 = np.array([xc - nx_sub/2 - 0.5, xc + nx_sub/2 - 0.5]).astype('int')
     y1, y2 = np.array([yc - ny_sub/2 - 0.5, yc + ny_sub/2 - 0.5]).astype('int')
@@ -580,7 +588,7 @@ def find_offsets(input, psf, crop=65, xlim_pix=(-3,3), ylim_pix=(-3,3),
     return xsh0_pix, ysh0_pix
 
 
-def find_offsets2(input, xoff_pix, yoff_pix, psf_sh_all,
+def find_offsets2(input, xoff_pix, yoff_pix, psf_sh_all, bpmasks=None,
     crop=65, rin=0, rout=None, dxy_fine=0.01, prog_leave=True):
     """Find offsets necessary to align observations with input psf"""
         
@@ -589,7 +597,13 @@ def find_offsets2(input, xoff_pix, yoff_pix, psf_sh_all,
     
     # Make sure input image is 3D
     if not is_dict and len(input.shape)==2:
+        input2d = True
         input = [input]
+    else:
+        input2d = False
+
+    if (bpmasks is not None) and (len(bpmasks.shape)==2):
+        bpmasks = [bpmasks]
 
     # Grid shape
     sh_grid = (len(yoff_pix), len(xoff_pix))
@@ -600,12 +614,33 @@ def find_offsets2(input, xoff_pix, yoff_pix, psf_sh_all,
     xsh0_pix = []
     ysh0_pix = []
     iter_vals = tqdm(keys,leave=prog_leave) if is_dict else tqdm(input,leave=prog_leave)
+    i = 0
     for val in iter_vals:
+        
+        if crop is None:
+            im0 = input[val]['data'] if is_dict else val
+            ny1, nx1 = im0.shape
+            _, ny2, nx2 = psf_sh_all
+            ny_crop = np.min([ny1, ny2])
+            nx_crop = np.min([nx1, nx2])
+            crop = (ny_crop, nx_crop)
+
+        # Crop the input image
         if is_dict:
             d = input[val]
             im = crop_observation(d['data'], d['ap'], crop)
         else:
             im = pad_or_cut_to_size(val, crop)
+
+        # Crop PSFs to match size
+        psf_sh_all = pad_or_cut_to_size(psf_sh_all, crop)
+
+        # Crop bp mask to match 
+        if bpmasks is None:
+            bpmask = np.zeros_like(im).astype('bool')
+        else:
+            bpmask = pad_or_cut_to_size(bpmasks[i], crop)
+            i += 1
 
         # Create masks
         rdist = dist_image(im)
@@ -613,7 +648,7 @@ def find_offsets2(input, xoff_pix, yoff_pix, psf_sh_all,
         rmask = (rdist>=rin) if rout is None else (rdist>=rin) & (rdist<=rout)
         # Exclude 0s and NaNs
         zmask = (im!=0) & (~np.isnan(im))
-        ind_mask = rmask & zmask
+        ind_mask = rmask & zmask & (~bpmask)
         
         # Cross-correlate to find best x,y shift to align image with PSF
         cc = correl_images(psf_sh_all, im, mask=ind_mask)
@@ -627,14 +662,20 @@ def find_offsets2(input, xoff_pix, yoff_pix, psf_sh_all,
 
     xsh0_pix = np.array(xsh0_pix)
     ysh0_pix = np.array(ysh0_pix)
+
+    # If we had a single image input, return first elements
+    if input2d:
+        xsh0_pix = xsh0_pix[0]
+        ysh0_pix = ysh0_pix[0]
     
     return xsh0_pix, ysh0_pix
 
 
-def find_offsets_phase(input, psf, crop=65, rin=0, rout=None, dxy_fine=0.01, prog_leave=False):
+def find_offsets_phase(input, psf, crop=65, rin=0, rout=None, dxy_fine=0.01, 
+    prog_leave=False):
     """Use phase_cross_correlation to determine offset 
     
-    Returns offset required to register input image[s] onto psf image.
+    Returns offset (delx,dely) required to register input image[s] onto psf image.
     """
 
     # Check if input is a dictionary 
