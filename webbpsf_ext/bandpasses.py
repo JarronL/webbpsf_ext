@@ -46,8 +46,9 @@ def bp_igood(bp, min_trans=0.001, fext=0.05):
     return ind
 
 def miri_filter(filter, **kwargs):
-    
     """
+    Read in MIRI filters from webbpsf and scale to rough peak 
+    transmission throughput as indicated on JDOCS.
     """
     
     filter = filter.upper()
