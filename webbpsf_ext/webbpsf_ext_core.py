@@ -365,20 +365,30 @@ class NIRCam_ext(webbpsf_NIRCam):
     @property
     def bandpass(self):
         """ Return bandpass throughput """
-        try:
-            kwargs = {
-                'ice_scale': self._ice_scale,
-                'nvr_scale': self._nvr_scale,
-                'ote_scale': self._ote_scale,
-                'nc_scale' : self._nc_scale,
-            }            
-            bp = nircam_filter(self.filter, pupil=self.pupil_mask, mask=self.image_mask,
-                                module=self.module, grism_order=self._grism_order,
-                                ND_acq=self.ND_acq, coron_substrate=self.coron_substrate, 
-                                **kwargs)
-        except AttributeError:
-            bp = nircam_filter(self.filter, pupil=self.pupil_mask, mask=self.image_mask,
-                               module=self.module)
+        kwargs = {}
+
+        # Ice and NVR keywords
+        try: kwargs['ice_scale'] = self._ice_scale
+        except: pass
+        try: kwargs['nvr_scale'] = self._nvr_scale
+        except: pass
+        try: kwargs['ote_scale'] = self._ote_scale
+        except: pass
+        try: kwargs['nc_scale'] = self._nc_scale
+        except: pass
+
+        # Coron throughput keywords
+        try: kwargs['ND_acq'] = self.ND_acq
+        except: pass
+        try: kwargs['coron_substrate'] = self.coron_substrate
+        except: pass
+
+        # Grism throughput keywords
+        try: kwargs['grism_order'] = self._grism_order
+        except: pass
+
+        bp = nircam_filter(self.filter, pupil=self.pupil_mask, mask=self.image_mask,
+                            module=self.module, sca=self.detector, **kwargs)
         
         return bp
 
