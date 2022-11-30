@@ -60,6 +60,8 @@ def miri_filter(filter, **kwargs):
     wtemp = hdulist[1].data['WAVELENGTH']
     ttemp = hdulist[1].data['THROUGHPUT']
 
+    # Peak values for scaling as shown on JDOX
+    # TODO: Update with flight versions
     fscale_dict = {
         'F560W' : 0.30, 'F770W' : 0.35, 'F1000W': 0.35,
         'F1130W': 0.30, 'F1280W': 0.30, 'F1500W': 0.35,
@@ -70,8 +72,8 @@ def miri_filter(filter, **kwargs):
     }
 
     ttemp = fscale_dict[filter] * ttemp / ttemp.max()
-    
     bp = S.ArrayBandpass(wtemp, ttemp, name=bp_name)
+    hdulist.close()
 
     # Select which wavelengths to keep
     igood = bp_igood(bp, min_trans=0.005, fext=0.1)
@@ -112,6 +114,8 @@ def nircam_com_th(wave_out=None, ND_acq=False):
     if ND_acq:
         ovals = nircam_com_nd(wave_out=wvals)
         tvals *= 10**(-1*ovals)
+
+    hdulist.close()
 
     if wave_out is None:
         return wvals, tvals
@@ -376,7 +380,8 @@ def nircam_filter(filter, pupil=None, mask=None, module=None, sca=None, ND_acq=F
         Include wide-band blocking filter for those filters in pupil wheel.
         These include: 'F162M', 'F164N', 'F323N', 'F405N', 'F466N', 'F470N'
     flight : bool
-
+        Use flight bandpasses. Set to False for pre-flight vesions. Flight
+        vesions include SCA-dependent QE curves.
 
     Returns
     -------
@@ -547,6 +552,8 @@ def nircam_filter(filter, pupil=None, mask=None, module=None, sca=None, ND_acq=F
             # Interpolate substrate transmission onto filter wavelength grid
             th_wedge = np.interp(bp.wave/1e4, wtemp, ttemp, left=0, right=0)
 
+            hdulist.close()
+
         elif 'LW' in channel:
             fname = 'jwst_nircam_lw-lyot_trans_modmean.fits'
             hdulist = fits.open(_bp_dir / fname)
@@ -570,11 +577,14 @@ def nircam_filter(filter, pupil=None, mask=None, module=None, sca=None, ND_acq=F
             # Interpolate substrate transmission onto filter wavelength grid
             th_wedge = np.interp(bp.wave/1e4, wtemp, ttemp, left=0, right=0)
 
+            hdulist.close()
+
         th_new = th_wedge * bp.throughput
         bp = S.ArrayBandpass(bp.wave, th_new, name=bp.name)
 
 
     # Weak Lens substrate transmission
+    # TODO: Update WLP4 with newer flight version
     if (pupil is not None) and (('WL' in pupil) or ('WEAK LENS' in pupil)):
 
         if 'WL' in pupil:
@@ -592,12 +602,14 @@ def nircam_filter(filter, pupil=None, mask=None, module=None, sca=None, ND_acq=F
         wtemp = hdulist[1].data['WAVELENGTH']
         ttemp = hdulist[1].data['THROUGHPUT']
         th_wl4 = np.interp(bp.wave/1e4, wtemp, ttemp, left=0, right=0)
+        hdulist.close()
 
         # Throughput for WL+/-8
         hdulist = fits.open(_bp_dir / 'jwst_nircam_wlp8.fits')
         wtemp = hdulist[1].data['WAVELENGTH']
         ttemp = hdulist[1].data['THROUGHPUT']
         th_wl8 = np.interp(bp.wave/1e4, wtemp, ttemp, left=0, right=0)
+        hdulist.close()
 
         # If two lenses
         wl48_list = ['WEAK LENS +12 (=4+8)', 'WEAK LENS -4 (=4-8)']
