@@ -407,7 +407,7 @@ def _sca_throughput_scaling(sca, filter):
              'F200W': 1.03, 'F210M': 1.04, 'F212N': 0.93}
 
     # LWA
-    nrca5 = {'F323N': 1.09, 'F360M': 0.97, 'F410M': 1.12, 'F405N': 0.94, 'F466N': 1.03}
+    nrca5 = {'F250M': 0.98, 'F323N': 1.09, 'F360M': 0.97, 'F410M': 1.12, 'F405N': 0.94, 'F466N': 1.03}
 
     # LWB
     nrcb5 = {'F250M': 1.04, 'F277W': 1.05, 'F300M': 1.03, 'F335M': 1.04, 'F356W': 1.04,
@@ -762,6 +762,7 @@ def nircam_filter(filter, pupil=None, mask=None, module=None, sca=None, ND_acq=F
     # OTE scaling (use ice_scale keyword)
     if ote_scale is not None:
         ice_scale = ote_scale
+    # NIRCam scaling; explicitly set nvr_scale=0 to remove pre-built NVR contributions
     if nc_scale is not None:
         nvr_scale = 0
     # Water ice and NVR additions (for LW channel only)
@@ -796,13 +797,9 @@ def nircam_filter(filter, pupil=None, mask=None, module=None, sca=None, ND_acq=F
             
             # Scale is fraction of absorption feature depth, not of layer thickness
             # First, remove NVR contributions already included in throughput curve
-            th_new = th_new / ttemp
+            if not flight:
+                th_new = th_new / ttemp
             th_new = th_new * (1 - nvr_scale * (1 - ttemp))
-            
-            # The "-1" removes NVR contributions already included in
-            # NIRCam throughput curves
-            # th_nvr = np.exp((nvr_scale-1) * np.log(ttemp))
-            # th_new = th_nvr * th_new
             
         if nc_scale is not None:
             names = ['Wave', 'coeff'] # coeff is per um path length
