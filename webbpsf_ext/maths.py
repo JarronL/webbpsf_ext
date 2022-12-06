@@ -70,7 +70,16 @@ def jl_poly(xvals, coeff, dim_reorder=False, use_legendre=False, lxmap=None, **k
         raise ValueError('xvals can only have 1 dimension. Found {} dimensions.'.format(xdim))
 
     # Check number of dimensions in coefficients
-    dim = coeff.shape
+    try:
+        dim = coeff.shape
+    except AttributeError:
+        coeff = np.array(coeff)
+        dim = coeff.shape
+        # Handle single value
+        if len(dim) == 0:
+            coeff = np.array([coeff])
+            dim = coeff.shape
+
     ndim = len(dim)
     if ndim>3:
         raise ValueError('coefficient can only have 1, 2, or 3 dimensions. \
