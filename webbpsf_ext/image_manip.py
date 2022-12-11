@@ -9,6 +9,12 @@ from scipy import fftpack
 from scipy.ndimage import fourier_shift
 from scipy.ndimage.interpolation import rotate
 
+try:
+    import cv2
+    OPENCV_EXISTS = True
+except ImportError:
+    OPENCV_EXISTS = False
+
 from astropy.convolution import convolve, convolve_fft
 from astropy.io import fits
 
@@ -238,6 +244,78 @@ def fourier_imshift(image, xshift, yshift, pad=False, cval=0.0, **kwargs):
     
     return offset
     
+def cv_shift(image, xshift, yshift, pad=False, cval=0.0, interp='lanczos'):
+    """Use OpenCV library for image shifting
+
+    Requires opencv-python package. Produces fewer artifacts that `fourier_imshift`.
+    Faster than `fshift`.
+
+    Parameters
+    ----------
+    image : ndarray
+        2D image or 3D image cube [nz,ny,nx].
+    xshift : float
+        Number of pixels to shift image in the x direction
+    yshift : float
+        Number of pixels to shift image in the y direction
+    pad : bool
+        Should we pad the array before shifting, then truncate?
+        Otherwise, the image is wrapped.
+    cval : sequence or float, optional
+        The values to set the padded values for each axis. Default is 0.
+        ((before_1, after_1), ... (before_N, after_N)) unique pad constants for each axis.
+        ((before, after),) yields same before and after constants for each axis.
+        (constant,) or int is a shortcut for before = after = constant for all axes.
+    interp : str
+        Type of interpolation to use during the sub-pixel shift. Valid values are
+        'linear', 'cubic', and 'lanczos'.
+
+    Returns
+    -------
+    ndarray
+        Shifted image
+    """
+
+    if OPENCV_EXISTS==False:
+        raise ImportError('opencv-python not installed')
+
+    shape = image.shape
+    ndim = len(shape)
+
+    if ndim==2:
+
+        ny, nx = shape
+    
+        # Pad ends with zeros
+        if pad:
+            padx = np.abs(int(xshift)) + 5
+            pady = np.abs(int(yshift)) + 5
+            pad_vals = ([pady]*2,[padx]*2)
+            im = np.pad(image,pad_vals,'constant',constant_values=cval)
+        else:
+            padx = 0; pady = 0
+            im = image
+
+        Mtrans = np.array([[1, 0, xshift], [0, 1, yshift]]).astype('float64')
+        if interp=='linear':
+            flags = cv2.INTER_LINEAR
+        elif interp=='cubic':
+            flags = cv2.INTER_CUBIC
+        elif interp=='lanczos':
+            flags = cv2.INTER_LANCZOS4
+        else:
+            raise ValueError(f"interp={interp} does not exist. Valid values are 'linear', 'cubic', or 'lanczos'.")
+
+        offset = cv2.warpAffine(im, Mtrans, im.shape[::-1], flags=flags)
+        offset = offset[pady:pady+ny, padx:padx+nx]
+    elif ndim==3:
+        kwargs = {'pad': pad, 'cval': cval, 'interp': interp}
+        offset = np.array([cv_shift(im, xshift, yshift, **kwargs) for im in image])
+    else:
+        raise ValueError(f'Found {ndim} dimensions {shape}. Only up 2 or 3 dimensions allowed.')
+    
+    return offset
+
 def pad_or_cut_to_size(array, new_shape, fill_val=0.0, offset_vals=None,
     shift_func=fshift, **kwargs):
     """
