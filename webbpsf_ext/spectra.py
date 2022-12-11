@@ -789,7 +789,8 @@ class source_spectrum(object):
         res = least_squares(self.func_resid, x0, bounds=(0,np.inf), loss=loss,
                             kwargs=kwargs)
         out = res.x
-        if verbose: print(out)
+        if verbose: 
+            print('SED best-fit params:', out)
 
         # Which model are we using?
         func_model = self.model_IRexcess if IR_excess else self.model_scale
