@@ -394,20 +394,22 @@ def _sca_throughput_scaling(sca, filter):
     nrca1 = {'F070W': 1.05, 'F164N': 0.91, 'F187N': 0.89, 'F212N': 0.91}
     nrca2 = {'F070W': 1.03, 'F164N': 0.89, 'F187N': 0.89, 
              'F200W': 1.03, 'F210M': 1.03, 'F212N': 0.94}
-    nrca3 = {'F164N': 0.91, 'F187N': 0.88, 'F212N': 0.90}
-    nrca4 = {'F070W': 0.97, 'F115W': 1.03, 'F164N': 0.92, 'F187N': 0.89, 'F212N': 0.90}
+    nrca3 = {'F090W': 0.98, 'F164N': 0.91, 'F187N': 0.88, 'F212N': 0.90}
+    nrca4 = {'F070W': 0.97, 'F090W': 0.97, 'F115W': 1.03, 
+             'F164N': 0.92, 'F187N': 0.89, 'F212N': 0.90}
 
     # SWB
     nrcb1 = {'F070W': 0.92, 'F090W': 0.92, 'F162M': 1.04, 'F164N': 0.91, 
              'F187N': 0.91, 'F200W': 1.03, 'F210M': 1.02, 'F212N': 0.89}
     nrcb2 = {'F090W': 0.98, 'F164N': 0.92, 'F187N': 0.90, 'F212N': 0.89}
-    nrcb3 = {'F164N': 1.07, 'F164N': 0.91, 'F187N': 0.91, 
+    nrcb3 = {'F070W': 1.07, 'F115W': 1.02, 'F164N': 1.07, 'F164N': 0.91, 'F187N': 0.91, 
              'F200W': 1.02, 'F210M': 1.03, 'F212N': 0.91}
     nrcb4 = {'F070W': 1.06, 'F115W': 1.01, 'F164N': 0.92, 'F187N': 0.91, 
              'F200W': 1.03, 'F210M': 1.04, 'F212N': 0.93}
 
     # LWA
-    nrca5 = {'F250M': 0.98, 'F323N': 1.09, 'F360M': 0.97, 'F410M': 1.12, 'F405N': 0.94, 'F466N': 1.03}
+    nrca5 = {'F250M': 0.98, 'F323N': 1.09, 'F356W': 1.02, 'F360M': 0.97, 
+             'F410M': 1.12, 'F430M': 0.98, 'F405N': 0.94, 'F466N': 1.03}
 
     # LWB
     nrcb5 = {'F250M': 1.04, 'F277W': 1.05, 'F300M': 1.03, 'F335M': 1.04, 'F356W': 1.04,
@@ -448,10 +450,12 @@ def nircam_filter(filter, pupil=None, mask=None, module=None, sca=None, ND_acq=F
     mask : str, None
         Specify the coronagraphic occulter (spots or bar).
     module : str
-        Module 'A' or 'B'.
+        Module 'A' or 'B'. Default is A if not specified here
+        or in `sca` keyword.
     sca : str
         Valid detector name or SCA ID (NRC[A-B][1-5], 481-490). 
         This will override module if inconsitent.
+        If not specified default is {module}1 for SW.
     ND_acq : bool
         ND acquisition square in coronagraphic mask.
     ice_scale : float
@@ -524,7 +528,7 @@ def nircam_filter(filter, pupil=None, mask=None, module=None, sca=None, ND_acq=F
     if wtemp < 2.3:
         sca = f'NRC{module}1' if sca is None else get_detname(sca)
     else:
-        sca = get_detname(sca)
+        sca = f'NRC{module}5' if sca is None else get_detname(sca)
 
     # Select filter file and read
     filter = filter.upper()
