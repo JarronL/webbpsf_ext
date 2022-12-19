@@ -410,7 +410,7 @@ def find_max_crosscorr(corr, xsh_arr, ysh_arr, sub_sample):
 
 def gen_psf_offsets(psf, crop=65, xlim_pix=(-3,3), ylim_pix=(-3,3), dxy=0.05,
     psf_osamp=1, shift_func=fourier_imshift, ipc_vals=None, kipc=None,
-    prog_leave=False):
+    prog_leave=False, **kwargs):
     """
     
     Add IPC:
@@ -589,7 +589,7 @@ def find_offsets(input, psf, crop=65, xlim_pix=(-3,3), ylim_pix=(-3,3),
 
 
 def find_offsets2(input, xoff_pix, yoff_pix, psf_sh_all, bpmasks=None,
-    crop=65, rin=0, rout=None, dxy_fine=0.01, prog_leave=True):
+    crop=65, rin=0, rout=None, dxy_fine=0.01, prog_leave=True, **kwargs):
     """Find offsets necessary to align observations with input psf"""
         
     # Check if input is a dictionary 
