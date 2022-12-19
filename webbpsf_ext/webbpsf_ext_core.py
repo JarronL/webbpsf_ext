@@ -2469,7 +2469,7 @@ def _gen_psf_coeff(self, nproc=None, wfe_drift=0, force=False, save=True,
 
         _log.info(f'Loading {outfile}')
         hdul = fits.open(outfile)
-        data = hdul[0].data.astype(np.float)
+        data = hdul[0].data.astype(float)
         hdr  = hdul[0].header
         hdul.close()
 

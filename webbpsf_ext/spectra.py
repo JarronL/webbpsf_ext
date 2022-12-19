@@ -1378,7 +1378,7 @@ def linder_table(file=None, **kwargs):
     
     content_arr = []
     for line in content[4:]:
-        arr = np.array(line.split()).astype(np.float)
+        arr = np.array(line.split()).astype(float)
         if len(arr)>0: 
             content_arr.append(arr)
     

@@ -960,7 +960,7 @@ def plot_opd(hdul, index=1, opd0=None, vlim1=None, vlim2=None):
     plot_im(opd * m_to_nm, fig, ax, vlim=vlim, extent=extent)
     data_val, data_units = str.split(delta_time)
     
-    data_val = np.float(data_val)
+    data_val = float(data_val)
     if 'h' in data_units:
         dt = data_val * u.hr
     elif 'm' in data_units:
