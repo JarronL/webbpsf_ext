@@ -362,7 +362,7 @@ def hist_indices(values, bins=10, return_more=False):
     # then we need to set a warning.
     if (vmin<bins[0]) or (vmax>bins[-1]):
         raise ValueError("Bins must encompass entire set of input values.")
-    digitized = ((nbins-1.0) / (vmax-vmin) * (values_flat-vmin)).astype(np.int)
+    digitized = ((nbins-1.0) / (vmax-vmin) * (values_flat-vmin)).astype(int)
     csr = csr_matrix((values_flat, [digitized, np.arange(N)]), shape=(nbins, N))
 
     # Split indices into their bin groups    
@@ -597,3 +597,15 @@ def fit_bootstrap(pinit, datax, datay, function, yerr_systematic=0.0, nrand=1000
     else:
         return mean_pfit, err_pfit
     
+
+def round_int(val, half_round='down'):
+    """
+    Replacement for `round` and `np.round`, which uses 'bankers rounding'
+    such that x.5 is rounded to the nearest even number. Instead,
+    we want x.5 to round down. Option to round x.5 up by
+    setting `half_round='up'`.
+    """
+    if half_round.lower()=='down':
+        return np.rint(np.nextafter(val, val-1))
+    else:
+        return np.rint(np.nextafter(val, val+1))
