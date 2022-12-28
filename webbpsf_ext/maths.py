@@ -440,7 +440,7 @@ def binned_statistic(x, values, func=np.mean, bins=10, **kwargs):
 
 
 def radial_std(im_diff, pixscale=None, oversample=None, supersample=False, 
-               smooth=True, func=np.std, small_numbers=False, nsig=1):
+               smooth=True, func=np.std, small_numbers=False, nsig=1, **kwargs):
     """Generate contrast curve of PSF difference
 
     Find the standard deviation within fixed radial bins of a differenced image.
