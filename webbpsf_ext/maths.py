@@ -375,7 +375,7 @@ def hist_indices(values, bins=10, return_more=False):
         return igroups
     
 
-def binned_statistic(x, values, func=np.mean, bins=10):
+def binned_statistic(x, values, func=np.mean, bins=10, **kwargs):
     """Binned statistic
     
     Compute a binned statistic for a set of data. Drop-in replacement
@@ -415,7 +415,7 @@ def binned_statistic(x, values, func=np.mean, bins=10):
         # Check if bins is a single value
         if (len(np.array(bins))==1) and (bins is not None):
             igroups = hist_indices(x, bins=bins, return_more=False)
-            res = np.array([func(values_flat[ind]) for ind in igroups])
+            res = np.array([func(values_flat[ind], **kwargs) for ind in igroups])
         # Otherwise we assume bins is a list or array defining edge locations
         else:
             bins = np.array(bins)
@@ -427,19 +427,20 @@ def binned_statistic(x, values, func=np.mean, bins=10):
             values_flat = values_flat[ind_bin.flatten()]
             if np.isclose(bsize.min(), bsize.max()):
                 igroups = hist_indices(x, bins=bins, return_more=False)
-                res = np.array([func(values_flat[ind]) for ind in igroups])
+                res = np.array([func(values_flat[ind], **kwargs) for ind in igroups])
             else:
-                # If non-uniform bins, just use scipy.stats.binned_statistic
+                # If non-uniform bins, pass to scipy.stats.binned_statistic
                 res, _, _ = stats.binned_statistic(x, values, func, bins)
     except:
         # Assume that input is a list of indices
         igroups = x
-        res = np.array([func(values_flat[ind]) for ind in igroups])
+        res = np.array([func(values_flat[ind], **kwargs) for ind in igroups])
     
     return res
 
 
-def radial_std(im_diff, pixscale=None, oversample=None, supersample=False, func=np.std):
+def radial_std(im_diff, pixscale=None, oversample=None, supersample=False, 
+               smooth=True, func=np.std, small_numbers=False, nsig=1):
     """Generate contrast curve of PSF difference
 
     Find the standard deviation within fixed radial bins of a differenced image.
@@ -462,7 +463,11 @@ def radial_std(im_diff, pixscale=None, oversample=None, supersample=False, func=
         otherwise the binsize is pixscale*oversample.
     func_std : func
         The function to use for calculating the radial standard deviation.
-
+    smooth : bool
+        Smooth the result by convolving with a Gaussian that has stddev=1
+        Default: True.
+    small_numbers : bool
+        Account for small number statistics? Default: False.
     """
 
     from astropy.convolution import convolve, Gaussian1DKernel
@@ -471,7 +476,7 @@ def radial_std(im_diff, pixscale=None, oversample=None, supersample=False, func=
     oversample = 1 if supersample or (oversample is None) else oversample
 
     # Rebin data
-    data_rebin = frebin(im_diff, scale=1/oversample)
+    data_rebin = im_diff if oversample==1 else frebin(im_diff, scale=1/oversample)
 
     # Determine pixel scale of rebinned data
     pixscale = 1 if pixscale is None else oversample*pixscale
@@ -480,12 +485,45 @@ def radial_std(im_diff, pixscale=None, oversample=None, supersample=False, func=
     rho = dist_image(data_rebin, pixscale=pixscale)
 
     # Get radial profiles
-    binsize = pixscale
-    bins = np.arange(rho.min(), rho.max() + binsize, binsize)
+    bsize = pixscale
+    bins = np.arange(rho.min(), rho.max() + bsize, bsize)
     nan_mask = np.isnan(data_rebin)
     igroups, _, rr = hist_indices(rho[~nan_mask], bins, True)
-    stds = binned_statistic(igroups, data_rebin[~nan_mask], func=func)
-    stds = convolve(stds, Gaussian1DKernel(1))
+
+    # Pass delta degree of freedom to std dev for N-1 (unbiased estimator)
+    kwargs = {}
+    if func is np.std or func is np.nanstd:
+        kwargs = {'ddof': 1}
+    stds = binned_statistic(igroups, data_rebin[~nan_mask], func=func, **kwargs)
+
+    # Account for small number statistics
+    if small_numbers:
+        from scipy import stats
+        # Find n-sigma using student-t distribution
+        # Based on Mawet et al. (2014) Section 3.4
+        # 1. Choose confidence level (nsig)
+        # 2. Get number of resolution elements within each annulus
+        # 3. Get Student T detection threshold corresponding to CL (nsig)
+        # 4. Multiply detection threshold by np.sqrt(1+1/nres)
+
+        # Number of values within each bin
+        nvals = np.array([len(ig) for ig in igroups])
+        # Number of resolution elements within each bin
+        # divide the number of pixels by ~size of one resolution element
+        resolution = 1
+        nres = int(np.floor(nvals/(np.pi * (resolution/2)**2)))
+
+        # Cumulative distribution for somen-sigma
+        cdf = stats.norm.cdf(nsig)
+        # Get equivalent n-sigma distribution for small sample sizes
+        tau = stats.t.ppf(q=cdf, df=nres-1) * np.sqrt(1. + 1/nres)
+        stds = tau * stds
+    else:
+        stds = nsig * stds
+
+    # Smooth curve?
+    if smooth:
+        stds = convolve(stds, Gaussian1DKernel(1))
 
     # Ignore corner regions
     arr_size = np.min(data_rebin.shape) * pixscale
