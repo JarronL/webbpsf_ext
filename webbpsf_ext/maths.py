@@ -2,7 +2,7 @@
 import numpy as np
 from numpy.polynomial import legendre
 from scipy.special import eval_legendre
-
+from scipy import stats
 
 from .coords import dist_image
 from .image_manip import frebin
@@ -362,7 +362,7 @@ def hist_indices(values, bins=10, return_more=False):
     # then we need to set a warning.
     if (vmin<bins[0]) or (vmax>bins[-1]):
         raise ValueError("Bins must encompass entire set of input values.")
-    digitized = ((nbins-1.0) / (vmax-vmin) * (values_flat-vmin)).astype(np.int)
+    digitized = ((nbins-1.0) / (vmax-vmin) * (values_flat-vmin)).astype(int)
     csr = csr_matrix((values_flat, [digitized, np.arange(N)]), shape=(nbins, N))
 
     # Split indices into their bin groups    
@@ -407,7 +407,6 @@ def binned_statistic(x, values, func=np.mean, bins=10, **kwargs):
     
     """
 
-    from scipy import stats
     values_flat = values.ravel()
     
     try: # This will be successful if x is not already a list of indices
@@ -439,8 +438,8 @@ def binned_statistic(x, values, func=np.mean, bins=10, **kwargs):
     return res
 
 
-def radial_std(im_diff, pixscale=None, oversample=None, supersample=False, 
-               smooth=True, func=np.std, small_numbers=False, nsig=1, **kwargs):
+def radial_std(im_diff, pixscale=None, oversample=None, supersample=False, nsig=1, 
+               smooth=True, func=np.std, small_numbers=True, **kwargs):
     """Generate contrast curve of PSF difference
 
     Find the standard deviation within fixed radial bins of a differenced image.
@@ -461,13 +460,15 @@ def radial_std(im_diff, pixscale=None, oversample=None, supersample=False,
     supersample : bool
         If set, then oversampled data will have a binsize of pixscale,
         otherwise the binsize is pixscale*oversample.
+    nsig : float
+        Return number of n-sigma standard deviation.
     func_std : func
         The function to use for calculating the radial standard deviation.
     smooth : bool
         Smooth the result by convolving with a Gaussian that has stddev=1
         Default: True.
     small_numbers : bool
-        Account for small number statistics? Default: False.
+        Account for small number statistics? Default: True.
     """
 
     from astropy.convolution import convolve, Gaussian1DKernel
@@ -498,7 +499,6 @@ def radial_std(im_diff, pixscale=None, oversample=None, supersample=False,
 
     # Account for small number statistics
     if small_numbers:
-        from scipy import stats
         # Find n-sigma using student-t distribution
         # Based on Mawet et al. (2014) Section 3.4
         # 1. Choose confidence level (nsig)
@@ -511,7 +511,7 @@ def radial_std(im_diff, pixscale=None, oversample=None, supersample=False,
         # Number of resolution elements within each bin
         # divide the number of pixels by ~size of one resolution element
         resolution = 1
-        nres = int(np.floor(nvals/(np.pi * (resolution/2)**2)))
+        nres = np.floor(nvals/(np.pi * (resolution/2)**2)).astype(int)
 
         # Cumulative distribution for somen-sigma
         cdf = stats.norm.cdf(nsig)
@@ -635,3 +635,15 @@ def fit_bootstrap(pinit, datax, datay, function, yerr_systematic=0.0, nrand=1000
     else:
         return mean_pfit, err_pfit
     
+
+def round_int(val, half_round='down'):
+    """
+    Replacement for `round` and `np.round`, which uses 'bankers rounding'
+    such that x.5 is rounded to the nearest even number. Instead,
+    we want x.5 to round down. Option to round x.5 up by
+    setting `half_round='up'`.
+    """
+    if half_round.lower()=='down':
+        return np.rint(np.nextafter(val, val-1))
+    else:
+        return np.rint(np.nextafter(val, val+1))

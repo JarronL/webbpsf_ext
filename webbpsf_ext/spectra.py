@@ -1414,6 +1414,9 @@ def linder_filter(table, filt, age, dist=10, cond_file=None, **kwargs):
         Distance in pc. Default is 10pc (abs mag).
     """    
     
+    # In the event of underscores within name
+    filt = filt.split('_')[0]
+
     try:
         x = table[filt]
     except KeyError:
@@ -1884,17 +1887,18 @@ def companion_spec(bandpass, model='SB12', atmo='hy3s', mass=10, age=100, entrop
                         
         # For BEX and COND models, set up renorm_args
         # unless renorm_args is already set
+        filt = bandpass.name.split('_')[0]
         if (renorm_args is not None) and (len(renorm_args) > 0):
             pass
         elif model.lower()=='bex':
             table = linder_table()
-            mass_arr, mag_arr = linder_filter(table, bandpass.name, age, dist=dist)
+            mass_arr, mag_arr = linder_filter(table, filt, age, dist=dist)
             mag = np.interp(mass, mass_arr, mag_arr)
             mag += del_mag  # Apply extinction and/or accretion offsets
             renorm_args = (mag, 'vegamag', bandpass)
         elif model.lower()=='cond':
             table = cond_table(age)
-            mass_arr, mag_arr = cond_filter(table, bandpass.name, dist=dist)
+            mass_arr, mag_arr = cond_filter(table, filt, dist=dist)
             mag = np.interp(mass, mass_arr, mag_arr)
             mag += del_mag  # Apply extinction and/or accretion offsets
             renorm_args = (mag, 'vegamag', bandpass)

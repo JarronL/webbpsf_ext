@@ -5,6 +5,7 @@ from tqdm.auto import tqdm
 from .image_manip import fourier_imshift, fshift
 from .image_manip import frebin, pad_or_cut_to_size, bp_fix
 from .coords import dist_image
+from .maths import round_int
 
 from astropy.io import fits
 from skimage.registration import phase_cross_correlation
@@ -13,21 +14,17 @@ from skimage.registration import phase_cross_correlation
 from .utils import get_one_siaf
 nrc_siaf = get_one_siaf(instrument='NIRCam')
 
+import logging
+# Define logging
+_log = logging.getLogger(__name__)
+_log.setLevel(logging.INFO)
+
 ###########################################################################
 #    Target Acquisition
 ###########################################################################
 
-def get_ictm_event_log(startdate, enddate, mast_api_token=None, verbose=False):
-    """Grab event log information from JWST Engineering Database
-    
-    To find guide star failues:
-
-        elog = get_ictm_event_log('2022-10-21', '2022-10-23')
-        for value in reader(elog, delimiter=',', quotechar='"'):
-            val_str = value[2]
-            if 'FGS fixed target guide star acquisition failed on all attempts' in val_str:
-                print(value)
-    """
+def get_ictm_event_log(startdate, enddate, hdr=None, mast_api_token=None, verbose=False):
+    """"""
 
     from datetime import datetime, timedelta, timezone
     from requests import Session
@@ -40,33 +37,31 @@ def get_ictm_event_log(startdate, enddate, mast_api_token=None, verbose=False):
     mastfmt = '%Y%m%dT%H%M%S'
     tz_utc = timezone(timedelta(hours=0))
 
-    # set or interactively get mast token
+    # establish MAST session
+    session = Session()
+
+    # Attempt to find MAST token if set to None
     if mast_api_token is None:
         mast_api_token = os.environ.get('MAST_API_TOKEN')
-        # MAST token doesn't appear to be necessary any longer
+        # NOTE: MAST token is no longer strictly necessary (I think?)
         # if mast_api_token is None:
         #     raise ValueError("Must define MAST_API_TOKEN env variable or specify mast_api_token parameter")
 
-    # establish MAST session
-    session = Session()
-    session.headers.update({'Authorization': f'token {mast_api_token}'})
+    # Update token
+    if mast_api_token is not None:
+        session.headers.update({'Authorization': f'token {mast_api_token}'})
 
-    # startdate = hdr['VSTSTART']
-    # enddate = hdr['VISITEND']
+    # Determine date range to grab data
+    if hdr is not None:
+        startdate = hdr['VSTSTART']
+        enddate = hdr['VISITEND']
     
     startdate = startdate.replace(' ', '+')
+    idot = startdate.index('.')
+    startdate = startdate[0:idot]
     enddate = enddate.replace(' ', '+')
-    # Parse out msec
-    try:
-        idot = startdate.index('.')
-        startdate = startdate[0:idot]
-    except ValueError:
-        pass
-    try:
-        idot = enddate.index('.')
-        enddate = enddate[0:idot]
-    except ValueError:
-        pass
+    idot = enddate.index('.')
+    enddate = enddate[0:idot]
 
     # fetch event messages from MAST engineering database (lags FOS EDB)
     start = datetime.fromisoformat(startdate)
@@ -77,7 +72,7 @@ def get_ictm_event_log(startdate, enddate, mast_api_token=None, verbose=False):
     url = f'{base}/{filename}'
 
     if verbose:
-        print(f"Retrieving {url}")
+        _log.info(f"Retrieving {url}")
     response = session.get(url)
     if response.status_code == 401:
         exit('HTTPError 401 - Check your MAST token and EDB authorization.')
@@ -86,12 +81,13 @@ def get_ictm_event_log(startdate, enddate, mast_api_token=None, verbose=False):
 
     return lines
 
+
 def find_centroid_det(eventlog, selected_visit_id):
     """Get centroid position of TA as reported in JWST event logs"""
 
     from csv import reader
     from datetime import datetime
-    
+
     # parse response (ignoring header line) and print new event messages
     vid = ''
     in_selected_visit = False
@@ -105,7 +101,7 @@ def find_centroid_det(eventlog, selected_visit_id):
             # Print coordinate location info
             val_str = value[2]
             if ('postage-stamp coord' in val_str) or ('detector coord' in val_str): 
-                print(val_str)
+                _log.info(val_str)
         
             # Parse centroid position reported in detector coordinates
             if 'detector coord (colCentroid, rowCentroid)' in val_str:
@@ -124,7 +120,7 @@ def find_centroid_det(eventlog, selected_visit_id):
                 vid = value[2].split()[1]
 
                 if vid==selected_visit_id:
-                    # print(f"VISIT {selected_visit_id} START FOUND at {vstart}")
+                    _log.debug(f"VISIT {selected_visit_id} START FOUND at {vstart}")
                     in_selected_visit = True
                     # if ta_only:
                     #     print("Only displaying TARGET ACQUISITION RESULTS:")
@@ -134,8 +130,7 @@ def find_centroid_det(eventlog, selected_visit_id):
                 assert selected_visit_id  == value[2].split()[1]
 
                 vend = 'T'.join(value[0].split())[:-3]
-                # print(f"VISIT {selected_visit_id} END FOUND at {vend}")
-
+                _log.debug(f"VISIT {selected_visit_id} END FOUND at {vend}")
 
                 in_selected_visit = False
         elif value[2][:31] == f'Script terminated: {vid}':
@@ -224,7 +219,7 @@ def read_ta_conf_files(indir, pid, obsid, sca, bpfix=False):
         d['apname'] = d['hdr0']['APERNAME']
         d['ap'] = nrc_siaf[d['apname']]
 
-        # bad pixel fixing for TA confirmation
+        # bad pixel fixing for TA confirmation around a 100=pixel region
         if bpfix and ('conf' in k):
             im = crop_observation(d['data'], d['ap'], 100)
             # Perform pixel fixing in place
@@ -411,7 +406,10 @@ def find_max_crosscorr(corr, xsh_arr, ysh_arr, sub_sample):
 def gen_psf_offsets(psf, crop=65, xlim_pix=(-3,3), ylim_pix=(-3,3), dxy=0.05,
     psf_osamp=1, shift_func=fourier_imshift, ipc_vals=None, kipc=None,
     prog_leave=False, **kwargs):
-    """
+    """ Generate a series of downsampled cropped and shifted PSF images
+
+    If fov_pix is odd, then crop should be odd. 
+    If fov_pix is even, then crop should be even.
     
     Add IPC:
         Either ipc_vals = 0.006 or ipc_vals=[0.006,0.0004].
@@ -420,6 +418,17 @@ def gen_psf_offsets(psf, crop=65, xlim_pix=(-3,3), ylim_pix=(-3,3), dxy=0.05,
     """
     
     from pynrc.simul.ngNRC import add_ipc
+
+    psf_is_even = np.mod(psf.shape[0] / psf_osamp, 2) == 0
+    psf_is_odd = not psf_is_even
+    crop_is_even = np.mod(crop, 2) == 0
+    crop_is_odd = not crop_is_even
+
+    if (psf_is_even and crop_is_odd) or (psf_is_odd and crop_is_even):
+        crop = crop + 1
+        crop_is_even = np.mod(crop, 2) == 0
+        crop_is_odd = not crop_is_even
+        _log.warning('PSF and crop must both be even or odd. Incrementing crop by 1.')
 
     # Range of offsets to probe in fractional pixel steps
     xmin_pix, xmax_pix = xlim_pix
@@ -437,7 +446,8 @@ def gen_psf_offsets(psf, crop=65, xlim_pix=(-3,3), ylim_pix=(-3,3), dxy=0.05,
     # Make initial crop so we don't shift entire image
     crop_init = crop + int(2*(np.max(np.abs(np.concatenate([xoff_pix, yoff_pix]))) + 1))
     crop_init_over = crop_init * psf_osamp
-    psf0 = pad_or_cut_to_size(psf, crop_init_over)
+    psf0 = crop_image(psf, crop_init_over)
+    # psf0 = pad_or_cut_to_size(psf, crop_init_over)
 
     # Create a series of shifted PSFs to compare to images
     psf_sh_all = []
@@ -445,8 +455,12 @@ def gen_psf_offsets(psf, crop=65, xlim_pix=(-3,3), ylim_pix=(-3,3), dxy=0.05,
         xoff_over = xoff*psf_osamp
         yoff_over = yoff*psf_osamp
         crop_over = crop*psf_osamp
-        psf_sh = pad_or_cut_to_size(psf0, crop_over, offset_vals=(-yoff_over,-xoff_over), 
-                                    shift_func=shift_func)
+
+        psf_sh = crop_image(psf0, crop_over, xyloc=None, delx=-xoff_over, dely=-yoff_over,
+                            shift_func=shift_func, pad=False, **kwargs)
+        # psf_sh = pad_or_cut_to_size(psf0, crop_over, offset_vals=(-yoff_over,-xoff_over), 
+        #                             shift_func=shift_func, pad=True)
+
         # Rebin to detector pixels
         psf_sh = frebin(psf_sh, scale=1/psf_osamp)
         psf_sh_all.append(psf_sh)
@@ -471,22 +485,31 @@ def gen_psf_offsets(psf, crop=65, xlim_pix=(-3,3), ylim_pix=(-3,3), dxy=0.05,
 
     return xoff_pix, yoff_pix, psf_sh_all
 
-
-def crop_observation(im_full, ap, xysub, delx=0, dely=0, 
+def crop_observation(im_full, ap, xysub, xyloc=None, delx=0, dely=0, 
                      shift_func=fourier_imshift, interp='cubic',
                      return_xy=False, **kwargs):
-    """Crop aperture around reference location
-    
-    Options to shift array by some offset.
+    """Crop around aperture reference location
 
-    if xysub is an array, dimensions should be [nysub,nxsub]
+    `xysub` specifies the desired crop size.
+    if `xysub` is an array, dimension order should be [nysub,nxsub]
+
+    `xyloc` provides a way to manually supply the central position. 
+    Set `ap` to None will crop around `xyloc` or center of array.
+
+    Provides an options to shift array by some offset before cropping
+    to allow for sub-pixel shifting. To change integer crop positions,
+    recommend using `xyloc` instead.
+
+    Shift function can be fourier_imshfit, fshift, or cv_shift.
+    The interp keyword only works for the latter two options.
+    Consider 'lanczos' for cv_shift.
+
     """
         
-    sh_orig = im_full.shape
-    xcorn_sci, ycorn_sci = ap.corners('sci')
-    xcmin, ycmin = (int(xcorn_sci.min()+0.5), int(ycorn_sci.min()+0.5))
-    xsci_arr = np.arange(1, im_full.shape[1]+1)
-    ysci_arr = np.arange(1, im_full.shape[0]+1)
+    # xcorn_sci, ycorn_sci = ap.corners('sci')
+    # xcmin, ycmin = (int(xcorn_sci.min()+0.5), int(ycorn_sci.min()+0.5))
+    # xsci_arr = np.arange(1, im_full.shape[1]+1)
+    # ysci_arr = np.arange(1, im_full.shape[0]+1)
 
     
     # Cut out postage stamp from full frame image
@@ -494,22 +517,38 @@ def crop_observation(im_full, ap, xysub, delx=0, dely=0,
         ny_sub, nx_sub = xysub
     else:
         ny_sub = nx_sub = xysub
-    xc, yc = (ap.XSciRef, ap.YSciRef)
-    x1, x2 = np.array([xc - nx_sub/2 - 0.5, xc + nx_sub/2 - 0.5]).astype('int')
-    y1, y2 = np.array([yc - ny_sub/2 - 0.5, yc + ny_sub/2 - 0.5]).astype('int')
+    
+    # Get centroid position
+    if ap is None:
+        xc, yc = get_im_cen(im_full) if xyloc is None else xyloc
+    else: 
+        # Subtract 1 from sci coords to get indices
+        xc, yc = (ap.XSciRef-1, ap.YSciRef-1) if xyloc is None else xyloc
 
-    if (x2>nx_sub) or (y2>ny_sub) or (x1<0) or (y1<0):
-        dx = x2 - nx_sub
+    x1 = int(round_int(xc) - nx_sub/2 + 1)
+    x2 = x1 + nx_sub
+    y1 = int(round_int(yc) - ny_sub/2 + 1)
+    y2 = y1 + ny_sub
+
+    # Save initial values in case they get modified below
+    x1_init, x2_init = (x1, x2)
+    y1_init, y2_init = (y1, y2)
+
+    sh_orig = im_full.shape
+    if (x2>sh_orig[0]) or (y2>sh_orig[1]) or (x1<0) or (y1<0):
+        dx = x2 - sh_orig[0]
         dx = 0 if dx<0 else dx
-        dy = y2 - ny_sub
+        dy = y2 - sh_orig[1]
         dy = 0 if dy<0 else dy
         # Expand image
         shape_new = (2*dy+sh_orig[0], 2*dx+sh_orig[1])
         im_full = pad_or_cut_to_size(im_full, shape_new)
 
         xc_new, yc_new = (xc+dx, yc+dy)
-        x1, x2 = np.array([xc_new - nx_sub/2 - 0.5, xc_new + nx_sub/2 - 0.5]).astype('int')
-        y1, y2 = np.array([yc_new - ny_sub/2 - 0.5, yc_new + ny_sub/2 - 0.5]).astype('int')
+        x1 = int(round_int(xc_new) - nx_sub/2 + 1)
+        x2 = x1 + nx_sub
+        y1 = int(round_int(yc_new) - ny_sub/2 + 1)
+        y2 = y1 + ny_sub
 
     if (x1<0) or (y1<0):
         dx = -1*x1 if x1<0 else 0
@@ -520,22 +559,41 @@ def crop_observation(im_full, ap, xysub, delx=0, dely=0,
         im_full = pad_or_cut_to_size(im_full, shape_new)
 
         xc_new, yc_new = (xc+dx, yc+dy)
-        x1, x2 = np.array([xc_new - nx_sub/2 - 0.5, xc_new + nx_sub/2 - 0.5]).astype('int')
-        y1, y2 = np.array([yc_new - ny_sub/2 - 0.5, yc_new + ny_sub/2 - 0.5]).astype('int')
+        x1 = int(round_int(xc_new) - nx_sub/2 + 1)
+        x2 = x1 + nx_sub
+        y1 = int(round_int(yc_new) - ny_sub/2 + 1)
+        y2 = y1 + ny_sub
 
-
-    if shift_func is fshift:
-        im_full = shift_func(im_full, delx=delx, dely=dely, interp=interp, **kwargs)
-    else:
+    # Perform pixel shifting
+    if delx!=0 or dely!=0:
+        kwargs['interp'] = interp
+        # Use fshift function if only performing integer shifts
+        if float(delx).is_integer() and float(dely).is_integer():
+            shift_func = fshift
         im_full = shift_func(im_full, delx, dely, **kwargs)
     
     im = im_full[y1:y2, x1:x2]
-    xy_ind = np.array([x1, x2, y1, y2])
+    xy_ind = np.array([x1_init, x2_init, y1_init, y2_init])
     
     if return_xy:
         return im, xy_ind
     else:
         return im
+
+def get_im_cen(im):
+    """
+    Returns pixel position of array center.
+    For odd dimensions, this is in a pixel center.
+    For even dimensions, this is at the pixel boundary.
+    """
+    ny, nx = im.shape
+    return np.array([nx / 2. - 0.5, ny / 2. - 0.5])
+
+def crop_image(im, xysub, xyloc=None, **kwargs):
+    """Crop input image around center using integer offsets only"""
+    
+    return crop_observation(im, None, xysub, xyloc=xyloc, **kwargs)
+
 
 def find_offsets(input, psf, crop=65, xlim_pix=(-3,3), ylim_pix=(-3,3), 
     shift_func=fshift, rin=0, rout=None, dxy_coarse=0.05, dxy_fine=0.01):
@@ -630,17 +688,19 @@ def find_offsets2(input, xoff_pix, yoff_pix, psf_sh_all, bpmasks=None,
             d = input[val]
             im = crop_observation(d['data'], d['ap'], crop)
         else:
-            im = pad_or_cut_to_size(val, crop)
+            im = crop_image(val, crop)
 
         # Crop PSFs to match size
-        psf_sh_all = pad_or_cut_to_size(psf_sh_all, crop)
+        psf_sh_crop = np.array([crop_image(psf, crop) for psf in psf_sh_all])
 
         # Crop bp mask to match 
         if bpmasks is None:
             bpmask = np.zeros_like(im).astype('bool')
         else:
-            bpmask = pad_or_cut_to_size(bpmasks[i], crop)
+            bpmask = crop_image(bpmasks[i], crop)
             i += 1
+
+        # print(im.shape, psf_sh_crop.shape, psf_sh_all.shape)
 
         # Create masks
         rdist = dist_image(im)
@@ -651,7 +711,7 @@ def find_offsets2(input, xoff_pix, yoff_pix, psf_sh_all, bpmasks=None,
         ind_mask = rmask & zmask & (~bpmask)
         
         # Cross-correlate to find best x,y shift to align image with PSF
-        cc = correl_images(psf_sh_all, im, mask=ind_mask)
+        cc = correl_images(psf_sh_crop, im, mask=ind_mask)
         cc = cc.reshape(sh_grid)
         
         # Cubic interplotion of cross correlation image onto a finer grid

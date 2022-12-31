@@ -356,7 +356,7 @@ def pad_or_cut_to_size(array, new_shape, fill_val=0.0, offset_vals=None,
         # Reshape array to a 2D array with nx=1
         array = array.reshape((1,1,-1))
         nz, ny, nx = array.shape
-        if isinstance(new_shape, (float,int,np.int,np.int64)):
+        if isinstance(new_shape, (float,int,np.int64)):
             nx_new = int(new_shape+0.5)
             ny_new = 1
             new_shape = (ny_new, nx_new)
@@ -375,7 +375,7 @@ def pad_or_cut_to_size(array, new_shape, fill_val=0.0, offset_vals=None,
         else:
             nz, ny, nx = array.shape
 
-        if isinstance(new_shape, (float,int,np.int,np.int64)):
+        if isinstance(new_shape, (float,int,np.int64)):
             ny_new = nx_new = int(new_shape+0.5)
             new_shape = (ny_new, nx_new)
         elif len(new_shape) < 2:
@@ -401,7 +401,7 @@ def pad_or_cut_to_size(array, new_shape, fill_val=0.0, offset_vals=None,
     if offset_vals is not None:
         if ndim == 1:
             ny_off = 0
-            if isinstance(offset_vals, (float,int,np.int,np.int64)):
+            if isinstance(offset_vals, (float,int,np.int64)):
                 nx_off = offset_vals
             elif len(offset_vals) < 2:
                 nx_off = offset_vals[0]
