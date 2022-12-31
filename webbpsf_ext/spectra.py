@@ -537,7 +537,7 @@ class source_spectrum(object):
     >>> # Read in stellar spectrum model and normalize to Ks = 5.24
     >>> src = source_spectrum(name, 'F0V', 5.24, bp_k, vot,
     >>>                       Teff=7430, metallicity=-0.47, log_g=4.35)
-    >>> # Fit model to photometry from 0.1 - 30 micons
+    >>> # Fit model to photometry from 0.1 - 30 microns
     >>> # Saves pysynphot spectral object at src.sp_model
     >>> src.fit_SED(wlim=[0.1,30])
     >>> sp_sci = src.sp_model
