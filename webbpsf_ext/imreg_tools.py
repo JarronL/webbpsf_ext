@@ -800,3 +800,53 @@ def find_offsets_phase(input, psf, crop=65, rin=0, rout=None, dxy_fine=0.01,
     res = np.array([xsh0_pix, ysh0_pix]).T
     
     return res.squeeze()
+
+
+def get_com(im, halfwidth=7, return_sci=False, **kwargs):
+    
+    from poppy.fwcentroid import fwcentroid
+    
+    # Find center of mass centroid
+    com = fwcentroid(im, halfwidth=halfwidth, **kwargs)
+    yind_com, xind_com = com
+    
+    if return_sci:
+        return xind_com+1, yind_com+1
+    else:
+        return xind_com, yind_com
+
+def recenter_psf(psfs_over, niter=3, halfwidth=7):
+    """Use center of mass algorithm to relocate PSF to center of image.
+    
+    Returns recentered PSFs and shift values used.
+    """
+
+    from webbpsf_ext.image_manip import fourier_imshift
+
+    ndim = len(psfs_over.shape)
+    if ndim==2:
+        psfs_over = [psfs_over]
+
+    # Reposition oversampled PSF to center of array using center of mass algorithm
+    xyoff_psfs_over = []
+    for i, psf in enumerate(psfs_over):
+        xc_psf, yc_psf = get_im_cen(psf)
+        xsh_sum, ysh_sum = (0, 0)
+        for j in range(niter):
+            xc, yc = get_com(psf, halfwidth=halfwidth, return_sci=False)
+            xsh, ysh = (xc_psf - xc, yc_psf - yc)
+            psf = fourier_imshift(psf, xsh, ysh)
+            xsh_sum += xsh
+            ysh_sum += ysh
+        psfs_over[i] = psf
+        xyoff_psfs_over.append(np.array([xsh_sum, ysh_sum]))
+        
+    # Oversampled offsets
+    xyoff_psfs_over = np.array(xyoff_psfs_over)
+
+    # If input was a single image, return same dimensions
+    if ndim==2:
+        psfs_over = psfs_over[0]
+        xyoff_psfs_over = xyoff_psfs_over[0]
+
+    return psfs_over, xyoff_psfs_over
