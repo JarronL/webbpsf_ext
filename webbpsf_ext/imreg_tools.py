@@ -525,9 +525,9 @@ def crop_observation(im_full, ap, xysub, xyloc=None, delx=0, dely=0,
         # Subtract 1 from sci coords to get indices
         xc, yc = (ap.XSciRef-1, ap.YSciRef-1) if xyloc is None else xyloc
 
-    x1 = int(round_int(xc) - nx_sub/2 + 1)
+    x1 = round_int(xc - nx_sub/2 + 0.5)
     x2 = x1 + nx_sub
-    y1 = int(round_int(yc) - ny_sub/2 + 1)
+    y1 = round_int(yc - ny_sub/2 + 0.5)
     y2 = y1 + ny_sub
 
     # Save initial values in case they get modified below
@@ -545,9 +545,9 @@ def crop_observation(im_full, ap, xysub, xyloc=None, delx=0, dely=0,
         im_full = pad_or_cut_to_size(im_full, shape_new)
 
         xc_new, yc_new = (xc+dx, yc+dy)
-        x1 = int(round_int(xc_new) - nx_sub/2 + 1)
+        x1 = round_int(xc_new - nx_sub/2 + 0.5)
         x2 = x1 + nx_sub
-        y1 = int(round_int(yc_new) - ny_sub/2 + 1)
+        y1 = round_int(yc_new - ny_sub/2 + 0.5)
         y2 = y1 + ny_sub
 
     if (x1<0) or (y1<0):
@@ -559,9 +559,9 @@ def crop_observation(im_full, ap, xysub, xyloc=None, delx=0, dely=0,
         im_full = pad_or_cut_to_size(im_full, shape_new)
 
         xc_new, yc_new = (xc+dx, yc+dy)
-        x1 = int(round_int(xc_new) - nx_sub/2 + 1)
+        x1 = round_int(xc_new - nx_sub/2 + 0.5)
         x2 = x1 + nx_sub
-        y1 = int(round_int(yc_new) - ny_sub/2 + 1)
+        y1 = round_int(yc_new - ny_sub/2 + 0.5)
         y2 = y1 + ny_sub
 
     # Perform pixel shifting
