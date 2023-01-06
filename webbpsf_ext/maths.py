@@ -644,6 +644,6 @@ def round_int(val, half_round='down'):
     setting `half_round='up'`.
     """
     if half_round.lower()=='down':
-        return np.rint(np.nextafter(val, val-1))
+        return int(np.rint(np.nextafter(val, val-1)))
     else:
-        return np.rint(np.nextafter(val, val+1))
+        return int(np.rint(np.nextafter(val, val+1)))
