@@ -715,6 +715,7 @@ class NIRCam_ext(webbpsf_NIRCam):
         coord_vals : tuple or None
             Coordinates (in arcsec or pixels) to calculate field-dependent PSF.
             If multiple values, then this should be an array ([xvals], [yvals]).
+            Relative to `self.aperturename` and `self.detector_position`.
         coord_frame : str
             Type of input coordinates. 
 
@@ -759,11 +760,9 @@ class NIRCam_ext(webbpsf_NIRCam):
 
         Parameters
         ----------
-        sp : :mod:`pysynphot.spectrum`
-            Source input spectrum. If not specified, the default is flat in phot lam.
-            (equal number of photons per spectral bin).
         source : synphot.spectrum.SourceSpectrum or dict
             TODO: synphot not yet implemented in webbpsf_ext!!
+            Use ``sp`` keyword instead for pysynphot.
         nlambda : int
             How many wavelengths to model for broadband?
             The default depends on how wide the filter is: (5,3,1) for types (W,M,N) respectively
@@ -802,6 +801,21 @@ class NIRCam_ext(webbpsf_NIRCam):
 
         Keyword Args
         ------------
+        sp : :mod:`pysynphot.spectrum`
+            Source input spectrum. If not specified, the default is flat in phot lam.
+            (equal number of photons per spectral bin).
+        coord_vals : tuple or None
+            Coordinates (in arcsec or pixels) to calculate field-dependent PSF.
+            If multiple values, then this should be an array ([xvals], [yvals]).
+            Relative to `self.aperturename` and `self.detector_position`.
+        coord_frame : str
+            Type of input coordinates. 
+
+                * 'tel': arcsecs V2,V3
+                * 'sci': pixels, in DMS axes orientation; aperture-dependent
+                * 'det': pixels, in raw detector read out axes orientation
+                * 'idl': arcsecs relative to aperture reference location.
+
         return_hdul : bool
             Return PSFs in an HDUList rather than set of arrays (default: True).
         return_oversample : bool
@@ -3849,6 +3863,7 @@ def _wfe_drift_key(self, coord_vals, coord_frame):
             x = np.array(coord_vals[0])
             y = np.array(coord_vals[1])
             
+            # TODO: Clean up this section
             try:
                 apname = self.aperturename
                 siaf_ap = self.siaf[apname]
