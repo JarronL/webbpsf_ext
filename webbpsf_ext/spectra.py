@@ -310,7 +310,7 @@ def stellar_spectrum(sptype, *renorm_args, **kwargs):
         Default: 2000.
     interpolate : bool
         Interpolate BOSZ spectrum using a weighted average of grid points
-        surrounding the desired input parameters. Default is True.
+        surrounding the desired input parameters. 
         Default: True
     """
 
@@ -514,6 +514,8 @@ class source_spectrum(object):
         Metallicity [Fe/H] value ranging from -2.5 to 0.5.
     log_g : float
         Surface gravity (log g) from 0 to 5.
+    Av : float
+        Add extinction to the stellar spectrum
     catname : str
         Catalog name, including 'bosz', 'ck04models', and 'phoenix'.
         Default is 'bosz', which comes from :func:`BOSZ_spectrum`.
@@ -521,7 +523,7 @@ class source_spectrum(object):
         Spectral resolution to use (200 or 2000 or 20000).
     interpolate : bool
         Interpolate spectrum using a weighted average of grid points
-        surrounding the desired input parameters.
+        surrounding the desired input parameters. Default: True
 
     Example
     -------
@@ -696,8 +698,10 @@ class source_spectrum(object):
 
         sp = self.sp_lowres if sp is None else sp
 
-        bb_flux = x[0] * self.bb_jy(sp.wave/1e4, x[1]) * (sp.wave/1e4)**x[2] / 1e17
-        sp_bb = S.ArraySpectrum(sp.wave, bb_flux, fluxunits='Jy')
+        wave = sp.wave
+
+        bb_flux = x[0] * self.bb_jy(wave/1e4, x[1]) * (wave/1e4)**x[2] / 1e17
+        sp_bb = S.ArraySpectrum(wave, bb_flux, fluxunits='Jy')
         sp_bb.convert('Flam')
 
         return sp + sp_bb
