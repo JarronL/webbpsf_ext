@@ -2370,6 +2370,7 @@ def _inst_copy(self):
 
     # SI WFE and distortions
     inst.include_si_wfe = self.include_si_wfe
+    inst.include_ote_field_dependence = self.include_ote_field_dependence
     inst.include_distortions = self.include_distortions
 
     ### Instrument-specific parameters
@@ -2689,7 +2690,8 @@ def _gen_psf_coeff(self, nproc=None, wfe_drift=0, force=False, save=True,
     hdr['OTETHRWF'] = (wfe_dict['therm'], "OTE WFE amplitude from 'thermal slew' term")
     hdr['OTEFRLWF'] = (wfe_dict['frill'], "OTE WFE amplitude from 'frill tension' term")
     hdr['OTEIECWF'] = (wfe_dict['iec'],   "OTE WFE amplitude from 'IEC thermal cycling'")
-    hdr['SIWFE']    = (self.include_si_wfe, "Was SI WFE included?")
+    hdr['SIWFE']    = (self.include_si_wfe, "Was SI field WFE included?")
+    hdr['OTEWFE']   = (self.include_ote_field_dependence, "Was OTE field WFE included?")
     hdr['FORCE']    = (force, "Forced calculations?")
     hdr['SAVE']     = (save, "Was file saved to disk?")
     hdr['FILENAME'] = (save_name, "File save name")
@@ -2931,6 +2933,7 @@ def _gen_wfefield_coeff(self, force=False, save=True, return_results=False, retu
     """
 
     if (self.include_si_wfe==False) or (self.is_coron):
+        # TODO: How do we handle self.include_ote_field_dependence??
         _log.info("Skipping WFE field dependence...")
         if self.include_si_wfe==False:
             _log.info("   `include_si_wfe` attribute is set to False.")
@@ -3972,7 +3975,9 @@ def _coeff_mod_wfe_field(self, coord_vals, coord_frame, siaf_ap=None):
         pass
     elif self._psf_coeff_mod['si_field'] is None:
         si_wfe_str = 'True' if self.include_si_wfe else 'False'
-        _log.info(f"Skipping WFE field dependence: self._psf_coeff_mod['si_field']=None and self.include_si_wfe={si_wfe_str}")
+        ote_wfe_str = 'True' if self.include_ote_field_dependence else 'False'
+        _log.info(f"Skipping WFE field dependence: self._psf_coeff_mod['si_field']=None")
+        _log.info(f"  self.include_si_wfe={si_wfe_str} and self.include_ote_field_dependence={ote_wfe_str} ")
         # _log.warning("You must run `gen_wfefield_coeff` first before setting the coord_vals parameter.")
         # _log.warning("`calc_psf_from_coeff` will continue with default PSF.")
         cf_mod = 0
