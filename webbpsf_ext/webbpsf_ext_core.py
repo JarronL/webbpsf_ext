@@ -1925,7 +1925,8 @@ def _get_opd_info(self, opd=None, pupil=None, HDUL_to_OTELM=True):
         name = 'Modified from ' + opd_name
         opd = OTE_Linear_Model_WSS(name=name, transmission=pupil,
                                    opd=hdul, opd_index=opd_num, 
-                                   v2v3=self._tel_coords())
+                                   v2v3=self._tel_coords(),
+                                   include_nominal_field_dependence=self.include_ote_field_dependence)
         
     setup_logging(log_prev, verbose=False)
 
