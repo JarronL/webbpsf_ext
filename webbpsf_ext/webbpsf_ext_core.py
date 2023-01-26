@@ -392,6 +392,28 @@ class NIRCam_ext(webbpsf_NIRCam):
         
         return bp
 
+    def _update_coron_detector(self):
+        """Depending on filter and image_mask setting, get correct detector"""
+
+        image_mask = self.image_mask
+
+        # For NIRCam, update detector depending mask and filter
+        if self.is_coron and self.name=='NIRCam':
+            bp = nircam_filter(self.filter)
+            avgwave = bp.avgwave() / 1e4
+            # SW Observations
+            if avgwave<2.4:
+                if ('210R' in image_mask) or ('335R' in image_mask) or ('430R' in image_mask):
+                    self.detector = 'NRCA2'
+                    self.aperturename = 'NRCA2' + self.aperturename[5:]
+                elif ('LWB' in image_mask)or ('SWB' in image_mask):
+                    self.detector = 'NRCA4'
+                    self.aperturename = 'NRCA4' + self.aperturename[5:]
+            # LW Observations
+            else:
+                self.aperturename = 'NRCA5' + self.aperturename[5:]
+                # self.detector = 'NRCA5'
+
     def get_bar_offset(self, narrow=False):
         """
         Obtain the value of the bar offset that would be passed through to
@@ -1623,8 +1645,11 @@ def _init_inst(self, filter=None, pupil_mask=None, image_mask=None,
     # Do filter last
     if filter is not None:
         self.filter = filter
+
+    # For NIRCam, update detector depending mask and filter
+    self._update_coron_detector()
         
-    # Don't include SI WFE error for coronagraphy
+    # Don't include SI WFE error for MIRI coronagraphy
     if self.name=='MIRI':
         self.include_si_wfe = False if self.is_coron else True
     elif self.name=='NIRCam':
