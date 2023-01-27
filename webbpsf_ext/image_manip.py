@@ -1489,7 +1489,9 @@ def convolve_image(hdul_sci_image, hdul_psfs, return_hdul=False,
     # Split into workers
     im_conv = np.zeros_like(im_input)
     worker_args = [(im_input, hdul_psfs[i].data, mask_arr[i]) for i in range(npsf)]
-    for wa in tqdm(worker_args, desc='Convolution', leave=False):
+    # itervals = tqdm(worker_args, desc='Convolution', leave=False)
+    itervals = worker_args
+    for wa in itervals:
         im_conv += _convolve_psfs_for_mp(wa)
 
     # Ensure there are no negative values from convolve_fft
