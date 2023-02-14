@@ -707,7 +707,7 @@ class NIRCam_ext(webbpsf_NIRCam):
 
 
     def calc_psf_from_coeff(self, sp=None, return_oversample=True, wfe_drift=None, 
-        coord_vals=None, coord_frame='tel', coron_rescale=False, return_hdul=True, 
+        coord_vals=None, coord_frame='tel', coron_rescale=True, return_hdul=True, 
         **kwargs):
         """ Create PSF image from polynomial coefficients
         
@@ -749,9 +749,10 @@ class NIRCam_ext(webbpsf_NIRCam):
         return_hdul : bool
             Return PSFs in an HDUList rather than set of arrays (default: True).
         coron_rescale : bool
-            Rescale off-axis coronagraphic PSF to better match analytic prediction
-            when source overlaps coronagraphic occulting mask.
-            Primarily used for planetary companion PSFs.
+            Rescale total flux of off-axis coronagraphic PSF to better match 
+            analytic prediction when source overlaps coronagraphic occulting 
+            mask. Primarily used for planetary companion and disk PSFs.
+            Default: True.
         """        
 
         res = _calc_psf_from_coeff(self, sp=sp, return_oversample=return_oversample, 
@@ -4594,8 +4595,9 @@ def _nrc_coron_psf_sums(self, coord_vals, coord_frame, siaf_ap=None, return_max=
 
 def _nrc_coron_rescale(self, res, coord_vals, coord_frame, siaf_ap=None, sp=None):
     """
-    Function for better scaling of NIRCam coronagraphic output for sources
-    that overlap the image masks. 
+    Rescale total flux of off-axis coronagraphic PSF to better match 
+    analytic prediction when source overlaps coronagraphic occulting 
+    mask. Primarily used for planetary companion and disk PSFs.
     """
 
     if coord_vals is None:
