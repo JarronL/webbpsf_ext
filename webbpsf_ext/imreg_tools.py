@@ -803,6 +803,7 @@ def find_offsets_phase(input, psf, crop=65, rin=0, rout=None, dxy_fine=0.01,
 
 
 def get_com(im, halfwidth=7, return_sci=False, **kwargs):
+    """Center of mass centroiding"""
     
     from poppy.fwcentroid import fwcentroid
     
