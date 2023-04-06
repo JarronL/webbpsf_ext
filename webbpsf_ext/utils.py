@@ -133,12 +133,26 @@ def get_one_siaf(filename=None, instrument='NIRCam'):
         siaf_object.description = os.path.basename(filename)
         siaf_object.observatory = 'JWST'
         return siaf_object
+    
 
-def get_detname(det_id):
-    """Return NRC[A-B][1-5] for valid detector/SCA IDs"""
+def get_detname(det_id, use_long=False):
+    """Return NRC[A-B][1-4,5/LONG] for valid detector/SCA IDs
+    
+    Parameters
+    ==========
+    det_id : int or str
+        Detector ID, either integer SCA ID or string detector name.
+    use_long : bool
+        For longwave detectors, return 'LONG' instead of '5' in detector name.
+    """
 
-    det_dict = {481:'A1', 482:'A2', 483:'A3', 484:'A4', 485:'A5',
-                486:'B1', 487:'B2', 488:'B3', 489:'B4', 490:'B5'}
+    # For longwave devices, do we use 'LONG' or '5'?
+    long_str_use = 'LONG' if use_long else '5'
+    long_str_not = '5' if use_long else 'LONG'
+
+
+    det_dict = {481:'A1', 482:'A2', 483:'A3', 484:'A4', 485:f'A{long_str_use}',
+                486:'B1', 487:'B2', 488:'B3', 489:'B4', 490:f'B{long_str_use}'}
     scaids = det_dict.keys()
     detids = det_dict.values()
     detnames = ['NRC' + idval for idval in detids]
@@ -153,16 +167,45 @@ def get_detname(det_id):
     else:
         detname = det_id
 
-    # If NRCALONG or or NRCBLONG, change 'LONG' to '5' 
+    # If NRCA5 or NRCB5, change '5' to 'LONG' 
     detname = detname.upper()
-    if 'LONG' in detname:
-        detname = detname.replace('LONG', '5')
+    if long_str_not in detname:
+        detname = detname.replace(long_str_not, long_str_use)
         # Ensure NRC is prepended
         if detname[0:3]!='NRC':
             detname = 'NRC' + detname
 
     if detname not in detnames:
-        raise ValueError("Invalid detector: {} \n\tValid names are: {}" \
-                  .format(detname, ', '.join(detnames)))
+        all_names = ', '.join(detnames)
+        err_str = f"Invalid detector: {detname} \n\tValid names are: {all_names}"
+        raise ValueError(err_str)
         
     return detname
+
+def pix_ang_size(ap, sr=True, pixscale=None):
+    """Angular area of pixel from aperture object
+    
+    If `sr=True` then return in sterradians,
+    otherwise return in units of arcsec^2.
+    """
+    sr2asec2 = 42545170296.1522
+    
+    # X and Y scale in arcsec / pixel
+    if pixscale is not None:
+        if isinstance(pixscale, (np.ndarray, list, tuple)):
+            xscale, yscale = pixscale
+        else:
+            xscale = yscale = pixscale
+    else:
+        xscale = ap.XSciScale
+        yscale = ap.YSciScale
+    
+    # Area in sq arcsec
+    area_asec2 = xscale * yscale
+    
+    if sr:
+        # Convert to sterradian
+        return area_asec2 / sr2asec2
+    else:
+        return area_asec2
+    
