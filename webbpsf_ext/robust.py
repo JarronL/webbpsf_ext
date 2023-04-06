@@ -381,7 +381,8 @@ def mode(inputData, axis=None, dtype=None):
     
     return dataMode
 
-def std(inputData, Zero=False, axis=None, dtype=None, keepdims=False, return_mask=False):
+def std(inputData, Zero=False, axis=None, dtype=None, 
+        keepdims=False, return_mask=False, ddof=1.0):
     """Robust Sigma
     
     Based on the robust_sigma function from the AstroIDL User's Library.
@@ -415,7 +416,10 @@ def std(inputData, Zero=False, axis=None, dtype=None, keepdims=False, return_mas
     return_mask : bool
         If set to True, then only return boolean array of good (1) and 
         rejected (0) values.
-
+    ddof : int
+    Delta Degrees of Freedom. The divisor used in calculations is N - ddof, 
+    where N represents the number of elements. By default ddof is 1. This 
+    differs from numpy.std which uses ddof=0 by default.
 	"""
 
     inputData = np.array(inputData)
@@ -466,7 +470,7 @@ def std(inputData, Zero=False, axis=None, dtype=None, keepdims=False, return_mas
     ngood = good.sum(axis=axis, keepdims=True)
     mask_nan = ngood < 2
     if mask_nan.sum() > 0:
-        print("WARNING: NaN's will be present due to weird distributions")
+        _log.warning("NaN's will be present due to weird distributions")
     
     # Set bad points to NaNs
     u2[~good] = np.nan
@@ -474,7 +478,7 @@ def std(inputData, Zero=False, axis=None, dtype=None, keepdims=False, return_mas
     numerator = np.nansum( (data - data0)**2 * (1.0 - u2)**4.0, axis=axis, keepdims=True)
     nElements = len(data) if axis is None else data.shape[axis]
     denominator = np.nansum( (1.0 - u2) * (1.0 - 5.0*u2), axis=axis, keepdims=True)
-    sigma = np.sqrt( nElements*numerator / (denominator*(denominator-1.0)) )
+    sigma = np.sqrt( nElements*numerator / (denominator*(denominator-ddof)) )
     
     sigma[mask0] = 0
     sigma[mask_nan] = np.nan
@@ -524,7 +528,7 @@ def _std_old(inputData, Zero=False, axis=None, dtype=None):
         good = np.where( u2 <= 1.0 )
         good = good[0]
         if len(good) < 3:
-            print("WARNING:  Distribution is too strange to compute standard deviation")
+            _log.warning("Distribution is too strange to compute standard deviation")
             sigma = -1.0
             return sigma
         
