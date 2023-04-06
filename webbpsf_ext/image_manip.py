@@ -33,6 +33,15 @@ _log = logging.getLogger('webbpsf_ext')
 #    Image manipulation
 ###########################################################################
 
+def get_im_cen(im):
+    """
+    Returns pixel position of array center.
+    For odd dimensions, this is in a pixel center.
+    For even dimensions, this is at the pixel boundary.
+    """
+    ny, nx = im.shape
+    return np.array([nx / 2. - 0.5, ny / 2. - 0.5])
+
 def fshift(inarr, delx=0, dely=0, pad=False, cval=0.0, interp='linear', **kwargs):
     """ Fractional image shift
     
@@ -1438,7 +1447,7 @@ def convolve_image(hdul_sci_image, hdul_psfs, return_hdul=False,
             xcen_im = hdr_im['XCEN']
             ycen_im = hdr_im['YCEN']
         except:
-            ycen_im, xcen_im = np.array(im_input.shape) / 2
+            ycen_im, xcen_im = get_im_cen(im_input)
 
     try:
         pixscale = hdr_im['PIXELSCL']
@@ -1749,6 +1758,43 @@ def crop_zero_rows_cols(image, symmetric=True, return_indices=False):
         return im_new, [ix1,ix2,iy1,iy2]
     else:
         return im_new
+
+def expand_mask(bpmask, npix, grow_diagonal=False):
+    """Expand bad pixel mask by npix pixels
+    
+    Parameters
+    ==========
+    bpmask : 2D array
+        Boolean bad pixel mask
+    npix : int
+        Number of pixels to expand mask by
+    diagonal : bool
+        Expand mask by npix pixels in all directions, including diagonals
+    in_place : bool
+        Modify the original mask (True) or return a copy (False)
+
+    Returns
+    =======
+    bpmask : 2D array of booleans
+        Expanded bad pixel mask
+    """
+    from scipy.ndimage import binary_dilation, generate_binary_structure
+
+    if npix==0:
+        return bpmask
+
+    # Expand mask by npix pixels, including corners
+    if grow_diagonal:
+        # Perform normal dilation without corners (just left, right, up, down)
+        if npix>1:
+            bpmask = binary_dilation(bpmask, iterations=npix-1)
+        # Add corners in final iteration
+        struct2 = generate_binary_structure(2, 2)
+        bpmask = binary_dilation(bpmask, structure=struct2)
+    else: # No corners
+        bpmask = binary_dilation(bpmask, iterations=npix)
+
+    return bpmask
 
 def bp_fix(im, sigclip=5, niter=1, pix_shift=1, rows=True, cols=True, 
            bpmask=None, return_mask=False, verbose=False, in_place=True):
