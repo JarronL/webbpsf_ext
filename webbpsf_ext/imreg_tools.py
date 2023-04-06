@@ -2,9 +2,9 @@ import numpy as np
 import os
 from tqdm.auto import tqdm
 
-from .image_manip import fourier_imshift, fshift
-from .image_manip import frebin, pad_or_cut_to_size, bp_fix
-from .coords import dist_image
+from .image_manip import fourier_imshift, fshift, frebin
+from .image_manip import get_im_cen, pad_or_cut_to_size, bp_fix
+from .coords import dist_image, get_sgd_offsets
 from .maths import round_int
 
 from astropy.io import fits
@@ -18,6 +18,90 @@ import logging
 # Define logging
 _log = logging.getLogger(__name__)
 _log.setLevel(logging.INFO)
+
+###########################################################################
+#    File Information
+###########################################################################
+
+def get_detname(det_id):
+    """Return NRC[A-B][1-4,LONG] for valid detector/SCA IDs"""
+
+    from .utils import get_detname as _get_detname
+    return _get_detname(det_id, use_long=True)
+
+def get_files(indir, pid, obsid=None, sca=None, filt=None, file_type='uncal.fits', 
+              exp_type=None, apername=None):
+    """Get files of interest
+    
+    Parameters
+    ==========
+    indir : str
+        Location of FITS files.
+    obsid : int
+        Observation number.
+    sca : str
+        Name of detector (e.g., 'along' or 'a3')
+    filt : str
+        Return files observed in given filter.
+    file_type : str
+        uncal.fits or rate.fits, etc
+    exp_type : str
+        Exposure type such as NRC_TACQ, NRC_TACONFIRM
+    apername : str
+        Name of aperture (e.g., NRCA5_FULL)
+    """
+
+    sca = '' if sca is None else get_detname(sca).lower()
+    
+    # file name start and end
+    if obsid is None:
+        file_start = f'jw{pid:05d}'
+    else:
+        file_start = f'jw{pid:05d}{obsid:03d}'
+    sca = sca.lower()
+
+    if file_type[0]=='_':
+        file_type = file_type[1:]
+    file_end = f'{sca}_{file_type}'
+
+    allfiles = np.sort([f for f in os.listdir(indir) if ((file_end in f) and f.startswith(file_start))])
+    
+    # Check filter info
+    if filt is not None:
+        files2 = []
+        for f in allfiles:
+            hdr = fits.getheader(os.path.join(indir,f))
+            obs_filt = hdr.get('FILTER', 'none')
+            obs_pup = hdr.get('PUPIL', 'none')
+            # Check if filter string exists in the pupil wheel
+            if obs_pup[0]=='F' and (obs_pup[-1]=='N' or obs_pup[-1]=='M'):
+                filt_match = obs_pup
+            else:
+                filt_match = obs_filt
+            if filt==filt_match:
+                files2.append(f)
+        allfiles = np.array(files2)
+
+    # Filter by exposure type
+    if exp_type is not None:
+        files2 = []
+        for f in allfiles:
+            hdr = fits.getheader(os.path.join(indir,f))
+            exptype_obs = hdr.get('EXP_TYPE', 'none')
+            if exptype_obs==exp_type:
+                files2.append(f)
+        allfiles = np.array(files2)
+
+    if apername is not None:
+        files2 = []
+        for f in allfiles:
+            hdr = fits.getheader(os.path.join(indir,f))
+            apname_obs = hdr.get('APERNAME', 'none')
+            if apname_obs==apername:
+                files2.append(f)
+        allfiles = np.array(files2)
+    
+    return allfiles
 
 ###########################################################################
 #    Target Acquisition
@@ -155,7 +239,110 @@ def diff_ta_data(uncal_data):
     
     return np.minimum(im1,im2)
 
-def read_ta_conf_files(indir, pid, obsid, sca, bpfix=False):
+def read_ta_files(indir, pid, obsid, sca, file_type='rate.fits', uncal_dir=None, bpfix=False):
+    """Store all TA and Conf data into a dictionary
+    
+    indir should include rate.fits. For the initial TACQ, can use
+    uncal files (via `uncal_dir` input flag) to simulate onboard
+    subtraction. 
+
+    bpfix is only for the TACONF data and mainly for display purposes.
+
+    Parameters
+    ==========
+    indir : str
+        Input directory
+    pid : int
+        Program ID number
+    obsid : int
+        Observation number
+    sca : str
+        SCA name, such as a1, a2, a3, a4, along, etc
+    file_type : str
+        File extension, such as uncal.fits, rate.fits, cal.fits, etc.
+    uncal_dir : str or None
+        If not None, use uncal files in this directory for TACQ data.
+    bpfix : bool
+        If True, perform bad pixel fixing on the data.
+        Mainly for display purposes.
+    """
+
+    from jwst import datamodels
+
+    # Option to use uncal files for subarray TA observation
+    ta_dir = indir if uncal_dir is None else uncal_dir
+    taconf_dir = indir
+
+    fta_type = file_type if uncal_dir is None else 'uncal.fits'
+
+    # Get TACQ
+    try:
+        fta = get_files(ta_dir, pid, obsid=obsid, sca=sca, 
+                        file_type=fta_type, exp_type='NRC_TACQ')[0]
+    except:
+        raise RuntimeError(f'Unable to determine NRC_TACQ file for PID {pid} Obs, {obsid}, {sca}')
+
+    # Full path
+    fta_path = os.path.join(ta_dir, fta)
+    ta_dict = {'dta': {'file': fta_path, 'type': 'Target Acq'}}
+
+    # Get TACONFIRM 
+    fconf = get_files(taconf_dir, pid, obsid, sca=sca, file_type=file_type, exp_type='NRC_TACONFIRM')
+    if len(fconf)>0:
+        fconf1, fconf2 = fconf
+        # Full paths of files
+        fconf1_path = os.path.join(taconf_dir, fconf1)
+        fconf2_path = os.path.join(taconf_dir, fconf2)
+
+        ta_dict['dconf1'] = {'file': fconf1_path, 'type': 'TA Conf1'}
+        ta_dict['dconf2'] = {'file': fconf2_path, 'type': 'TA Conf2'}
+    else:
+        _log.warning(f'NRC_TACQ exists, but no NRC_TACONFIRM observed for PID {pid}, Obs {obsid}, {sca}')
+
+    # Build dictionary of data and header info
+    for k in ta_dict.keys():
+        d = ta_dict[k]
+
+        f = d['file']
+        hdul = fits.open(f)
+        # Get data and take diff if uncal
+        data = hdul['SCI'].data.astype('float')
+        if 'uncal.fits' in f:
+            # For TACQ, do difference and get DQ mask from rate file
+            data = diff_ta_data(data)
+            frate = get_files(indir, pid, obsid=obsid, sca=sca, 
+                              file_type=file_type, exp_type='NRC_TACQ')[0]
+            frate_path = os.path.join(indir, frate)
+            dq = fits.getdata(frate_path, extname='DQ')
+        else:
+            dq = hdul['DQ'].data
+
+        # Get date from datamodel
+        data_model = datamodels.open(f)
+        date = data_model.meta.observation.date_beg
+        # Close data model
+        data_model.close()
+
+        d['data'] = data
+        d['dq']   = dq
+        d['hdr0'] = hdul[0].header
+        d['hdr1'] = hdul[1].header
+        d['date'] = date
+        hdul.close()
+
+        d['apname'] = d['hdr0']['APERNAME']
+        d['ap'] = nrc_siaf[d['apname']]
+        d['exp_type'] = d['hdr0']['EXP_TYPE']
+
+        # bad pixel fixing for TA confirmation
+        if bpfix and ('conf' in k):
+            im = crop_observation(d['data'], d['ap'], 100)
+            # Perform pixel fixing in place
+            _ = bp_fix(im, sigclip=10, niter=1, in_place=True)
+        
+    return ta_dict
+
+def _read_ta_conf_files_old(indir, pid, obsid, sca, bpfix=False):
     """Store all TA and Conf data into a dictionary"""
 
     sca = sca.lower()
@@ -228,7 +415,86 @@ def read_ta_conf_files(indir, pid, obsid, sca, bpfix=False):
     return ta_dict
 
 
-def read_sgd_files(indir, pid, obsid, sca, expid=None, filter=None, fext='_rate.fits'):
+def read_sgd_files(indir, pid, obsid, filter, sca, bpfix=False, 
+                   file_type='rate.fits', exp_type=None, apername=None):
+    """Store SGD or science data into a dictionary
+
+    By default, excludes any TAMASK or TACONFIRM data, but can be overridden
+    by setting exp_type.
+    
+    Parameters
+    ==========
+    indir : str
+        Input directory
+    pid : int
+        Program ID number
+    obsid : int
+        Observation number
+    filter : str
+        Name of filter element
+    sca : str
+        SCA name, such as a1, a2, a3, a4, along, etc
+    file_type : str
+        File extension, such as uncal.fits, rate.fits, cal.fits, etc.
+    exp_type : str
+        Exposure type such as NRC_TACQ, NRC_TACONFIRM
+    apername : str
+        Name of aperture (e.g., NRCA5_FULL)
+    bpfix : bool
+        If True, perform bad pixel fixing on the data.
+        Mainly for display purposes.
+    """
+
+    from jwst import datamodels
+
+    files = get_files(indir, pid, obsid=obsid, sca=sca, filt=filter,
+                      file_type=file_type, exp_type=exp_type, apername=apername)
+    
+    # Exclude any TAMASK or TACONFIRM data by default
+    if exp_type is None:
+        ikeep = []
+        for i, f in enumerate(files):
+            fpath = os.path.join(indir, f)
+            hdr = fits.getheader(fpath, ext=0)
+            isTA = ('_TACQ' in hdr['EXP_TYPE']) or ('_TACONFIRM' in hdr['EXP_TYPE'])
+            if not isTA:
+                ikeep.append(i)
+        
+        files = files[ikeep]
+
+    sgd_dict = {}
+    for i, f in enumerate(files):
+        fpath = os.path.join(indir, f)
+        d = {'file': fpath}
+        
+        hdul = fits.open(fpath)
+        d['data'] = hdul['SCI'].data.astype('float')
+        d['dq']   = hdul['DQ'].data
+        d['hdr0'] = hdul[0].header
+        d['hdr1'] = hdul[1].header
+        hdul.close()
+
+        # Get date from datamodel
+        data_model = datamodels.open(fpath)
+        d['date'] = data_model.meta.observation.date_beg
+        # Close data model
+        data_model.close()
+ 
+        d['apname'] = d['hdr0']['APERNAME']
+        d['ap'] = nrc_siaf[d['apname']]
+        d['exp_type'] = d['hdr0']['EXP_TYPE']
+        
+        sgd_dict[i] = d
+
+        # bad pixel fixing 
+        if bpfix:
+            im = crop_observation(d['data'], d['ap'], 100)
+            # Perform pixel fixing in place
+            _ = bp_fix(im, sigclip=10, niter=1, in_place=True)
+        
+    return sgd_dict
+
+def _read_sgd_files_old(indir, pid, obsid, sca, expid=None, filter=None, fext='_rate.fits'):
     """Store all observations of a given filter into a dictionary
     
     Mostly used for grabbing a series of SGD data to analyze.
@@ -300,9 +566,319 @@ def read_sgd_files(indir, pid, obsid, sca, expid=None, filter=None, fext='_rate.
         
     return sgd_dict
 
+
 ###########################################################################
-#    Cross Correlations
+#    Image Cropping
 ###########################################################################
+
+def get_expected_loc(input, return_indices=True, add_sroffset=None):
+    """Input header or data model to get expected pixel position of target
+    
+    Integer values correspond to center of a pixel, whereas 0.5
+    correspond to pixel edges.
+
+    `return_indices=True` will return the [xi,yi] index within the 
+    observed aperture subarray, otherwise returns the 'sci' coordinate 
+    position. These should only be off 1 (e.g. index=sci-1, because
+    'sci' coordinates are 1-index, while numpy arrays are 0-indexed).
+
+    SR offsets excluded for dates prior to 2022-07-01, otherwise included.
+    Specify `add_sroffset=True` or `add_sroffset=False` to override the
+    default settings. If False, any SGD offsets will be added back in.
+    TODO: What about normal dithers?
+
+    Parameters
+    ==========
+    input : fits.header.Header or datamodels.DataModel
+        Input header or data model
+    return_indices : bool
+        Return indices of expected location within the subarray
+        otherwise return the 'sci' coordinate position.
+    add_sroffset : None or bool
+        Include Special Requirements (SR) offset in the calculation.
+        Will default to False if date<2022-07-01, otherwise True.
+        Specify True or False to override the default.
+        If False, any SGD offsets will be added back in.
+    """
+    
+    from astropy.time import Time
+
+    if isinstance(input, (fits.header.Header)):
+        # Aperture names
+        apname = input['APERNAME']
+        apname_pps = input['PPS_APER']
+        # Dither offsets
+        xoff_asec = input['XOFFSET']
+        yoff_asec = input['YOFFSET']
+        # date
+        date_obs = input['DATE-OBS']
+
+        # SGD info (only needed if SR offsets is False)
+        is_sgd = input.get('SUBPXPAT', False)
+        sgd_pattern = input.get('SMGRDPAT', None)
+        sgd_pos = input.get('PATT_NUM', 1) - 1
+    else:
+        # Data model meta info
+        meta = input.meta
+
+        # Aperture names
+        apname = meta.aperture.name
+        apname_pps = meta.aperture.pps_name
+        # Dither offsets
+        xoff_asec = meta.dither.x_offset
+        yoff_asec = meta.dither.y_offset
+        # date
+        date_obs = meta.observation.date
+
+        # SGD info (only needed if SR offsets is False)
+        if hasattr(meta.dither, 'subpixel_pattern'):
+            subpixel_pattern = meta.dither.subpixel_pattern
+            if subpixel_pattern is None:
+                is_sgd = False
+            elif 'small-grid' in subpixel_pattern.lower():
+                is_sgd = True
+            else:
+                is_sgd = False
+        else:
+            is_sgd = False
+        # SGD type
+        if is_sgd and hasattr(meta.dither, 'small_grid_pattern'):
+            sgd_pattern = meta.dither.small_grid_pattern
+        else:
+            sgd_pattern = None
+        # SGD position index
+        if is_sgd and hasattr(meta.dither, 'position_number'):
+            sgd_pos = meta.dither.position_number - 1
+        else:
+            sgd_pos = 0
+
+    # Include SIAF subarray offset?
+    # Set defaults
+    if add_sroffset is None:
+        # If observed before 2022-07-01, then don't include SR offset.
+        # SR offsets prior to 2022-07-01 were included to match expected
+        # changes to the SIAF that were made after July 1 (or around there).
+        add_sroffset = False if Time(date_obs) < Time('2022-07-01') else True
+
+    # If offsets excluded, then set xoff and yoff to 0
+    # and add in SGD offsets if they exist
+    if not add_sroffset:
+        xoff_asec = yoff_asec = 0.0
+        # Add in a SGD offsets if they exist
+        if is_sgd:
+            xoff_arr, yoff_arr = get_sgd_offsets(sgd_pattern)
+            xoff_asec += xoff_arr[sgd_pos]
+            yoff_asec += yoff_arr[sgd_pos]
+
+    # Observed aperture
+    ap = nrc_siaf[apname]
+    # Aperture reference for pointing / dithering
+    ap_pps = nrc_siaf[apname_pps]
+    
+    # Expected pixel location based on ideal offset
+    if apname == apname_pps:
+        if np.allclose([xoff_asec, yoff_asec], 0.0):
+            xsci_exp, ysci_exp = (ap.XSciRef, ap.YSciRef)
+        else:
+            xsci_exp, ysci_exp = ap.idl_to_sci(xoff_asec, yoff_asec)
+    else:
+        if np.allclose([xoff_asec, yoff_asec], 0.0):
+            xtel, ytel = (ap.V2Ref, ap.V3Ref)
+        else:
+            xtel, ytel = ap_pps.idl_to_tel(xoff_asec, yoff_asec)
+        xsci_exp, ysci_exp = ap.tel_to_sci(xtel, ytel)
+    
+    if return_indices:
+        return xsci_exp-1, ysci_exp-1
+    else:
+        return xsci_exp, ysci_exp
+
+def get_com(im, halfwidth=7, return_sci=False, **kwargs):
+    """Center of mass centroiding"""
+    
+    from poppy.fwcentroid import fwcentroid
+
+    # Set NaNs to 0
+    ind_nan = np.isnan(im)
+    im[ind_nan] = 0
+    
+    # Find center of mass centroid
+    com = fwcentroid(im, halfwidth=halfwidth, **kwargs)
+    yind_com, xind_com = com
+
+    # Return to NaNs
+    im[ind_nan] = np.nan
+
+    if return_sci:
+        return xind_com+1, yind_com+1
+    else:
+        return xind_com, yind_com
+
+def recenter_psf(psfs_over, niter=3, halfwidth=7):
+    """Use center of mass algorithm to relocate PSF to center of image.
+    
+    Returns recentered PSFs and shift values used.
+
+    Parameters
+    ----------
+    psfs_over : array_like
+        Oversampled PSF(s) to recenter. If 2D, will be converted to 3D.
+    niter : int
+        Number of iterations to use for center of mass algorithm.
+    halfwidth : int or None
+        Halfwidth of box to use for center of mass algorithm.
+        Default is 7, which is a 15x15 box.
+    """
+
+    from webbpsf_ext.image_manip import fourier_imshift
+
+    ndim = len(psfs_over.shape)
+    if ndim==2:
+        psfs_over = [psfs_over]
+
+    # Reposition oversampled PSF to center of array using center of mass algorithm
+    xyoff_psfs_over = []
+    for i, psf in enumerate(psfs_over):
+        xc_psf, yc_psf = get_im_cen(psf)
+        xsh_sum, ysh_sum = (0, 0)
+        for j in range(niter):
+            xc, yc = get_com(psf, halfwidth=halfwidth, return_sci=False)
+            xsh, ysh = (xc_psf - xc, yc_psf - yc)
+            psf = fourier_imshift(psf, xsh, ysh)
+            xsh_sum += xsh
+            ysh_sum += ysh
+        psfs_over[i] = psf
+        xyoff_psfs_over.append(np.array([xsh_sum, ysh_sum]))
+        
+    # Oversampled offsets
+    xyoff_psfs_over = np.array(xyoff_psfs_over)
+
+    # If input was a single image, return same dimensions
+    if ndim==2:
+        psfs_over = psfs_over[0]
+        xyoff_psfs_over = xyoff_psfs_over[0]
+
+    return psfs_over, xyoff_psfs_over
+
+
+###########################################################################
+#    Image Cropping
+###########################################################################
+
+def crop_observation(im_full, ap, xysub, xyloc=None, delx=0, dely=0, 
+                     shift_func=fourier_imshift, interp='cubic',
+                     return_xy=False, **kwargs):
+    """Crop around aperture reference location
+
+    `xysub` specifies the desired crop size.
+    if `xysub` is an array, dimension order should be [nysub,nxsub]
+
+    `xyloc` provides a way to manually supply the central position. 
+    Set `ap` to None will crop around `xyloc` or center of array.
+
+    delx and delx will shift array by some offset before cropping
+    to allow for sub-pixel shifting. To change integer crop positions,
+    recommend using `xyloc` instead.
+
+    Shift function can be fourier_imshfit, fshift, or cv_shift.
+    The interp keyword only works for the latter two options.
+    Consider 'lanczos' for cv_shift.
+
+    """
+        
+    # xcorn_sci, ycorn_sci = ap.corners('sci')
+    # xcmin, ycmin = (int(xcorn_sci.min()+0.5), int(ycorn_sci.min()+0.5))
+    # xsci_arr = np.arange(1, im_full.shape[1]+1)
+    # ysci_arr = np.arange(1, im_full.shape[0]+1)
+
+    
+    # Cut out postage stamp from full frame image
+    if isinstance(xysub, (list, tuple, np.ndarray)):
+        ny_sub, nx_sub = xysub
+    else:
+        ny_sub = nx_sub = xysub
+    
+    # Get centroid position
+    if ap is None:
+        xc, yc = get_im_cen(im_full) if xyloc is None else xyloc
+    else: 
+        # Subtract 1 from sci coords to get indices
+        xc, yc = (ap.XSciRef-1, ap.YSciRef-1) if xyloc is None else xyloc
+
+    x1 = round_int(xc - nx_sub/2 + 0.5)
+    x2 = x1 + nx_sub
+    y1 = round_int(yc - ny_sub/2 + 0.5)
+    y2 = y1 + ny_sub
+
+    # Save initial values in case they get modified below
+    x1_init, x2_init = (x1, x2)
+    y1_init, y2_init = (y1, y2)
+
+    sh_orig = im_full.shape
+    if (x2>=sh_orig[1]) or (y2>=sh_orig[0]) or (x1<0) or (y1<0):
+        ny, nx = sh_orig
+
+        # Get expansion size along x-axis
+        dxp = x2 - nx + 1
+        dxp = 0 if dxp<0 else dxp
+        dxn = -1*x1 if x1<0 else 0
+        dx = dxp + dxn
+
+        # Get expansion size along y-axis
+        dyp = y2 - ny + 1
+        dyp = 0 if dyp<0 else dyp
+        dyn = -1*y1 if y1<0 else 0
+        dy = dyp + dyn
+
+        # Expand image
+        shape_new = (2*dy+ny, 2*dx+nx)
+        im_full = pad_or_cut_to_size(im_full, shape_new)
+
+        xc_new, yc_new = (xc+dx, yc+dy)
+        x1 = round_int(xc_new - nx_sub/2 + 0.5)
+        x2 = x1 + nx_sub
+        y1 = round_int(yc_new - ny_sub/2 + 0.5)
+        y2 = y1 + ny_sub
+    # else:
+    #     xc_new, yc_new = (xc, yc)
+    #     shape_new = sh_orig
+
+    # if (x1<0) or (y1<0):
+    #     dx = -1*x1 if x1<0 else 0
+    #     dy = -1*y1 if y1<0 else 0
+
+    #     # Expand image
+    #     shape_new = (2*dy+shape_new[0], 2*dx+shape_new[1])
+    #     im_full = pad_or_cut_to_size(im_full, shape_new)
+
+    #     xc_new, yc_new = (xc_new+dx, yc_new+dy)
+    #     x1 = round_int(xc_new - nx_sub/2 + 0.5)
+    #     x2 = x1 + nx_sub
+    #     y1 = round_int(yc_new - ny_sub/2 + 0.5)
+    #     y2 = y1 + ny_sub
+
+    # Perform pixel shifting
+    if delx!=0 or dely!=0:
+        kwargs['interp'] = interp
+        # Use fshift function if only performing integer shifts
+        if float(delx).is_integer() and float(dely).is_integer():
+            shift_func = fshift
+        im_full = shift_func(im_full, delx, dely, **kwargs)
+    
+    im = im_full[y1:y2, x1:x2]
+    xy_ind = np.array([x1_init, x2_init, y1_init, y2_init])
+    
+    if return_xy:
+        return im, xy_ind
+    else:
+        return im
+
+
+def crop_image(im, xysub, xyloc=None, **kwargs):
+    """Crop input image around center using integer offsets only"""
+    
+    return crop_observation(im, None, xysub, xyloc=xyloc, **kwargs)
+
 
 def correl_images(im1, im2, mask=None):
     """ Image correlation coefficient
@@ -397,7 +973,7 @@ def find_max_crosscorr(corr, xsh_arr, ysh_arr, sub_sample):
     corr_all_fine = sample_crosscorr(corr,  xsh_arr, ysh_arr, xsh_fine_vals, ysh_fine_vals)
 
     # Fine position
-    iymax, ixmax = np.argwhere(corr_all_fine==np.max(corr_all_fine))[0]
+    iymax, ixmax = np.argwhere(corr_all_fine==np.nanmax(corr_all_fine))[0]
     xsh_fine, ysh_fine = xsh_fine_vals[ixmax], ysh_fine_vals[iymax]
     
     return xsh_fine, ysh_fine
@@ -484,115 +1060,6 @@ def gen_psf_offsets(psf, crop=65, xlim_pix=(-3,3), ylim_pix=(-3,3), dxy=0.05,
     # yoff_all = yoff_all.reshape(sh_grid)
 
     return xoff_pix, yoff_pix, psf_sh_all
-
-def crop_observation(im_full, ap, xysub, xyloc=None, delx=0, dely=0, 
-                     shift_func=fourier_imshift, interp='cubic',
-                     return_xy=False, **kwargs):
-    """Crop around aperture reference location
-
-    `xysub` specifies the desired crop size.
-    if `xysub` is an array, dimension order should be [nysub,nxsub]
-
-    `xyloc` provides a way to manually supply the central position. 
-    Set `ap` to None will crop around `xyloc` or center of array.
-
-    Provides an options to shift array by some offset before cropping
-    to allow for sub-pixel shifting. To change integer crop positions,
-    recommend using `xyloc` instead.
-
-    Shift function can be fourier_imshfit, fshift, or cv_shift.
-    The interp keyword only works for the latter two options.
-    Consider 'lanczos' for cv_shift.
-
-    """
-        
-    # xcorn_sci, ycorn_sci = ap.corners('sci')
-    # xcmin, ycmin = (int(xcorn_sci.min()+0.5), int(ycorn_sci.min()+0.5))
-    # xsci_arr = np.arange(1, im_full.shape[1]+1)
-    # ysci_arr = np.arange(1, im_full.shape[0]+1)
-
-    
-    # Cut out postage stamp from full frame image
-    if isinstance(xysub, (list, tuple, np.ndarray)):
-        ny_sub, nx_sub = xysub
-    else:
-        ny_sub = nx_sub = xysub
-    
-    # Get centroid position
-    if ap is None:
-        xc, yc = get_im_cen(im_full) if xyloc is None else xyloc
-    else: 
-        # Subtract 1 from sci coords to get indices
-        xc, yc = (ap.XSciRef-1, ap.YSciRef-1) if xyloc is None else xyloc
-
-    x1 = round_int(xc - nx_sub/2 + 0.5)
-    x2 = x1 + nx_sub
-    y1 = round_int(yc - ny_sub/2 + 0.5)
-    y2 = y1 + ny_sub
-
-    # Save initial values in case they get modified below
-    x1_init, x2_init = (x1, x2)
-    y1_init, y2_init = (y1, y2)
-
-    sh_orig = im_full.shape
-    if (x2>sh_orig[0]) or (y2>sh_orig[1]) or (x1<0) or (y1<0):
-        dx = x2 - sh_orig[0]
-        dx = 0 if dx<0 else dx
-        dy = y2 - sh_orig[1]
-        dy = 0 if dy<0 else dy
-        # Expand image
-        shape_new = (2*dy+sh_orig[0], 2*dx+sh_orig[1])
-        im_full = pad_or_cut_to_size(im_full, shape_new)
-
-        xc_new, yc_new = (xc+dx, yc+dy)
-        x1 = round_int(xc_new - nx_sub/2 + 0.5)
-        x2 = x1 + nx_sub
-        y1 = round_int(yc_new - ny_sub/2 + 0.5)
-        y2 = y1 + ny_sub
-
-    if (x1<0) or (y1<0):
-        dx = -1*x1 if x1<0 else 0
-        dy = -1*y1 if y1<0 else 0
-
-        # Expand image
-        shape_new = (2*dy+sh_orig[0], 2*dx+sh_orig[1])
-        im_full = pad_or_cut_to_size(im_full, shape_new)
-
-        xc_new, yc_new = (xc+dx, yc+dy)
-        x1 = round_int(xc_new - nx_sub/2 + 0.5)
-        x2 = x1 + nx_sub
-        y1 = round_int(yc_new - ny_sub/2 + 0.5)
-        y2 = y1 + ny_sub
-
-    # Perform pixel shifting
-    if delx!=0 or dely!=0:
-        kwargs['interp'] = interp
-        # Use fshift function if only performing integer shifts
-        if float(delx).is_integer() and float(dely).is_integer():
-            shift_func = fshift
-        im_full = shift_func(im_full, delx, dely, **kwargs)
-    
-    im = im_full[y1:y2, x1:x2]
-    xy_ind = np.array([x1_init, x2_init, y1_init, y2_init])
-    
-    if return_xy:
-        return im, xy_ind
-    else:
-        return im
-
-def get_im_cen(im):
-    """
-    Returns pixel position of array center.
-    For odd dimensions, this is in a pixel center.
-    For even dimensions, this is at the pixel boundary.
-    """
-    ny, nx = im.shape
-    return np.array([nx / 2. - 0.5, ny / 2. - 0.5])
-
-def crop_image(im, xysub, xyloc=None, **kwargs):
-    """Crop input image around center using integer offsets only"""
-    
-    return crop_observation(im, None, xysub, xyloc=xyloc, **kwargs)
 
 
 def find_offsets(input, psf, crop=65, xlim_pix=(-3,3), ylim_pix=(-3,3), 
@@ -801,53 +1268,3 @@ def find_offsets_phase(input, psf, crop=65, rin=0, rout=None, dxy_fine=0.01,
     
     return res.squeeze()
 
-
-def get_com(im, halfwidth=7, return_sci=False, **kwargs):
-    """Center of mass centroiding"""
-    
-    from poppy.fwcentroid import fwcentroid
-    
-    # Find center of mass centroid
-    com = fwcentroid(im, halfwidth=halfwidth, **kwargs)
-    yind_com, xind_com = com
-    
-    if return_sci:
-        return xind_com+1, yind_com+1
-    else:
-        return xind_com, yind_com
-
-def recenter_psf(psfs_over, niter=3, halfwidth=7):
-    """Use center of mass algorithm to relocate PSF to center of image.
-    
-    Returns recentered PSFs and shift values used.
-    """
-
-    from webbpsf_ext.image_manip import fourier_imshift
-
-    ndim = len(psfs_over.shape)
-    if ndim==2:
-        psfs_over = [psfs_over]
-
-    # Reposition oversampled PSF to center of array using center of mass algorithm
-    xyoff_psfs_over = []
-    for i, psf in enumerate(psfs_over):
-        xc_psf, yc_psf = get_im_cen(psf)
-        xsh_sum, ysh_sum = (0, 0)
-        for j in range(niter):
-            xc, yc = get_com(psf, halfwidth=halfwidth, return_sci=False)
-            xsh, ysh = (xc_psf - xc, yc_psf - yc)
-            psf = fourier_imshift(psf, xsh, ysh)
-            xsh_sum += xsh
-            ysh_sum += ysh
-        psfs_over[i] = psf
-        xyoff_psfs_over.append(np.array([xsh_sum, ysh_sum]))
-        
-    # Oversampled offsets
-    xyoff_psfs_over = np.array(xyoff_psfs_over)
-
-    # If input was a single image, return same dimensions
-    if ndim==2:
-        psfs_over = psfs_over[0]
-        xyoff_psfs_over = xyoff_psfs_over[0]
-
-    return psfs_over, xyoff_psfs_over
