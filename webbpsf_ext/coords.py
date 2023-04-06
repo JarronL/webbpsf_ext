@@ -510,8 +510,55 @@ def v2v3_to_pixel(ap_obs, v2_obj, v3_obj, frame='sci'):
     return (xpix, ypix)
 
 
-def gen_sgd_offsets(sgd_type, slew_std=5, fsm_std=2.5, rand_seed=None):
+def get_sgd_offsets(sgd_type):
+    """ Get SGD offsets
+
+    Return ideal x and y position offsets for a SGD pattern.
+    This includes the central position as the first in the series.
+    Returns values in arcsec.
+    
+    Parameters
+    ==========
+    sgd_type : str
+        Small grid dither pattern. Valid types are
+        '9circle', '5box', '5diamond', '3bar', '5bar', '5miri', and '9miri'
+        where the first four refer to NIRCam coronagraphic dither
+        positions and the last two are for MIRI coronagraphy.
+        Can also use the APT names for the patterns:
+        '9-POINT-CIRCLE', '5-POINT-DIAMOND', '5-POINT-BOX', '3-POINT-BAR',
+        '5-POINT-BAR', '5-POINT-SMALL-GRID', '9-POINT-SMALL-GRID'.
     """
+
+    if sgd_type.lower()=='9circle' or sgd_type.upper()=='9-POINT-CIRCLE':
+        xoff_msec = np.array([0.0,  0,-15,-20,-15,  0,+15,+20,+15])
+        yoff_msec = np.array([0.0,+20,+15,  0,-15,-20,-15,  0,+15])
+    elif sgd_type.lower()=='5box' or sgd_type.upper()=='5-POINT-BOX':
+        xoff_msec = np.array([0.0,+15,-15,-15,+15])
+        yoff_msec = np.array([0.0,+15,+15,-15,-15])
+    elif sgd_type.lower()=='5diamond' or sgd_type.upper()=='5-POINT-DIAMOND':
+        xoff_msec = np.array([0.0,  0,  0,+20,-20])
+        yoff_msec = np.array([0.0,+20,-20,  0,  0])
+    elif sgd_type.lower()=='5bar' or sgd_type.upper()=='5-POINT-BAR':
+        xoff_msec = np.array([0.0,  0,  0,  0,  0])
+        yoff_msec = np.array([0.0,+20,+10,-10,-20])
+    elif sgd_type.lower()=='3bar' or sgd_type.upper()=='3-POINT-BAR':
+        xoff_msec = np.array([0.0,  0,  0])
+        yoff_msec = np.array([0.0,+15,-15])
+    elif sgd_type.lower()=='5miri' or sgd_type.upper()=='5-POINT-SMALL-GRID':
+        xoff_msec = np.array([0.0,-10,+10,+10,-10])
+        yoff_msec = np.array([0.0,+10,+10,-10,-10])
+    elif sgd_type.lower()=='9miri' or sgd_type.upper()=='9-POINT-SMALL-GRID':
+        xoff_msec = np.array([0.0,-10,-10,  0,+10,+10,+10,  0,-10])
+        yoff_msec = np.array([0.0,  0,+10,+10,+10,  0,-10,-10,-10])
+    else:
+        raise ValueError(f"{sgd_type} not a valid SGD type")
+    
+    # Return in arcsec
+    return xoff_msec / 1000, yoff_msec / 1000
+
+def gen_sgd_offsets(sgd_type, slew_std=5, fsm_std=2.5, rand_seed=None):
+    """ Generate SGD offsets with random point errors
+
     Create a series of x and y position offsets for a SGD pattern.
     This includes the central position as the first in the series.
     By default, will also add random movement errors using the
@@ -537,30 +584,8 @@ def gen_sgd_offsets(sgd_type, slew_std=5, fsm_std=2.5, rand_seed=None):
         Input a random seed in order to make reproduceable pseudo-random
         numbers.
     """
-    
-    if sgd_type=='9circle':
-        xoff_msec = np.array([0.0,  0,-15,-20,-15,  0,+15,+20,+15])
-        yoff_msec = np.array([0.0,+20,+15,  0,-15,-20,-15,  0,+15])
-    elif sgd_type=='5box':
-        xoff_msec = np.array([0.0,+15,-15,-15,+15])
-        yoff_msec = np.array([0.0,+15,+15,-15,-15])
-    elif sgd_type=='5diamond':
-        xoff_msec = np.array([0.0,  0,  0,+20,-20])
-        yoff_msec = np.array([0.0,+20,-20,  0,  0])
-    elif sgd_type=='5bar':
-        xoff_msec = np.array([0.0,  0,  0,  0,  0])
-        yoff_msec = np.array([0.0,+20,+10,-10,-20])
-    elif sgd_type=='3bar':
-        xoff_msec = np.array([0.0,  0,  0])
-        yoff_msec = np.array([0.0,+15,-15])
-    elif sgd_type=='5miri':
-        xoff_msec = np.array([0.0,-10,+10,+10,-10])
-        yoff_msec = np.array([0.0,+10,+10,-10,-10])
-    elif sgd_type=='9miri':
-        xoff_msec = np.array([0.0,-10,-10,  0,+10,+10,+10,  0,-10])
-        yoff_msec = np.array([0.0,  0,+10,+10,+10,  0,-10,-10,-10])
-    else:
-        raise ValueError(f"{sgd_type} not a valid SGD type")
+    # Get SGD offsets in mas    
+    xoff_msec, yoff_msec = np.array(get_sgd_offsets(sgd_type)) * 1000
 
     # Create local random number generator to avoid global seed setting
     rng = np.random.default_rng(seed=rand_seed)
