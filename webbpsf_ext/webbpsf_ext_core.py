@@ -58,44 +58,47 @@ class NIRCam_ext(webbpsf_NIRCam):
     Subclass of WebbPSF's NIRCam class for generating polynomial coefficients
     to cache and quickly generate PSFs for arbitrary spectral types as well
     as WFE variations due to field-dependent OPDs and telescope thermal drifts.
-
-    Parameters
-    ==========
-    filter : str
-        Name of input filter.
-    pupil_mask : str, None
-        Pupil elements such as grisms or lyot stops (default: None).
-    image_mask : str, None
-        Specify which coronagraphic occulter (default: None).
-    fov_pix : int
-        Size of the PSF FoV in pixels (real SW or LW pixels).
-        The defaults depend on the type of observation.
-        Odd number place the PSF on the center of the pixel,
-        whereas an even number centers it on the "crosshairs."
-    oversample : int
-        Factor to oversample during WebbPSF calculations.
-        Default 2 for coronagraphy and 4 otherwise.
-
-    Keyword Args
-    ============
-    fovmax_wfedrift : int or None
-        Maximum allowed size for coefficient modifications associated
-        with WFE drift. Default is 256. Any pixels beyond this size will 
-        be considered to have 0 residual difference
-    fovmax_wfemask : int or None
-        Maximum allowed size for coefficient modifications associated
-        with focal plane masks. Default is 256. Any pixels beyond this size will 
-        be considered to have 0 residual difference
-    fovmax_wfefield : int or None
-        Maximum allowed size for coefficient modifications due to field point
-        variations such as distortion. Default is 128. Any pixels beyond this 
-        size will be considered to have 0 residual difference
-
     """
 
     def __init__(self, filter=None, pupil_mask=None, image_mask=None, 
                  fov_pix=None, oversample=None, **kwargs):
+        """Initialize NIRCam instrument
         
+        
+        Parameters
+        ==========
+        filter : str
+            Name of input filter.
+        pupil_mask : str, None
+            Pupil elements such as grisms or lyot stops (default: None).
+        image_mask : str, None
+            Specify which coronagraphic occulter (default: None).
+        fov_pix : int
+            Size of the PSF FoV in pixels (real SW or LW pixels).
+            The defaults depend on the type of observation.
+            Odd number place the PSF on the center of the pixel,
+            whereas an even number centers it on the "crosshairs."
+        oversample : int
+            Factor to oversample during WebbPSF calculations.
+            Default 2 for coronagraphy and 4 otherwise.
+
+        Keyword Args
+        ============
+        fovmax_wfedrift : int or None
+            Maximum allowed size for coefficient modifications associated
+            with WFE drift. Default is 256. Any pixels beyond this size will 
+            be considered to have 0 residual difference
+        fovmax_wfemask : int or None
+            Maximum allowed size for coefficient modifications associated
+            with focal plane masks. Default is 256. Any pixels beyond this size will 
+            be considered to have 0 residual difference
+        fovmax_wfefield : int or None
+            Maximum allowed size for coefficient modifications due to field point
+            variations such as distortion. Default is 128. Any pixels beyond this 
+            size will be considered to have 0 residual difference
+        """
+
+
         webbpsf_NIRCam.__init__(self)
 
         # Initialize script
@@ -931,42 +934,45 @@ class MIRI_ext(webbpsf_MIRI):
     to cache and quickly generate PSFs for arbitrary spectral types as well
     as WFE variations due to field-dependent OPDs and telescope thermal drifts.
 
-    Parameters
-    ==========
-    filter : str
-        Name of input filter.
-    pupil_mask : str, None
-        Pupil elements such as grisms or lyot stops (default: None).
-    image_mask : str, None
-        Specify which coronagraphic occulter (default: None).
-    fov_pix : int
-        Size of the PSF FoV in pixels (real SW or LW pixels).
-        The defaults depend on the type of observation.
-        Odd number place the PSF on the center of the pixel,
-        whereas an even number centers it on the "crosshairs."
-    oversample : int
-        Factor to oversample during WebbPSF calculations.
-        Default 2 for coronagraphy and 4 otherwise.
-
-    Keyword Args
-    ============
-    fovmax_wfedrift : int or None
-        Maximum allowed size for coefficient modifications associated
-        with WFE drift. Default is 256. Any pixels beyond this size will 
-        be considered to have 0 residual difference
-    fovmax_wfemask : int or None
-        Maximum allowed size for coefficient modifications associated
-        with focal plane masks. Default is 256. Any pixels beyond this size will 
-        be considered to have 0 residual difference
-    fovmax_wfefield : int or None
-        Maximum allowed size for coefficient modifications due to field point
-        variations such as distortion. Default is 128. Any pixels beyond this 
-        size will be considered to have 0 residual difference
-
     """
 
     def __init__(self, filter=None, pupil_mask=None, image_mask=None, 
                  fov_pix=None, oversample=None, **kwargs):
+        
+        """ Initialize MIRI instrument
+        
+        Parameters
+        ==========
+        filter : str
+            Name of input filter.
+        pupil_mask : str, None
+            Pupil elements such as grisms or lyot stops (default: None).
+        image_mask : str, None
+            Specify which coronagraphic occulter (default: None).
+        fov_pix : int
+            Size of the PSF FoV in pixels (real SW or LW pixels).
+            The defaults depend on the type of observation.
+            Odd number place the PSF on the center of the pixel,
+            whereas an even number centers it on the "crosshairs."
+        oversample : int
+            Factor to oversample during WebbPSF calculations.
+            Default 2 for coronagraphy and 4 otherwise.
+
+        Keyword Args
+        ============
+        fovmax_wfedrift : int or None
+            Maximum allowed size for coefficient modifications associated
+            with WFE drift. Default is 256. Any pixels beyond this size will 
+            be considered to have 0 residual difference
+        fovmax_wfemask : int or None
+            Maximum allowed size for coefficient modifications associated
+            with focal plane masks. Default is 256. Any pixels beyond this size will 
+            be considered to have 0 residual difference
+        fovmax_wfefield : int or None
+            Maximum allowed size for coefficient modifications due to field point
+            variations such as distortion. Default is 128. Any pixels beyond this 
+            size will be considered to have 0 residual difference
+        """
         
         webbpsf_MIRI.__init__(self)
         _init_inst(self, filter=filter, pupil_mask=pupil_mask, image_mask=image_mask,
@@ -1686,8 +1692,8 @@ def _init_inst(self, filter=None, pupil_mask=None, image_mask=None,
     # Setting these to None to choose default values at runtime
     self._npsf = None
     self._ndeg = None
-    self.npsf = kwargs.get('npsf', self.npsf)
-    self.ndeg = kwargs.get('ndeg', self.ndeg)
+    self.npsf = kwargs.get('npsf', self._npsf)
+    self.ndeg = kwargs.get('ndeg', self._ndeg)
     
     # Set up initial OPD file info
     opd_name = 'JWST_OTE_OPD_RevAA_prelaunch_predicted.fits'
