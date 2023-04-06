@@ -639,7 +639,7 @@ class NIRCam_ext(webbpsf_NIRCam):
 
         return res
 
-    def gen_wfemask_coeff(self, large_grid=False, force=False, save=True, **kwargs):
+    def gen_wfemask_coeff(self, large_grid=True, force=False, save=True, **kwargs):
         """ Fit WFE changes in mask position
 
         For coronagraphic masks, slight changes in the PSF location
@@ -1366,7 +1366,7 @@ class MIRI_ext(webbpsf_MIRI):
         """
         return _gen_wfefield_coeff(self, force=force, save=save, **kwargs)
 
-    def gen_wfemask_coeff(self, large_grid=False, force=False, save=True, **kwargs):
+    def gen_wfemask_coeff(self, large_grid=True, force=False, save=True, **kwargs):
         """ Fit WFE changes in mask position
 
         For coronagraphic masks, slight changes in the PSF location
@@ -1382,7 +1382,7 @@ class MIRI_ext(webbpsf_MIRI):
         large_grid : bool
             Use a large number (high-density) of grid points to create coefficients.
             If True, then a higher fidelity PSF variations across the FoV, but could
-            take hours to genrate on the first pass. Setting to False allows for
+            take hours to generate on the first pass. Setting to False allows for
             quicker coefficient creation with a smaller memory footprint, useful for
             testing and debugging.        
         force : bool
