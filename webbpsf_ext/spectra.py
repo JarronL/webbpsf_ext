@@ -478,6 +478,32 @@ def stellar_spectrum(sptype, *renorm_args, **kwargs):
 
     return sp
 
+def download_votable(target_name, radius=1, **kwargs):
+    """Download a VOTable from the Vizier archive
+
+    Reads from Vizier URL: 
+    
+        f'ttps://vizier.cds.unistra.fr/viz-bin/sed?-c={target}&-c.rs={radius}'
+
+    Parameters
+    ----------
+    target_name : str
+        Name of target to search for in Vizier.
+        Will replace spaces with '+'.
+    radius : float
+        Search radius in arcseconds.
+
+    Returns
+    -------
+    astropy.table.Table
+    """
+    from astropy.table import Table
+
+    target = target_name.replace(' ' ,'+')
+    tbl = Table.read(f"https://vizier.cds.unistra.fr/viz-bin/sed?-c={target}&-c.rs={radius}")
+
+    return tbl
+
 
 # Class for creating an input source spectrum
 class source_spectrum(object):
@@ -501,10 +527,11 @@ class source_spectrum(object):
         Magnitude of input bandpass for initial scaling of spectrum.
     bp : :mod:`pysynphot.obsbandpass`
         Bandpass to apply initial mag_val scaling.
-    votable_file: string
+    votable_input: string
         VOTable name that holds the source's photometry. The user can
         find the relevant data at http://vizier.u-strasbg.fr/vizier/sed/
         and click download data.
+        Or astropy Table with column 'sed_freq', 'sed_flux', 'sed_eflux'.
 
     Keyword Args
     ------------
@@ -524,6 +551,9 @@ class source_spectrum(object):
     interpolate : bool
         Interpolate spectrum using a weighted average of grid points
         surrounding the desired input parameters. Default: True
+    radius : float
+        Search radius in arcseconds for Vizier query.
+        Default: 1 arcsec.
 
     Example
     -------
@@ -546,7 +576,7 @@ class source_spectrum(object):
 
     """
 
-    def __init__(self, name, sptype, mag_val, bp, votable_file,
+    def __init__(self, name, sptype, mag_val, bp, votable_input,
                  Teff=None, metallicity=None, log_g=None, Av=None, **kwargs):
 
         self.name = name
@@ -575,26 +605,48 @@ class source_spectrum(object):
         # Init model to None
         self.sp_model = None
 
-        # Readin photometry
-        self.votable_file = votable_file
+        # Backwards compatible with votable_file
+        if kwargs.get('votable_file') is not None:
+            self.votable_input = kwargs.get('votable_file')
+        else:
+            self.votable_input = votable_input
+        
+        # Read in photometry
+        self._check_file(**kwargs)
         self._gen_table()
         self._combine_fluxes()
 
+    def _check_file(self, **kwargs):
+        """Check if VOTable exists. If not, download from Vizier."""
+
+        # Check if votable_input is a string
+        is_str = isinstance(self.votable_input, str)
+
+        # If VOTable does not exist, download from Vizier.
+        # Stores input as astropy table.
+        if is_str and (not os.path.exists(self.votable_input)):
+            _log.warning('VOTable does not exist. Downloading from Vizier...')
+            self.votable_input = download_votable(self.name, **kwargs)
+
     def _gen_table(self):
         """Read VOTable and convert to astropy table"""
-        # Import source SED from VOTable
-        from astropy.io.votable import parse_single_table
-        table = parse_single_table(self.votable_file)
-        # Convert to astropy table
-        tbl = table.to_table()
 
-        freq = tbl['sed_freq'] * 1e9 # Hz
-        wave_m = 2.99792458E+08 / freq
-        wave_A = 1e10 * wave_m
+        if isinstance(self.votable_input, str):
+            # Import source SED from VOTable
+            from astropy.io.votable import parse_single_table
+            table = parse_single_table(self.votable_input)
+            # Convert to astropy table
+            tbl = table.to_table()
+        else:
+            # Otherwise assume already astropy Table
+            tbl = self.votable_input
+
+        # Convert from frequency to wavelength
+        freq = tbl['sed_freq']
+        wave_A = freq.to(u.Angstrom, equivalencies=u.spectral())
 
         # Add wavelength column
         col = tbl.Column(wave_A, 'sed_wave')
-        col.unit = 'Angstrom'
         tbl.add_column(col)
 
         # Sort flux monotomically with wavelength
@@ -605,7 +657,7 @@ class source_spectrum(object):
     def _combine_fluxes(self):
         """Average duplicate data points
 
-        Creates average of duplicate point stored in self.sp_phot.
+        Creates average of duplicate points stored in self.sp_phot.
         """
 
         table = self.table
@@ -640,7 +692,6 @@ class source_spectrum(object):
                                     fluxunits=eflux.unit.name)
         sp_phot_e.convert('Angstrom')
         sp_phot_e.convert('Flam')
-
 
         self.sp_phot = sp_phot
         self.sp_phot_e = sp_phot_e
