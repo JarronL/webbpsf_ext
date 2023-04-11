@@ -578,7 +578,7 @@ class NIRCam_ext(webbpsf_NIRCam):
             Additionally returns a dictionary of monochromatic PSFs images and their 
             corresponding wavelengths for debugging purposes. Can be used with or without
             `return_results`. If `return_results=False`, then only this dictionary is
-            returned, otherwise if `return_results=False` then returns everything as a
+            returned, otherwise if `return_results=True` then returns everything as a
             3-element tuple (psf_coeff, psf_coeff_header, extras_dict).
         """
 
