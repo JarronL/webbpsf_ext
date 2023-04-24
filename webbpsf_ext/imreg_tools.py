@@ -112,6 +112,7 @@ def get_ictm_event_log(startdate, enddate, hdr=None, mast_api_token=None, verbos
 
     from datetime import datetime, timedelta, timezone
     from requests import Session
+    import time
 
     # parameters
     mnemonic = 'ICTM_EVENT_MSG'
@@ -160,7 +161,22 @@ def get_ictm_event_log(startdate, enddate, hdr=None, mast_api_token=None, verbos
     response = session.get(url)
     if response.status_code == 401:
         exit('HTTPError 401 - Check your MAST token and EDB authorization.')
-    response.raise_for_status()
+
+    retries = 0
+    retry_limit = 5
+    while retries < retry_limit:
+        try:
+            response.raise_for_status()
+            break
+        except Exception as e:
+            # Wait 5 seconds before retrying
+            time.sleep(5)
+            # log the error
+            retries += 1
+            if retries == retry_limit:
+                _log.error(f'Failed to retreieve url after {retry_limit}')
+                raise e
+
     lines = response.content.decode('utf-8').splitlines()
 
     return lines
@@ -660,7 +676,7 @@ def get_expected_loc(input, return_indices=True, add_sroffset=None):
         # changes to the SIAF that were made after July 1 (or around there).
         add_sroffset = False if Time(date_obs) < Time('2022-07-01') else True
 
-    # If offsets excluded, then set xoff and yoff to 0
+    # If offsets excluded, then reset xoff and yoff to 0
     # and add in SGD offsets if they exist
     if not add_sroffset:
         xoff_asec = yoff_asec = 0.0
@@ -677,10 +693,10 @@ def get_expected_loc(input, return_indices=True, add_sroffset=None):
     
     # Expected pixel location based on ideal offset
     if apname == apname_pps:
-        if np.allclose([xoff_asec, yoff_asec], 0.0):
-            xsci_exp, ysci_exp = (ap.XSciRef, ap.YSciRef)
-        else:
-            xsci_exp, ysci_exp = ap.idl_to_sci(xoff_asec, yoff_asec)
+        xsci_exp, ysci_exp = (ap.XSciRef, ap.YSciRef)
+        # Add offset
+        xsci_exp = xsci_exp + xoff_asec / ap.XSciScale
+        ysci_exp = ysci_exp + yoff_asec / ap.YSciScale
     else:
         if np.allclose([xoff_asec, yoff_asec], 0.0):
             xtel, ytel = (ap.V2Ref, ap.V3Ref)
@@ -784,6 +800,8 @@ def crop_observation(im_full, ap, xysub, xyloc=None, delx=0, dely=0,
     The interp keyword only works for the latter two options.
     Consider 'lanczos' for cv_shift.
 
+    Setting `return_xy` to True will also return the indices 
+    used to perform the crop.
     """
         
     # xcorn_sci, ycorn_sci = ap.corners('sci')
@@ -863,6 +881,14 @@ def crop_observation(im_full, ap, xysub, xyloc=None, delx=0, dely=0,
         # Use fshift function if only performing integer shifts
         if float(delx).is_integer() and float(dely).is_integer():
             shift_func = fshift
+
+        # If NaNs are present, print warning and fill with zeros
+        ind_nan = np.isnan(im_full)
+        if np.any(ind_nan):
+            _log.warning('NaNs present in image. Filling with zeros.')
+            im_full = im_full.copy()
+            im_full[ind_nan] = 0
+
         im_full = shift_func(im_full, delx, dely, **kwargs)
     
     im = im_full[y1:y2, x1:x2]
