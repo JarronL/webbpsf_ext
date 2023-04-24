@@ -643,7 +643,17 @@ def round_int(val, half_round='down'):
     we want x.5 to round down. Option to round x.5 up by
     setting `half_round='up'`.
     """
+
     if half_round.lower()=='down':
-        return int(np.rint(np.nextafter(val, val-1)))
+        if isinstance(val, (list, tuple, np.ndarray)):
+            val = np.asarray(val)
+            return np.rint(np.nextafter(val, val-1)).astype(int)
+        else:
+            return int(np.rint(np.nextafter(val, val-1)))
     else:
-        return int(np.rint(np.nextafter(val, val+1)))
+        if isinstance(val, (list, tuple, np.ndarray)):
+            val = np.asarray(val)
+            return np.rint(np.nextafter(val, val+1)).astype(int)
+        else:
+            return int(np.rint(np.nextafter(val, val+1)))
+
