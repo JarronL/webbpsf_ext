@@ -54,7 +54,7 @@ def jl_poly(xvals, coeff, dim_reorder=False, use_legendre=False, lxmap=None, **k
     """
 
     # How many xvals?
-    n = np.size(xvals)
+    nx = np.size(xvals)
     try:
         xdim = len(xvals.shape)
     except AttributeError:
@@ -97,7 +97,7 @@ def jl_poly(xvals, coeff, dim_reorder=False, use_legendre=False, lxmap=None, **k
         # Use Identity matrix to evaluate each polynomial component
         # xfan = legendre.legval(lxvals, np.identity(dim[0]))
         # Below method is faster for large lxvals
-        xfan = np.asarray([eval_legendre(n, lxvals) for n in range(dim[0])])
+        xfan = np.asarray([eval_legendre(nn, lxvals) for nn in range(dim[0])])
     else:
         # Create an array of exponent values
         parr = np.arange(dim[0], dtype='float')
@@ -113,10 +113,10 @@ def jl_poly(xvals, coeff, dim_reorder=False, use_legendre=False, lxmap=None, **k
         # Use np.matmul instead of np.dot for speed improvement
         yfit = np.matmul(cf.T, xfan) # cf.T @ xfan
 
-        if ndim==1 or n==1: 
+        if ndim==1 or nx==1: 
             yfit = yfit.ravel()
         if ndim==3: 
-            yfit = yfit.reshape((dim[1],dim[2],n))
+            yfit = yfit.reshape((dim[1],dim[2],nx))
     else:
         # This is the Python preferred ordering
         # Coefficients are assumed (deg+1,ny,nx)
@@ -125,10 +125,10 @@ def jl_poly(xvals, coeff, dim_reorder=False, use_legendre=False, lxmap=None, **k
         # Use np.matmul instead of np.dot for speed improvement
         yfit = np.matmul(xfan.T, cf) # xfan.T @ cf
 
-        if ndim==1 or n==1: 
+        if ndim==1 or nx==1: 
             yfit = yfit.ravel()
         if ndim==3: 
-            yfit = yfit.reshape((n,dim[1],dim[2]))
+            yfit = yfit.reshape((nx,dim[1],dim[2]))
 
     return yfit
 
