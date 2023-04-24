@@ -253,7 +253,7 @@ def fourier_imshift(image, xshift, yshift, pad=False, cval=0.0, **kwargs):
     
     return offset
     
-def cv_shift(image, xshift, yshift, pad=False, cval=0.0, interp='lanczos'):
+def cv_shift(image, xshift, yshift, pad=False, cval=0.0, interp='lanczos', **kwargs):
     """Use OpenCV library for image shifting
 
     Requires opencv-python package. Produces fewer artifacts that `fourier_imshift`.
