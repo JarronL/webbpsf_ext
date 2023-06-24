@@ -35,7 +35,7 @@ _log = logging.getLogger('webbpsf_ext')
 
 def get_im_cen(im):
     """
-    Returns pixel position of array center.
+    Returns pixel position (xcen, ycen) of array center.
     For odd dimensions, this is in a pixel center.
     For even dimensions, this is at the pixel boundary.
     """
@@ -404,7 +404,11 @@ def pad_or_cut_to_size(array, new_shape, fill_val=0.0, offset_vals=None,
 
     # Input the fill values
     if fill_val != 0:
-        output += fill_val
+        try:
+            output += fill_val
+        except:
+            # If castings are different, then don't add fill_val
+            pass
         
     # Pixel shift values
     if offset_vals is not None:
@@ -548,6 +552,8 @@ def rotate_offset(data, angle, cen=None, cval=0.0, order=1,
 
     """
 
+    from .imreg_tools import crop_image
+
     # Return input data if angle is set to None or 0
     # and if 
     if ((angle is None) or (angle==0)) and (cen is None):
@@ -568,7 +574,8 @@ def rotate_offset(data, angle, cen=None, cval=0.0, order=1,
     kwargs['order'] = order
     kwargs['cval'] = cval
 
-    xcen, ycen = (nx/2, ny/2)
+    # xcen, ycen = (nx/2, ny/2)
+    xcen, ycen = get_im_cen(data)
     if cen is None:
         cen = (xcen, ycen)
     xcen_new, ycen_new = cen
@@ -593,7 +600,8 @@ def rotate_offset(data, angle, cen=None, cval=0.0, order=1,
     new_shape = (int(ny+2*abs(dely)), int(nx+2*abs(delx)))
     images_shift = []
     for im in data:
-        im_pad = pad_or_cut_to_size(im, new_shape, fill_val=cval)
+        # im_pad = pad_or_cut_to_size(im, new_shape, fill_val=cval)
+        im_pad = crop_image(im, new_shape, fill_val=cval)
         im_new = shift_func(im_pad, delx, dely, cval=cval, interp=interp)
         images_shift.append(im_new)
     images_shift = np.asarray(images_shift)
@@ -619,7 +627,8 @@ def rotate_offset(data, angle, cen=None, cval=0.0, order=1,
         # Perform cropping
         images_fin = []
         for im in images_rot:
-            im_new = pad_or_cut_to_size(im, (ny,nx))
+            # im_new = pad_or_cut_to_size(im, (ny,nx))
+            im_new = crop_image(im, (ny,nx), fill_val=0)
             images_fin.append(im_new)
         images_fin = np.asarray(images_fin)
     
@@ -845,6 +854,8 @@ def image_rescale(HDUlist_or_filename, pixscale_out, pixscale_in=None,
         HDUlist of the new image.
     """
 
+    from .imreg_tools import crop_image
+
     if isinstance(HDUlist_or_filename, six.string_types):
         hdulist = fits.open(HDUlist_or_filename)
     elif isinstance(HDUlist_or_filename, fits.HDUList):
@@ -905,7 +916,8 @@ def image_rescale(HDUlist_or_filename, pixscale_out, pixscale_in=None,
         image_new[ny//2, nx//2] += star_flux
 
     if shape_out is not None:
-        image_new = pad_or_cut_to_size(image_new, shape_out)
+        # image_new = pad_or_cut_to_size(image_new, shape_out)
+        image_new = crop_image(image_new, shape_out, fill_val=0)
 
     hdu_new = fits.PrimaryHDU(image_new)
     hdu_new.header = hdulist[0].header.copy()

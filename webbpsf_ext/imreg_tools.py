@@ -783,7 +783,7 @@ def recenter_psf(psfs_over, niter=3, halfwidth=7):
 
 def crop_observation(im_full, ap, xysub, xyloc=None, delx=0, dely=0, 
                      shift_func=fourier_imshift, interp='cubic',
-                     return_xy=False, **kwargs):
+                     return_xy=False, fill_val=np.nan, **kwargs):
     """Crop around aperture reference location
 
     `xysub` specifies the desired crop size.
@@ -802,6 +802,46 @@ def crop_observation(im_full, ap, xysub, xyloc=None, delx=0, dely=0,
 
     Setting `return_xy` to True will also return the indices 
     used to perform the crop.
+
+    Parameters
+    ----------
+    im_full : ndarray
+        Input image.
+    ap : pysiaf aperture
+        Aperture to use for cropping. Will crop around the aperture
+        reference point by default. Will be overridden by `xyloc`.
+    xysub : int, tuple, or list
+        Size of subarray to extract. If a single integer is provided,
+        then a square subarray is extracted. If a tuple or list is
+        provided, then it should be of the form (ny, nx).
+    xyloc : tuple or list
+        (x,y) pixel location around which to crop the image. If None,
+        then the image aperture refernece point is used.
+    
+    Keyword Args
+    ------------
+    delx : int or float
+        Integer pixel offset in x-direction. This shifts the image by
+        some number of pixels in the x-direction. Positive values shift
+        the image to the right.
+    dely : int or float
+        Integer pixel offset in y-direction. This shifts the image by
+        some number of pixels in the y-direction. Positive values shift
+        the image up.
+    shift_func : function
+        Function to use for shifting. Default is `fourier_imshift`.
+        If delx and dely are both integers, then `fshift` is used.
+    interp : str
+        Interpolation method to use for shifting. Default is 'cubic'.
+        Options are 'nearest', 'linear', 'cubic', and 'quadratic'
+        for `fshift`.
+    return_xy : bool
+        If True, then return the x and y indices used to crop the
+        image prior to any shifting from `delx` and `dely`. 
+        Default is False.
+    fill_val : float
+        Value to use for filling in the empty pixels after shifting.
+        Default = np.nan.
     """
         
     # xcorn_sci, ycorn_sci = ap.corners('sci')
@@ -831,6 +871,7 @@ def crop_observation(im_full, ap, xysub, xyloc=None, delx=0, dely=0,
     # Save initial values in case they get modified below
     x1_init, x2_init = (x1, x2)
     y1_init, y2_init = (y1, y2)
+    xy_ind = np.array([x1_init, x2_init, y1_init, y2_init])
 
     sh_orig = im_full.shape
     if (x2>=sh_orig[1]) or (y2>=sh_orig[0]) or (x1<0) or (y1<0):
@@ -849,8 +890,10 @@ def crop_observation(im_full, ap, xysub, xyloc=None, delx=0, dely=0,
         dy = dyp + dyn
 
         # Expand image
+        # TODO: This can probelmatic for some existing functions because it
+        # places NaNs in the output image.
         shape_new = (2*dy+ny, 2*dx+nx)
-        im_full = pad_or_cut_to_size(im_full, shape_new)
+        im_full = pad_or_cut_to_size(im_full, shape_new, fill_val=fill_val)
 
         xc_new, yc_new = (xc+dx, yc+dy)
         x1 = round_int(xc_new - nx_sub/2 + 0.5)
@@ -885,14 +928,18 @@ def crop_observation(im_full, ap, xysub, xyloc=None, delx=0, dely=0,
         # If NaNs are present, print warning and fill with zeros
         ind_nan = np.isnan(im_full)
         if np.any(ind_nan):
-            _log.warning('NaNs present in image. Filling with zeros.')
+            # _log.warning('NaNs present in image. Filling with zeros.')
             im_full = im_full.copy()
             im_full[ind_nan] = 0
 
+        kwargs['pad'] = True
         im_full = shift_func(im_full, delx, dely, **kwargs)
+        # shift NaNs and add back in
+        if np.any(ind_nan):
+            ind_nan = fshift(ind_nan, delx, dely, pad=True) > 0  # Maybe >0.5?
+            im_full[ind_nan] = np.nan
     
     im = im_full[y1:y2, x1:x2]
-    xy_ind = np.array([x1_init, x2_init, y1_init, y2_init])
     
     if return_xy:
         return im, xy_ind
@@ -901,7 +948,47 @@ def crop_observation(im_full, ap, xysub, xyloc=None, delx=0, dely=0,
 
 
 def crop_image(im, xysub, xyloc=None, **kwargs):
-    """Crop input image around center using integer offsets only"""
+    """Crop input image around center using integer offsets only
+
+    If size is exceeded, then the image is expanded and filled with NaNs.
+
+    Parameters
+    ----------
+    im : ndarray
+        Input image.
+    xysub : int, tuple, or list
+        Size of subarray to extract. If a single integer is provided,
+        then a square subarray is extracted. If a tuple or list is
+        provided, then it should be of the form (ny, nx).
+    xyloc : tuple or list
+        (x,y) pixel location around which to crop the image. If None,
+        then the image center is used.
+    
+    Keyword Args
+    ------------
+    delx : int or float
+        Integer pixel offset in x-direction. This shifts the image by
+        some number of pixels in the x-direction. Positive values shift
+        the image to the right.
+    dely : int or float
+        Integer pixel offset in y-direction. This shifts the image by
+        some number of pixels in the y-direction. Positive values shift
+        the image up.
+    shift_func : function
+        Function to use for shifting. Default is `fourier_imshift`.
+        If delx and dely are both integers, then `fshift` is used.
+    interp : str
+        Interpolation method to use for shifting. Default is 'cubic'.
+        Options are 'nearest', 'linear', 'cubic', and 'quadratic'
+        for `fshift`.
+    return_xy : bool
+        If True, then return the x and y indices used to crop the
+        image prior to any shifting from `delx` and `dely`. 
+        Default is False.
+    fill_val : float
+        Value to use for filling in the empty pixels after shifting.
+        Default = np.nan.
+    """
     
     return crop_observation(im, None, xysub, xyloc=xyloc, **kwargs)
 
@@ -1059,7 +1146,7 @@ def gen_psf_offsets(psf, crop=65, xlim_pix=(-3,3), ylim_pix=(-3,3), dxy=0.05,
         crop_over = crop*psf_osamp
 
         psf_sh = crop_image(psf0, crop_over, xyloc=None, delx=-xoff_over, dely=-yoff_over,
-                            shift_func=shift_func, pad=False, **kwargs)
+                            shift_func=shift_func, **kwargs)
         # psf_sh = pad_or_cut_to_size(psf0, crop_over, offset_vals=(-yoff_over,-xoff_over), 
         #                             shift_func=shift_func, pad=True)
 
@@ -1067,6 +1154,7 @@ def gen_psf_offsets(psf, crop=65, xlim_pix=(-3,3), ylim_pix=(-3,3), dxy=0.05,
         psf_sh = frebin(psf_sh, scale=1/psf_osamp)
         psf_sh_all.append(psf_sh)
     psf_sh_all = np.asarray(psf_sh_all)
+    psf_sh_all[np.isnan(psf_sh_all)] = 0
     
     # Add IPC
     if kipc is not None or ipc_vals is not None:
