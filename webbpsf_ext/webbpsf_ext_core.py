@@ -4133,7 +4133,7 @@ def _coeff_mod_wfe_mask(self, coord_vals, coord_frame, siaf_ap=None):
     # PSF Modifications assuming we successfully found (xsci,ysci)
     # print(xidl, yidl)
     if (xidl is not None):
-        _log.info("Generating mask-dependent modifications...")
+        _log.debug("Generating mask-dependent modifications...")
         # print(v2,v3)
         nfield = np.size(xidl)
         field_rot = 0 if self._rotation is None else self._rotation
@@ -4342,15 +4342,18 @@ def _calc_psfs_grid(self, sp=None, wfe_drift=0, osamp=1, npsf_per_full_fov=15,
             hdu.header['OSAMP'] = osamp
 
     if return_coords is None:
-        return hdul_psfs
+        res = hdul_psfs
     elif return_coords=='sci':
         xvals, yvals = xsci_psf, ysci_psf
+        res = (xvals, yvals, hdul_psfs)
     elif return_coords=='tel':
         xvals, yvals = xtel_psf, ytel_psf
+        res = (xvals, yvals, hdul_psfs)
     else:
         xvals, yvals = siaf_ap_obs.convert(xsci_psf, ysci_psf, 'sci', return_coords)
+        res = (xvals, yvals, hdul_psfs)
         
-    return xvals, yvals, hdul_psfs
+    return res
 
 
 def _calc_psfs_sgd(self, xoff_asec, yoff_asec, use_coeff=True, return_oversample=True, **kwargs):
