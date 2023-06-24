@@ -916,15 +916,15 @@ def correl_images(im1, im2, mask=None):
     Parameters
     ----------
     im1 : ndarray
-        Single image or image cube (nz1, ny1, nx1).
+        Single image or image cube (nz1, ny, nx).
     im2 : ndarray
-        Single image or image cube (nz2, ny1, nx1). 
+        Single image or image cube (nz2, ny, nx). 
         If both im1 and im2 are cubes, then returns
         a matrix of  coefficients.
     mask : ndarry or None
         If set, then a binary mask of 1=True and 0=False.
         Excludes pixels marked with 0s/False. Must be same
-        size/shape as images (ny1, nx1).
+        size/shape as images (ny, nx).
     """
     
     sh1 = im1.shape
