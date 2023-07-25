@@ -98,17 +98,18 @@ class NIRCam_ext(webbpsf_NIRCam):
             size will be considered to have 0 residual difference
         """
 
-
         webbpsf_NIRCam.__init__(self)
 
         # Initialize script
         _init_inst(self, filter=filter, pupil_mask=pupil_mask, image_mask=image_mask,
                    fov_pix=fov_pix, oversample=oversample, **kwargs)
 
-        # No jitter for coronagraphy by default
-        # Otherwise, assume 5 mas / axis
-        self.options['jitter'] = None if self.is_coron else 'gaussian'
-        self.options['jitter_sigma'] = 0.005
+        # Slight pupil rotation for NIRCam LW coronagraphy
+        if self.is_coron and (self.channel.lower()=='long'):
+            pup_rot = -0.5
+        else:
+            pup_rot = None
+        self.options['pupil_rotation'] = kwargs.get('pupil_rotation', pup_rot)
 
         # By default, WebbPSF has wavelength limits depending on the channel
         # which can interfere with coefficient calculations, so set these to 
@@ -126,10 +127,10 @@ class NIRCam_ext(webbpsf_NIRCam):
         self._grism_order = 1
 
         # Specify ice and nvr scalings
-        self._ice_scale = kwargs['ice_scale'] if 'ice_scale' in kwargs.keys() else None
-        self._nvr_scale = kwargs['nvr_scale'] if 'nvr_scale' in kwargs.keys() else None
-        self._ote_scale = kwargs['ote_scale'] if 'ote_scale' in kwargs.keys() else None
-        self._nc_scale  = kwargs['nc_scale']  if 'nc_scale'  in kwargs.keys() else None
+        self._ice_scale = kwargs.get('ice_scale', None)
+        self._nvr_scale = kwargs.get('nvr_scale', None)
+        self._ote_scale = kwargs.get('ote_scale', None)
+        self._nc_scale  = kwargs.get('nc_scale', None) 
 
         # Option to calculate ND acquisition for coronagraphic obs
         self._ND_acq = False
@@ -978,11 +979,6 @@ class MIRI_ext(webbpsf_MIRI):
         _init_inst(self, filter=filter, pupil_mask=pupil_mask, image_mask=image_mask,
                    fov_pix=fov_pix, oversample=oversample, **kwargs)
 
-        # No jitter for coronagraphy by default
-        # Otherwise assume 5 mas / axis
-        self.options['jitter'] = None if self.is_coron else 'gaussian'
-        self.options['jitter_sigma'] = 0.005
-
     @property
     def save_dir(self):
         """Coefficient save directory"""
@@ -1669,6 +1665,9 @@ def _init_inst(self, filter=None, pupil_mask=None, image_mask=None,
 
     # Options to include or exclude distortions
     self.include_distortions = True
+    # Excldue charge diffusion and IPC / PPC effects by default
+    self.options['charge_diffusion_sigma'] = 0
+    self.options['add_ipc'] = False
     
     # Settings for fov_pix and oversample
     # Default odd for normal imaging, even for coronagraphy
@@ -1740,6 +1739,10 @@ def _init_inst(self, filter=None, pupil_mask=None, image_mask=None,
     if self.image_mask is not None:
         self.options['coron_shift_x'] = 0
         self.options['coron_shift_y'] = 0
+
+    # Flight performance is about 1 mas / axis
+    self.options['jitter'] = 'gaussian'
+    self.options['jitter_sigma'] = 0.001
 
 def _gen_save_dir(self):
     """
