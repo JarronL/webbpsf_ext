@@ -787,7 +787,9 @@ def crop_observation(im_full, ap, xysub, xyloc=None, delx=0, dely=0,
     """Crop around aperture reference location
 
     `xysub` specifies the desired crop size.
-    if `xysub` is an array, dimension order should be [nysub,nxsub]
+    if `xysub` is an array, dimension order should be [nysub,nxsub].
+    Crops at pixel boundaries (no interpolation) unless delx and dely
+    are specified for pixel shifting.
 
     `xyloc` provides a way to manually supply the central position. 
     Set `ap` to None will crop around `xyloc` or center of array.
@@ -821,11 +823,11 @@ def crop_observation(im_full, ap, xysub, xyloc=None, delx=0, dely=0,
     Keyword Args
     ------------
     delx : int or float
-        Integer pixel offset in x-direction. This shifts the image by
+        Pixel offset in x-direction. This shifts the image by
         some number of pixels in the x-direction. Positive values shift
         the image to the right.
     dely : int or float
-        Integer pixel offset in y-direction. This shifts the image by
+        Pixel offset in y-direction. This shifts the image by
         some number of pixels in the y-direction. Positive values shift
         the image up.
     shift_func : function
@@ -1011,7 +1013,8 @@ def correl_images(im1, im2, mask=None):
     mask : ndarry or None
         If set, then a binary mask of 1=True and 0=False.
         Excludes pixels marked with 0s/False. Must be same
-        size/shape as images (ny, nx).
+        size/shape as images (ny, nx). Any NaNs in the images
+        will automatically be masked.
     """
     
     sh1 = im1.shape
@@ -1035,6 +1038,15 @@ def correl_images(im1, im2, mask=None):
 
     im1 = im1.reshape([nz1,-1])
     im2 = im2.reshape([nz2,-1])
+
+    # Mask out NaNs
+    nanvals = np.sum(np.isnan(im1), axis=0) + np.sum(np.isnan(im2), axis=0)
+    nan_mask = nanvals > 0
+    nan_mask = nan_mask.reshape([ny1,nx1])
+    if (np.sum(nan_mask) > 0) and (mask is None):
+        mask = ~nan_mask
+    elif (np.sum(nan_mask) > 0) and (mask is not None):
+        mask = mask & ~nan_mask
 
     # Apply masking
     if mask is not None:
@@ -1094,7 +1106,7 @@ def find_max_crosscorr(corr, xsh_arr, ysh_arr, sub_sample):
 
 def gen_psf_offsets(psf, crop=65, xlim_pix=(-3,3), ylim_pix=(-3,3), dxy=0.05,
     psf_osamp=1, shift_func=fourier_imshift, ipc_vals=None, kipc=None,
-    prog_leave=False, **kwargs):
+    monitor=False, prog_leave=False, **kwargs):
     """ Generate a series of downsampled cropped and shifted PSF images
 
     If fov_pix is odd, then crop should be odd. 
@@ -1140,7 +1152,11 @@ def gen_psf_offsets(psf, crop=65, xlim_pix=(-3,3), ylim_pix=(-3,3), dxy=0.05,
 
     # Create a series of shifted PSFs to compare to images
     psf_sh_all = []
-    for xoff, yoff in tqdm(zip(xoff_all, yoff_all), total=len(xoff_all), leave=prog_leave):
+    if monitor:
+        iter_vals = tqdm(zip(xoff_all, yoff_all), total=len(xoff_all), leave=prog_leave)
+    else:
+        iter_vals = zip(xoff_all, yoff_all)
+    for xoff, yoff in iter_vals:
         xoff_over = xoff*psf_osamp
         yoff_over = yoff*psf_osamp
         crop_over = crop*psf_osamp
@@ -1252,7 +1268,15 @@ def find_offsets2(input, xoff_pix, yoff_pix, psf_sh_all, bpmasks=None,
 
     xsh0_pix = []
     ysh0_pix = []
-    iter_vals = tqdm(keys,leave=prog_leave) if is_dict else tqdm(input,leave=prog_leave)
+    if is_dict and len(keys)==1:
+        iter_vals = keys
+    elif is_dict and len(keys)>1:
+        tqdm(keys,leave=prog_leave)
+    elif len(input)==1:
+        iter_vals = input
+    else:
+        iter_vals = tqdm(input, leave=prog_leave)
+    # iter_vals = tqdm(keys,leave=prog_leave) if is_dict else tqdm(input,leave=prog_leave)
     i = 0
     for val in iter_vals:
         
@@ -1289,8 +1313,10 @@ def find_offsets2(input, xoff_pix, yoff_pix, psf_sh_all, bpmasks=None,
         rmask = (rdist>=rin) if rout is None else (rdist>=rin) & (rdist<=rout)
         # Exclude 0s and NaNs
         zmask = (im!=0) & (~np.isnan(im))
-        ind_mask = rmask & zmask & (~bpmask)
-        
+        nanmask_psf = (psf_sh_crop==0) | np.isnan(psf_sh_crop)
+        zmask2 = np.sum(nanmask_psf, axis=0) == 0
+        ind_mask = rmask & zmask & zmask2 & (~bpmask)
+
         # Cross-correlate to find best x,y shift to align image with PSF
         cc = correl_images(psf_sh_crop, im, mask=ind_mask)
         cc = cc.reshape(sh_grid)
