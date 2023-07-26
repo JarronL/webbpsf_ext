@@ -110,6 +110,30 @@ def get_encircled_energy(im, center=None, binsize=1,
 
 
 def ipc_info(sca_input):
+    """ Return IPC coefficients and kernel for a given SCA
+
+    Returns IPC coefficients (a1, a2) and IPC kernel for a given SCA.
+    Default IPC coefficients are (0.005, 0.0003) if SCA is not found.
+    The IPC kernel is a 3x3 array with the center pixel being 1-4*(a1+a2):
+
+        [[a2, a1, a2],
+         [a1, a0, a1],
+         [a2, a1, a2]]
+
+    where a0 = 1-4*(a1+a2).
+    
+    Parameters
+    ----------
+    sca_input : str
+        Name of NIRCam SCA. Can be in any format such as A5, NRCA5, NRCALONG.
+
+    Returns
+    -------
+    ipc : tuple
+        Tuple of IPC coefficients (a1, a2)
+    kipc : ndarray
+        3x3 IPC kernel
+    """
 
     from .utils import get_detname
 
@@ -117,11 +141,11 @@ def ipc_info(sca_input):
     sca = get_detname(sca_input, use_long=False).lower()
 
     ipc_dict = {
-        'nrca1': (0.0049, 0.0003), 'nrca2': (0.0052, 0.0003),
-        'nrca3': (0.0057, 0.0003), 'nrca4': (0.0056, 0.0004),
-        'nrcb1': (0.0051, 0.0003), 'nrcb2': (0.0046, 0.0003),
-        'nrcb3': (0.0054, 0.0003), 'nrcb4': (0.0057, 0.0003),
-        'nrca5': (0.0060, 0.0004), 'nrcb5': (0.0055, 0.0004),
+        'nrca1': (0.00488, 0.00027), 'nrca2': (0.00516, 0.00031),
+        'nrca3': (0.00568, 0.00033), 'nrca4': (0.00557, 0.00039),
+        'nrcb1': (0.00511, 0.00028), 'nrcb2': (0.00464, 0.00025),
+        'nrcb3': (0.00542, 0.00033), 'nrcb4': (0.00570, 0.00032),
+        'nrca5': (0.00600, 0.00039), 'nrcb5': (0.00554, 0.00037),
         }
 
     keys = list(ipc_dict.keys())
@@ -136,6 +160,52 @@ def ipc_info(sca_input):
     kipc = np.array([[a2,a1,a2], [a1,1-4*(a1+a2),a1], [a2,a1,a2]])
 
     return (a1, a2), kipc
+
+def ppc_info(sca_input):
+    """ Return PPC coefficients and kernel for a given SCA
+
+    Returns PPC coefficients (ppc_frac) and PPC kernel for a given SCA.
+    Defaults to 0.001 if SCA is not found.
+
+    PPC is dependent on readout direction, with some fraction of the signal
+    being transferred to the trailing pixel.
+
+    Parameters
+    ----------
+    sca_input : str
+        Name of NIRCam SCA. Can be in any format such as A5, NRCA5, NRCALONG.
+
+    Returns
+    -------
+    ppc_frac : float
+
+    """
+
+    from .utils import get_detname
+
+    # Returns NRC[A-B][1-4,LONG]
+    sca = get_detname(sca_input, use_long=False).lower()
+
+    ppc_dict = {
+        'nrca1': 0.00065, 'nrca2': 0.00069,
+        'nrca3': 0.00023, 'nrca4': 0.00069,
+        'nrcb1': 0.00033, 'nrcb2': 0.00063,
+        'nrcb3': 0.00034, 'nrcb4': 0.00078,
+        'nrca5': 0.00123, 'nrcb5': 0.00140,
+        }
+    
+    keys = list(ppc_dict.keys())
+    if sca not in keys:
+        ppc_frac = 0.001
+        _log.warn(f"{sca_input} ({sca}) does not match known NIRCam SCA. \
+                    Defaulting to {ppc_frac:.3f}.")
+    else:
+        ppc_frac = ipc_dict.get(sca)
+
+    kppc = np.array([[0,0,0], [0,1-ppc_frac,ppc_frac], [0,0,0]])
+
+    return ppc_frac, kppc
+
 
 def nrc_ref_info(apname, orientation='sci'):
     """Get reference pixel information for a given aperture
