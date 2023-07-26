@@ -200,7 +200,7 @@ def ppc_info(sca_input):
         _log.warn(f"{sca_input} ({sca}) does not match known NIRCam SCA. \
                     Defaulting to {ppc_frac:.3f}.")
     else:
-        ppc_frac = ipc_dict.get(sca)
+        ppc_frac = ppc_dict.get(sca)
 
     kppc = np.array([[0,0,0], [0,1-ppc_frac,ppc_frac], [0,0,0]])
 
