@@ -1417,12 +1417,21 @@ def linder_table(file=None, **kwargs):
         Default is ``BEX_evol_mags_-3_MH_0.00.dat``.
     """
 
-    # Default file to read and load
+    # Default input directory
+    indir = _spec_dir + 'linder/isochrones/'
+    # Default file
     if file is None:
-        indir = _spec_dir + 'linder/isochrones/'
-        file = indir + 'BEX_evol_mags_-3_MH_0.00.dat'
+        file = 'BEX_evol_mags_-3_MH_0.00.dat'
 
-    with open(file) as f:
+    # First check if file is in indir
+    file_path = os.path.join(indir, file)
+    if not os.path.exists(file_path):
+        # Check if file is in current directory
+        file_path = file
+        if not os.path.exists(file):
+            raise ValueError(f"File {file_path} not found.")
+
+    with open(file_path) as f:
         content = f.readlines()
 
     content = [x.strip('\n') for x in content]
@@ -1444,7 +1453,8 @@ def linder_table(file=None, **kwargs):
     
     return tbl
     
-def linder_filter(table, filt, age, dist=10, cond_file=None, **kwargs):
+def linder_filter(table, filt, age, dist=10, cond_file=None, 
+                  extrapolate=True, **kwargs):
     """Linder Mags vs Mass Arrays
     
     Given a Linder table, filter name, and age (Myr), return arrays of MJup 
@@ -1465,8 +1475,16 @@ def linder_filter(table, filt, age, dist=10, cond_file=None, **kwargs):
         Name of NIRCam filter.
     age : float
         Age in Myr of planet.
+
+    Keyword Args
+    =============
     dist : float
         Distance in pc. Default is 10pc (abs mag).
+    cond_file : string
+        COND file to use for extrapolating to higher masses.
+    extrapolate : bool
+        If True, extrapolate to higher masses using COND models
+        as well as lower masses using a lower order polynomial fit.
     """    
     
     # In the event of underscores within name
@@ -1508,48 +1526,53 @@ def linder_filter(table, filt, age, dist=10, cond_file=None, **kwargs):
 
     #######################################################
     # Grab COND model data to fill in higher masses
-    base_dir = _spec_dir + 'cond_models/'
-    if cond_file is None: 
-        cond_file = base_dir + 'model.AMES-Cond-2000.M-0.0.JWST.Vega'
+    if extrapolate:
+        base_dir = _spec_dir + 'cond_models/'
+        if cond_file is None: 
+            cond_file = base_dir + 'model.AMES-Cond-2000.M-0.0.JWST.Vega'
+        npsave_file = cond_file + f'.{filt}.npy'
+    
+        if os.path.exists(npsave_file):
+            mag2, age2, mass2_mjup = np.load(npsave_file)
+        else:
+            d_tbl2 = cond_table(file=cond_file) # Dictionary of ages
+            mass2_mjup = []
+            mag2 = []
+            age2 = []
+            for k in d_tbl2.keys():
+                tbl2 = d_tbl2[k]
+                mass2_mjup = mass2_mjup + list(tbl2['MJup'].data)
+                try:
+                    mag2 = mag2 + list(tbl2[filt+'a'].data) # NIRCam
+                except KeyError:        
+                    filt_alt = {'F1065C':'F1000W', 'F1140C':'F1130W', 'F1550C':'F1500W', 'F2300C':'F2100W'}
+                    fcol = filt_alt.get(filt, filt)
+                    mag2 = mag2 + list(tbl2[fcol].data)  # MIRI
+                age2 = age2 + list(np.ones(len(tbl2))*k)
         
-    npsave_file = cond_file + '.{}.npy'.format(filt)
+            mass2_mjup = np.array(mass2_mjup)
+            mag2 = np.array(mag2)
+            age2 = np.array(age2)
+        
+            mag_age_mass = np.array([mag2,age2,mass2_mjup])
+            np.save(npsave_file, mag_age_mass)    
 
-    if os.path.exists(npsave_file):
-        mag2, age2, mass2_mjup = np.load(npsave_file)
-    else:
-        d_tbl2 = cond_table(file=cond_file) # Dictionary of ages
-        mass2_mjup = []
-        mag2 = []
-        age2 = []
-        for k in d_tbl2.keys():
-            tbl2 = d_tbl2[k]
-            mass2_mjup = mass2_mjup + list(tbl2['MJup'].data)
-            try:
-                mag2 = mag2 + list(tbl2[filt+'a'].data) # NIRCam
-            except KeyError:        
-                filt_alt = {'F1065C':'F1000W', 'F1140C':'F1130W', 'F1550C':'F1500W', 'F2300C':'F2100W'}
-                fcol = filt_alt.get(filt, filt)
-                mag2 = mag2 + list(tbl2[fcol].data)  # MIRI
-            age2 = age2 + list(np.ones(len(tbl2))*k)
-    
-        mass2_mjup = np.array(mass2_mjup)
-        mag2 = np.array(mag2)
-        age2 = np.array(age2)
-    
-        mag_age_mass = np.array([mag2,age2,mass2_mjup])
-        np.save(npsave_file, mag_age_mass)    
+        # Irregular grid
+        x2 = mag2
+        age2 = age2 * 1e6 # Convert from Myr to years
+        y2 = np.log10(age2)
+        z2 = mass2_mjup * 318 # Convert to Earth masses
+        zlog2 = np.log10(z2)
 
-    # Irregular grid
-    x2 = mag2
-    y2 = np.log10(age2 * 1e6)
-    z2 = mass2_mjup * 318 # Convert to Earth masses
-    zlog2 = np.log10(z2)
-    
 
     #######################################################
     
-    xlim = np.array([x2.min(),x.max()+5]) # magntidue limits
-    ylim = np.array([6,10])  # 10^6 to 10^10 yrs
+    if extrapolate:
+        xlim = np.array([x2.min(),x.max()+5]) # magnitude limits
+        ylim = np.array([6,10])  # 10^6 to 10^10 yrs
+    else:
+        xlim = np.array([x.min(),x.max()]) # magnitude limits
+        ylim = np.array([y.min(),y.max()]) # age limits
     dx = (xlim[1] - xlim[0]) / 200
     dy = (ylim[1] - ylim[0]) / 200
     xgrid = np.arange(xlim[0], xlim[1]+dx, dx)
@@ -1557,56 +1580,85 @@ def linder_filter(table, filt, age, dist=10, cond_file=None, **kwargs):
     X, Y = np.meshgrid(xgrid, ygrid)
     
     zgrid = griddata((x,y), zlog, (X, Y), method='cubic')
-    zgrid_cond = griddata((x2,y2), zlog2, (X, Y), method='cubic')
-
     # There will be NaN's along the border that need to be replaced
     ind_nan = np.isnan(zgrid)
-    # First replace with COND grid
-    zgrid[ind_nan] = zgrid_cond[ind_nan]
-    ind_nan = np.isnan(zgrid)
+    if extrapolate:
+        # Replace some NaNs with COND grid
+        zgrid_cond = griddata((x2,y2), zlog2, (X, Y), method='cubic')
+        zgrid[ind_nan] = zgrid_cond[ind_nan]
+        ind_nan = np.isnan(zgrid)
     
     # Remove rows/cols with NaN's
-    xgrid2, ygrid2, zgrid2 = _trim_nan_array(xgrid, ygrid, zgrid)
+    # x is mag, y is log(age), z is log(mass)
+    # xgrid2, ygrid2, zgrid2 = _trim_nan_array(xgrid, ygrid, zgrid)
+    xgrid2, ygrid2, zgrid2 = xgrid, ygrid, zgrid
 
     # Create regular grid interpolator function for extrapolation at NaN's
+    # Need to us linear method over cubic if not trimming NaN's
+    fill_value = None if extrapolate else np.nan
     func = RegularGridInterpolator((ygrid2,xgrid2), zgrid2, method='linear',
-                                   bounds_error=False, fill_value=None)
+                                   bounds_error=False, fill_value=fill_value)
 
-    # Fix NaN's in zgrid and rebuild func
-    pts = np.array([Y[ind_nan], X[ind_nan]]).transpose()
-    zgrid[ind_nan] = func(pts)
+    if extrapolate:
+        # Fix NaN's in zgrid and rebuild func
+        pts = np.array([Y[ind_nan], X[ind_nan]]).transpose()
+        zgrid[ind_nan] = func(pts)
 
-    func = RegularGridInterpolator((ygrid,xgrid), zgrid, method='linear',
-                                   bounds_error=False, fill_value=None)
+        func = RegularGridInterpolator((ygrid,xgrid), zgrid, method='linear',
+                                       bounds_error=False, fill_value=None)
     
     # Get mass limits for series of magnitudes at a given age                                
     age_log = np.log10(age*1e6)
     mag_abs_arr = xgrid
     pts = np.array([(age_log,xval) for xval in mag_abs_arr])
     mass_arr = 10**func(pts) / 318.0 # Convert to MJup
+
+    # Get rid of any NaN's
+    ind_use = ~np.isnan(mass_arr)
+    mag_abs_arr = mag_abs_arr[ind_use]
+    mass_arr = mass_arr[ind_use]
     
-    # TODO: Rewrite this function to better extrapolate to lower and higher masses
-    # For now, fit low order polynomial
+    # Sort by magnitude
     isort = np.argsort(mag_abs_arr)
     mag_abs_arr = mag_abs_arr[isort]
     mass_arr = mass_arr[isort]
-    ind_fit = mag_abs_arr<x.max()
-    lxmap = [mag_abs_arr.min(), mag_abs_arr.max()]
-    xfit = np.append(mag_abs_arr[ind_fit], mag_abs_arr[-1])
-    yfit = np.log10(np.append(mass_arr[ind_fit], mass_arr[-1]))
-    cf = jl_poly_fit(xfit, yfit, deg=4, use_legendre=False, lxmap=lxmap)
-    mass_arr = 10**jl_poly(mag_abs_arr,cf)
 
+    # At a given magnitude, if there is a lower mass at a brighter magnitude, 
+    # replace mass value
+    # for i, mag in enumerate(mag_abs_arr):
+    #     ind = mag_abs_arr < mag
+    #     if ind.sum() > 0:
+    #         mass_arr[i] = np.min([mass_arr[i], mass_arr[ind].min()])
 
+    # Fit low order polynomial
+    ifit = mag_abs_arr<x.max()
+    xfit = np.append(mag_abs_arr[ifit], mag_abs_arr[-1])
+    yfit = np.log10(np.append(mass_arr[ifit], mass_arr[-1]))
+    # Perform a bunch of polynomial fits and find chi^2 to choose optimal degree
+    use_lg = False
+    lxmap = None # np.array([mag_abs_arr.min(), mag_abs_arr.max()])
+    chi2_arr = []
+    deg_arr = np.arange(1,8)
+    for deg in deg_arr:
+        cf = jl_poly_fit(xfit, yfit, deg=deg, use_legendre=use_lg, lxmap=lxmap)
+        vals_fit = 10**jl_poly(mag_abs_arr,cf, use_legendre=use_lg, lxmap=lxmap)
+        chi2 = np.sum((mass_arr - vals_fit)**2)
+        chi2_arr.append(chi2)
+    ind_deg = np.argmin(chi2_arr)
+    deg = deg_arr[ind_deg]
+    cf = jl_poly_fit(xfit, yfit, deg=deg, use_legendre=use_lg, lxmap=lxmap)
+    mass_arr_fit = 10**jl_poly(mag_abs_arr,cf, use_legendre=use_lg, lxmap=lxmap)
+
+    # Convert to apparent magnitude
     mag_app_arr = mag_abs_arr + 5*np.log10(dist/10.0)
 
     # Sort by mass
-    isort = np.argsort(mass_arr)
-    mass_arr = mass_arr[isort]
+    mass_arr_fin = mass_arr_fit
+    isort = np.argsort(mass_arr_fin)
+    mass_arr_fin = mass_arr_fin[isort]
     mag_app_arr = mag_app_arr[isort]
 
-
-    return mass_arr, mag_app_arr
+    return mass_arr_fin, mag_app_arr
     
 
 def cond_table(age=None, file=None, **kwargs):
@@ -1650,12 +1702,21 @@ def cond_table(age=None, file=None, **kwargs):
 
         return tbl
 
-    # Default file to read and load
+    # Default input directory
+    base_dir = os.path.join(_spec_dir, 'cond_models/')
+    # Default file
     if file is None:
-        base_dir = _spec_dir + 'cond_models/'
-        file = base_dir + 'model.AMES-Cond-2000.M-0.0.JWST.Vega'
+        file = 'model.AMES-Cond-2000.M-0.0.JWST.Vega'
 
-    with open(file) as f:
+    # First check if file is in indir
+    file_path = os.path.join(base_dir, file)
+    if not os.path.exists(file_path):
+        # Check if file is in current directory
+        file_path = file
+        if not os.path.exists(file):
+            raise ValueError(f"File {file_path} not found.")
+
+    with open(file_path) as f:
         content = f.readlines()
 
     content = [x.strip('\n') for x in content]
@@ -1742,6 +1803,111 @@ def cond_filter(table, filt, module='A', dist=None, **kwargs):
 
     return mass_arr, mag_arr
 
+def mass_sensitivity_table(filt, dist=10, extrapolate=True, lfile=None, age_arr=None, 
+                           save=True, save_dir=None, return_tbl=False, **kwargs):
+    """ Generate a table of mass sensitivities for a given filter
+
+    Interpolate mass and brightnesses of BEX evolutionary tracks. Creates a
+    table with first column of magnitudes, second column is log10(Jy), and
+    subsequent columns are log10(Mass) for each age in Myr.
+
+
+    Parameters
+    ----------
+    filt : str
+        Name of filter
+    dist : float
+        Distance in parsecs
+    extrapolate : bool
+        If True, extrapolate to higher masses using COND models
+        as well as lower masses using a lower order polynomial fit.
+    lfile : str
+        Filename of Linder evolutionary tracks. If None, then use
+        BEX_evol_mags_-3_MH_0.00.dat (warm start HELIOS grid).
+    age_arr : array_like
+        Array of ages in Myr. If None, then defualts to [1,2,...,20] Myr.
+    save : bool
+        Save table to file.
+    save_dir : str
+        Directory to save table. If None, then save to current directory.
+    return_tbl : bool
+        Return astropy table object
+    """
+
+    from .bandpasses import nircam_filter
+
+    if lfile is None:
+        lfile = 'BEX_evol_mags_-3_MH_0.00.dat'
+    tbl = linder_table(file=lfile)
+
+    if age_arr is None:
+        age_arr = np.arange(1, 21, 1)
+
+    mass_all = []
+    mag_all = []
+    for age in age_arr:
+        mass_data, mag_data = linder_filter(tbl, filt, age, dist, 
+                                            extrapolate=extrapolate, **kwargs)
+        mass_all.append(mass_data)
+        mag_all.append(mag_data)
+
+    # Interpolate masses onto a common magnitude array
+    dm = 0.1
+    if extrapolate:
+        mag_arr_min = np.round(np.max([np.min(m) for m in mag_all])+dm, 1)
+        mag_arr_max = np.round(np.max([np.max(m) for m in mag_all])-dm, 1)
+    else:
+        mag_arr_min = np.round(np.min([np.min(m) for m in mag_all])+dm, 1)
+        mag_arr_max = np.round(np.max([np.max(m) for m in mag_all])-dm, 1)
+    mag_arr = np.arange(mag_arr_min, mag_arr_max, 0.1)
+
+    # Convert magnitudes to Jy
+    # Get 0th magnitude flux density
+    bp = nircam_filter(filt)
+    sp = stellar_spectrum('G2V', 0, 'vegamag', bp)
+    obs = S.Observation(sp, bp, binset=bp.wave)
+    flux0 = obs.effstim('Jy')
+    fluxJy_arr = 10**(-0.4*mag_arr)*flux0
+
+    mass_arr = []
+    for i, mass_vals in enumerate(mass_all):
+        # 
+        fn = interp1d(mag_all[i], mass_vals, kind='cubic', 
+                    bounds_error=False, fill_value=np.nan)
+        mass_arr.append(fn(mag_arr))
+
+        # isort = np.argsort(mag_all[i])
+        # xvals = mag_all[i][isort]
+        # yvals = mass_vals[isort]
+        # mass_arr.append(np.interp(mag_arr, xvals, yvals))
+
+    mass_arr = np.array(mass_arr)
+    log_jy = np.log10(fluxJy_arr)
+
+    # Create astropy table
+    data = np.concatenate([[mag_arr], [log_jy], np.log10(mass_arr)])
+    names = ['mag', 'log_Jy'] + [f'{age}Myr' for age in age_arr]
+    tbl = Table(data=data.T, names=names)
+
+    tbl['mag'].info.format = '.1f'
+    tbl['log_Jy'].info.format = '.3f'
+    for k in tbl.colnames[2:]:
+        tbl[k].info.format = '.4f'
+
+    if save:
+        ext_str = '_extrapolated' if extrapolate else ''
+        save_name = f'{filt}__{lfile[:-4]}__d{dist}pc{ext_str}.txt'
+        if save_dir is not None:
+            save_path = os.path.join(save_dir, save_name)
+        else:
+            save_path = save_name
+        tbl.write(save_path, overwrite=True, format='ascii.fixed_width', 
+            bookend=False, delimiter=None, delimiter_pad='  ')
+
+    if return_tbl:
+        return tbl
+
+
 def _trim_nan_array(xgrid, ygrid, zgrid):
     """NaN Trimming of Array Image
 
@@ -1826,12 +1992,7 @@ def _trim_nan_array(xgrid, ygrid, zgrid):
 def companion_spec(bandpass, model='SB12', atmo='hy3s', mass=10, age=100, entropy=10,
     dist=10, accr=False, mmdot=None, mdot=None, accr_rin=2, truncated=False,
     sptype=None, renorm_args=None, Av=0, **kwargs):
-    """ Determine flux (ph/sec) of a companion 
-
-    Add exoplanet information that will be used to generate a point
-    source image using a spectrum from Spiegel & Burrows (2012).
-
-    Coordinate convention is for +N up and +E to left.
+    """ Create a spectrum of a companion 
 
     Parameters
     ----------
