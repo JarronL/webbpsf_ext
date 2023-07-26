@@ -1513,10 +1513,10 @@ def linder_filter(table, filt, age, dist=10, cond_file=None, **kwargs):
         cond_file = base_dir + 'model.AMES-Cond-2000.M-0.0.JWST.Vega'
         
     npsave_file = cond_file + '.{}.npy'.format(filt)
-    
-    try:
+
+    if os.path.exists(npsave_file):
         mag2, age2, mass2_mjup = np.load(npsave_file)
-    except:
+    else:
         d_tbl2 = cond_table(file=cond_file) # Dictionary of ages
         mass2_mjup = []
         mag2 = []
