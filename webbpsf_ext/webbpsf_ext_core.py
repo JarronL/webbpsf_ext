@@ -418,20 +418,33 @@ class NIRCam_ext(webbpsf_NIRCam):
                 self.aperturename = 'NRCA5' + self.aperturename[5:]
                 # self.detector = 'NRCA5'
 
-    def get_bar_offset(self, narrow=False):
+    def get_bar_offset(self, narrow=None, filter=None):
         """
         Obtain the value of the bar offset that would be passed through to
         PSF calculations for bar/wedge coronagraphic masks.
-        """
 
+        Parameters
+        ----------
+        narrow : bool or None
+            If True, then use the narrow bar offset position. If False, then use the
+            filter-dependent bar offset position. If None, then try to determine
+            based on apeture name. Default: None
+        filter : str or None
+            If not None, then use this filter to determine the bar offset position.
+            The `narrow` keyword or aperture name in `self.siaf_ap` takes priority.
+        """
         from webbpsf.optics import NIRCam_BandLimitedCoron
 
-        if (self.is_coron) and (self.image_mask[-1:]=='B'):
+        if (self.is_coron) and ('WB' in self.image_mask):
             # Determine bar offset for Wedge masks either based on filter 
             # or explicit specification
             bar_offset = self.options.get('bar_offset', None)
             if bar_offset is None:
-                auto_offset = 'narrow' if narrow else self.filter
+                filter = self.filter if filter is None else filter
+                # Default to narrow, otherwise use filter-dependent offset
+                if narrow is None:
+                    narrow = ('NARROW' in self.siaf_ap.AperName)
+                auto_offset = 'narrow' if narrow else filter
             else:
                 try:
                     _ = float(bar_offset)
@@ -441,8 +454,25 @@ class NIRCam_ext(webbpsf_NIRCam):
                     auto_offset = bar_offset
                     bar_offset = None
 
-            mask = NIRCam_BandLimitedCoron(name=self.image_mask, module=self.module, kind='nircamwedge',
-                                           bar_offset=bar_offset, auto_offset=auto_offset)
+            try:
+                mask = NIRCam_BandLimitedCoron(name=self.image_mask, module=self.module, kind='nircamwedge',
+                                               bar_offset=bar_offset, auto_offset=auto_offset)
+            except ValueError as e:
+                # If we failed, then webbpsf is showing a mismatch between bar type and filter
+                # Try to auto-determine filter from aperture name
+                apname = self.siaf_ap.AperName
+                if ('_F1' in apname) or ('_F2' in apname) or ('_F3' in apname) or ('_F4' in apname):
+                    # Find all instances of "_"
+                    inds = [pos for pos, char in enumerate(apname) if char == '_']
+                    # Filter is always appended to end, but can have different string sizes (F322W2)
+                    filter = apname[inds[-1]+1:]
+
+                    # Try again
+                    mask = NIRCam_BandLimitedCoron(name=self.image_mask, module=self.module, kind='nircamwedge',
+                                                   bar_offset=None, auto_offset=filter)
+                else:
+                    raise e
+
             return mask.bar_offset
         else:
             return None
@@ -1734,7 +1764,7 @@ def _init_inst(self, filter=None, pupil_mask=None, image_mask=None,
         'wfe_drift': None, 'wfe_drift_off': None, 'wfe_drift_lxmap': None,
         'si_field': None, 'si_field_v2grid': None, 'si_field_v3grid': None, 'si_field_apname': None,
         'si_mask': None, 'si_mask_xgrid': None, 'si_mask_ygrid': None, 'si_mask_apname': None,
-        'si_mask_large': False
+        'si_mask_large': True
     }
     if self.image_mask is not None:
         self.options['coron_shift_x'] = 0
@@ -2287,17 +2317,20 @@ def _calc_psf_webbpsf(self, calc_psf_func, add_distortion=None, fov_pixels=None,
 
     # Get new sci coord
     if coord_vals is not None:
+        # Use webbpsf aperture to convert to detector coordinates
         siaf_ap = self.siaf[self.aperturename]
         xorig, yorig = self.detector_position
         xnew, ynew = coord_vals
 
         coron_shift_x_orig = self.options.get('coron_shift_x', 0)
         coron_shift_y_orig = self.options.get('coron_shift_y', 0)
-        bar_offset_orig = self.options.get('bar_offset', None)
-        self.options['bar_offset'] = 0
+        if self.name == 'NIRCam':
+            bar_offset_orig = self.options.get('bar_offset', None)
+            self.options['bar_offset'] = 0
 
-        # bar_offset_orig = self.options.get('b')
-
+        # Offsets are relative to webbpsf's aperture reference location
+        # Use (xidl, yidl) for mask shifting
+        # Use (xsci, ysci) for detector position to calc WFE
         xidl, yidl = siaf_ap.convert(xnew, ynew, coord_frame, 'idl')
         xsci, ysci = siaf_ap.convert(xnew, ynew, coord_frame, 'sci')
         self.detector_position = (xsci, ysci)
@@ -2323,6 +2356,11 @@ def _calc_psf_webbpsf(self, calc_psf_func, add_distortion=None, fov_pixels=None,
             # Shift mask in opposite direction
             self.options['coron_shift_x'] = xoff_mask
             self.options['coron_shift_y'] = yoff_mask
+    else:
+        if self.name == 'NIRCam':
+            bar_offset_orig = self.options.get('bar_offset', None)
+            if bar_offset_orig is None:
+                self.options['bar_offset'] = self.get_bar_offset()
 
     # Perform PSF calculation
     return_hdul = kwargs.pop('return_hdul', True)
@@ -2339,6 +2377,7 @@ def _calc_psf_webbpsf(self, calc_psf_func, add_distortion=None, fov_pixels=None,
         self.detector_position = (xorig, yorig)
         self.options['coron_shift_x'] = coron_shift_x_orig
         self.options['coron_shift_y'] = coron_shift_y_orig
+    if self.name == 'NIRCam':
         self.options['bar_offset'] = bar_offset_orig
 
     # Crop distorted borders
@@ -3175,12 +3214,6 @@ def _gen_wfemask_coeff(self, force=False, save=True, large_grid=None,
     if self.fov_pix>fov_max:
         self.fov_pix = fov_max if (self.fov_pix % 2 == 0) else fov_max + 1
 
-    # Modify bar_offset to always be 0 (center of wedge FOV)
-    # Do this here so that it is captured in the save name
-    bar_offset_orig = self.options.get('bar_offset', None)
-    if (self.name=='NIRCam'):
-        self.options['bar_offset'] = 0
-
     # Name to save array of oversampled coefficients
     save_dir = self.save_dir
     file_ext = '_large_grid_wfemask.npz' if large_grid else '_wfemask.npz'
@@ -3191,8 +3224,8 @@ def _gen_wfemask_coeff(self, force=False, save=True, large_grid=None,
     if (not force) and os.path.exists(outname):
         # Return parameter to original
         self.fov_pix = fov_pix_orig
-        if self.name=='NIRCam':
-            self.options['bar_offset'] = bar_offset_orig
+        # if self.name=='NIRCam':
+        #     self.options['bar_offset'] = bar_offset_orig
 
         _log.info(f"Loading {outname}")
         out = np.load(outname)
@@ -3210,6 +3243,12 @@ def _gen_wfemask_coeff(self, force=False, save=True, large_grid=None,
         _log.warn('Generating mask position-dependent coeffs (large grid). This may take some time...')
     else:
         _log.warn('Generating mask position-dependent coeffs (small grid). This may take some time...')
+
+    # Modify bar_offset to always be 0 (center of wedge FOV)
+    # Do this after getting save_name to indicate that this is relative to default offset
+    if (self.name=='NIRCam'):
+        bar_offset_orig = self.options.get('bar_offset', None)
+        self.options['bar_offset'] = 0
 
     # Current mask positions to return to at end
     coron_shift_x_orig = self.options.get('coron_shift_x', 0)
