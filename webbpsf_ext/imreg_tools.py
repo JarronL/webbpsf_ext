@@ -92,6 +92,7 @@ def get_coron_apname(input):
     if (apname==apname_pps) or ('MASK' not in apname_pps):
         return apname
     else:
+        # Should only get here if coron mask and apname doesn't match PPS
         apname_str_split = apname.split('_')
         sca = apname_str_split[0]
         image_mask = get_mask_from_pps(apname_pps)
@@ -104,22 +105,26 @@ def get_coron_apname(input):
         else:
             apn0 = sca
 
-        apname = f'{apn0}_{image_mask}'
+        apname_new = f'{apn0}_{image_mask}'
 
         # Append filter or NARROW if needed
         pps_str_arr = apname_pps.split('_')
         last_str = pps_str_arr[-1]
-        # Look for filter specified in aperture name
-        if ('_F1' in apname) or ('_F2' in apname) or ('_F3' in apname) or ('_F4' in apname):
+        # Look for filter specified in PPS aperture name
+        if ('_F1' in apname_pps) or ('_F2' in apname_pps) or ('_F3' in apname_pps) or ('_F4' in apname_pps):
             # Find all instances of "_"
-            inds = [pos for pos, char in enumerate(apname) if char == '_']
+            inds = [pos for pos, char in enumerate(apname_pps) if char == '_']
             # Filter is always appended to end, but can have different string sizes (F322W2)
-            filter = apname[inds[-1]+1:]
-            apname += f'_{filter}'
+            filter = apname_pps[inds[-1]+1:]
+            apname_new += f'_{filter}'
+        elif ('LWB' in apname_pps) and ('TAMASK' in apname_pps):
+            apname_new += '_F335M'
+        elif ('SWB' in apname_pps) and ('TAMASK' in apname_pps):
+            apname_new += '_F210M'
         elif last_str=='NARROW':
-            apname += '_NARROW'
+            apname_new += '_NARROW'
 
-        return apname
+        return apname_new
 
 
 def get_files(indir, pid, obsid=None, sca=None, filt=None, file_type='uncal.fits', 
