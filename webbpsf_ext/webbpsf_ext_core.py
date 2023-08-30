@@ -471,6 +471,7 @@ class NIRCam_ext(webbpsf_NIRCam):
                     mask = NIRCam_BandLimitedCoron(name=self.image_mask, module=self.module, kind='nircamwedge',
                                                    bar_offset=None, auto_offset=filter)
                 else:
+                    print(f"Aperture Name: {apname}; Filter: {self.filter}")
                     raise e
 
             return mask.bar_offset
@@ -710,7 +711,21 @@ class NIRCam_ext(webbpsf_NIRCam):
             prior to fitting. Final results will not be saved to the dictionary attributes.
 
         """
-        return _gen_wfemask_coeff(self, large_grid=large_grid, force=force, save=save, **kwargs)
+
+        # Set to input bar offset value. No effect if not a wedge mask.
+        bar_offset_orig = self.options.get('bar_offset', None)
+        try:
+            self.options['bar_offset'] = self.psf_coeff_header.get('BAROFF', None)
+        except AttributeError:
+            # Throws error if psf_coeff_header doesn't exist
+            _log.error("psf_coeff_header does not appear to exist. Run gen_psf_coeff().")
+            res = 0
+        else:
+            res = _gen_wfemask_coeff(self, large_grid=large_grid, force=force, save=save, **kwargs)
+        finally:
+            self.options['bar_offset'] = bar_offset_orig
+
+        return res
 
     def gen_wfefield_coeff(self, force=False, save=True, **kwargs):
         """ Fit WFE field-dependent coefficients
@@ -816,6 +831,11 @@ class NIRCam_ext(webbpsf_NIRCam):
         -----
         Additional PSF computation options (pupil shifts, source positions, jitter, ...)
         may be set by configuring the `.options` dictionary attribute of this class.
+
+        Calculations with bar masks: Calling with `coord_vals=None` will generate a PSF
+        at the nominal mask position based on the filter or NARROW as called out from `self.siaf_ap`. 
+        If coord_vals is set to a tuple of (x,y) values, then the PSF will be generated at those 
+        locations relative to the center of the mask (or more specifically, center of `self.aperturname`).
 
         Parameters
         ----------
@@ -2237,11 +2257,27 @@ def _calc_psf_with_shifts(self, calc_psf_func, **kwargs):
 
     # Specify image oversampling relative to detector sampling
     for hdu in hdul:
-        if 'DET' in hdu.header['EXTNAME']:
+        hdr = hdu.header
+        if 'DET' in hdr['EXTNAME']:
             osamp = 1
         else:
-            osamp = hdu.header['DET_SAMP']
-        hdu.header['OSAMP'] = (osamp, 'Image oversample vs det')
+            osamp = hdr['DET_SAMP']
+        hdr['OSAMP'] = (osamp, 'Image oversample vs det')
+
+        # Capture various offset options
+        # Source positioning
+        offset_r = self.options.get('source_offset_r', 'None')
+        offset_theta = self.options.get('source_offset_theta', 'None')
+        # Mask offsetting
+        coron_shift_x = self.options.get('coron_shift_x', 'None')
+        coron_shift_y = self.options.get('coron_shift_y', 'None')
+        bar_offset = self.options.get('bar_offset', 'None')
+
+        hdr['OFFR']  = (offset_r, 'Radial offset')
+        hdr['OFFTH'] = (offset_theta, 'Position angle for OFFR (CCW)')
+        hdr['BAROFF'] = (bar_offset, 'Image mask shift along wedge (arcsec)')
+        hdr['MASKOFFX'] = (coron_shift_x, 'Image mask shift in x (arcsec)')
+        hdr['MASKOFFY'] = (coron_shift_y, 'Image mask shift in y (arcsec)')
 
     # Scale PSF by total incident source flux
     if do_counts:
@@ -2513,7 +2549,7 @@ def _wrap_coeff_for_mp(args):
     else:
         hdu = hdu_list[0]
 
-    # Rather than storing 
+    # Specify image oversampling relative to detector sampling
     hdu.header['OSAMP'] = (inst.oversample, 'Image oversample vs det')
     return hdu
 
@@ -2748,7 +2784,7 @@ def _gen_psf_coeff(self, nproc=None, wfe_drift=0, force=False, save=True,
     hdr['WAVE2']  = (w2, 'Last of wavelength in calc')
     hdr['LEGNDR'] = (use_legendre, 'Legendre polynomial fit?')
     hdr['OFFR']  = (offset_r, 'Radial offset')
-    hdr['OFFTH'] = (offset_theta, 'Position angle OFFR (CCW)')
+    hdr['OFFTH'] = (offset_theta, 'Position angle for OFFR (CCW)')
     if (self.image_mask is not None) and ('WB' in self.image_mask):
         hdr['BAROFF'] = (bar_offset, 'Image mask shift along wedge (arcsec)')
     hdr['MASKOFFX'] = (coron_shift_x, 'Image mask shift in x (arcsec)')
@@ -3235,8 +3271,6 @@ def _gen_wfemask_coeff(self, force=False, save=True, large_grid=None,
     if (not force) and os.path.exists(outname):
         # Return parameter to original
         self.fov_pix = fov_pix_orig
-        # if self.name=='NIRCam':
-        #     self.options['bar_offset'] = bar_offset_orig
 
         _log.info(f"Loading {outname}")
         out = np.load(outname)
@@ -3254,12 +3288,6 @@ def _gen_wfemask_coeff(self, force=False, save=True, large_grid=None,
         _log.warn('Generating mask position-dependent coeffs (large grid). This may take some time...')
     else:
         _log.warn('Generating mask position-dependent coeffs (small grid). This may take some time...')
-
-    # Modify bar_offset to always be 0 (center of wedge FOV)
-    # Do this after getting save_name to indicate that this is relative to default offset
-    if (self.name=='NIRCam'):
-        bar_offset_orig = self.options.get('bar_offset', None)
-        self.options['bar_offset'] = 0
 
     # Current mask positions to return to at end
     coron_shift_x_orig = self.options.get('coron_shift_x', 0)
@@ -3409,7 +3437,6 @@ def _gen_wfemask_coeff(self, force=False, save=True, large_grid=None,
         self.fov_pix = fov_pix_orig
         if self.name=='NIRCam':
             self.options['nd_squares'] = nd_squares_orig
-            self.options['bar_offset'] = bar_offset_orig
 
         return cf_all, xoff, yoff
 
@@ -3647,7 +3674,6 @@ def _gen_wfemask_coeff(self, force=False, save=True, large_grid=None,
     self.fov_pix = fov_pix_orig
     if self.name=='NIRCam':
         self.options['nd_squares'] = nd_squares_orig
-        self.options['bar_offset'] = bar_offset_orig
 
     # x and y grid values to return
     xvals = xoff_all[0]
