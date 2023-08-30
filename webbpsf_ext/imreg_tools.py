@@ -23,11 +23,104 @@ _log.setLevel(logging.INFO)
 #    File Information
 ###########################################################################
 
-def get_detname(det_id):
+def get_detname(det_id, use_long=True):
     """Return NRC[A-B][1-4,LONG] for valid detector/SCA IDs"""
 
     from .utils import get_detname as _get_detname
-    return _get_detname(det_id, use_long=True)
+    return _get_detname(det_id, use_long=use_long)
+
+def get_mask_from_pps(apname_pps):
+    """Get mask name from PPS aperture name
+    
+    The PPS aperture name is of the form:
+        NRC[A/B][1-5]_[FULL]_[MASK]
+    where MASK is the name of the coronagraphic mask used.
+
+    For target acquisition apertures the mask name can be
+    prependend with "TA" (eg., TAMASK335R).
+
+    Return '' if MASK not in input aperture name.
+    """
+
+    if 'MASK' not in apname_pps:
+        return ''
+
+    pps_str_arr = apname_pps.split('_')
+    for s in pps_str_arr:
+        if 'MASK' in s:
+            image_mask = s
+            break
+
+    # Special case for TA apertures
+    if 'TA' in image_mask:
+        # Remove TA from mask name
+        image_mask = image_mask.replace('TA', '')
+
+        # Remove FS from mask name
+        if 'FS' in image_mask:
+            image_mask = image_mask.replace('FS', '')
+
+        # Remove trailing S or L from LWB and SWB TA apertures
+        if ('WB' in image_mask) and (image_mask[-1]=='S' or image_mask[-1]=='L'):
+            image_mask = image_mask[:-1]
+
+    return image_mask
+
+def get_coron_apname(input):
+    """Get aperture name from header or data model
+    
+    Parameters
+    ==========
+    input : fits.header.Header or datamodels.DataModel
+        Input header or data model
+    """
+
+    if isinstance(input, (fits.header.Header)):
+        # Aperture names
+        apname = input['APERNAME']
+        apname_pps = input['PPS_APER']
+    else:
+        # Data model meta info
+        meta = input.meta
+
+        # Aperture names
+        apname = meta.aperture.name
+        apname_pps = meta.aperture.pps_name
+
+    # No need to do anything if the aperture names are the same
+    # Also skip if MASK not in apname_pps
+    if (apname==apname_pps) or ('MASK' not in apname_pps):
+        return apname
+    else:
+        apname_str_split = apname.split('_')
+        sca = apname_str_split[0]
+        image_mask = get_mask_from_pps(apname_pps)
+
+        # Get subarray info
+        if 'FULL' in apname:
+            apn0 = f'{sca}_FULL'
+        elif '400x256' in apname:
+            apn0 = f'{sca}_400x256'
+        else:
+            apn0 = sca
+
+        apname = f'{apn0}_{image_mask}'
+
+        # Append filter or NARROW if needed
+        pps_str_arr = apname_pps.split('_')
+        last_str = pps_str_arr[-1]
+        # Look for filter specified in aperture name
+        if ('_F1' in apname) or ('_F2' in apname) or ('_F3' in apname) or ('_F4' in apname):
+            # Find all instances of "_"
+            inds = [pos for pos, char in enumerate(apname) if char == '_']
+            # Filter is always appended to end, but can have different string sizes (F322W2)
+            filter = apname[inds[-1]+1:]
+            apname += f'_{filter}'
+        elif last_str=='NARROW':
+            apname += '_NARROW'
+
+        return apname
+
 
 def get_files(indir, pid, obsid=None, sca=None, filt=None, file_type='uncal.fits', 
               exp_type=None, apername=None):
@@ -102,6 +195,104 @@ def get_files(indir, pid, obsid=None, sca=None, filt=None, file_type='uncal.fits
         allfiles = np.array(files2)
     
     return allfiles
+
+def filter_files(files, save_dir):
+    """Remove files where source is offset off of observed aperture"""
+
+    # Check if we've dithered outside of FoV
+    exp_ind = get_loc_all(files, save_dir, find_func=get_expected_loc)
+
+    ind_keep = []
+    for i, f in enumerate(files):
+        xi, yi = exp_ind[i]
+        
+        # Open FITS file
+        fpath = os.path.join(save_dir, f)
+        hdul = fits.open(fpath)
+        hdr = hdul[0].header
+        ap = nrc_siaf[hdr['APERNAME']]
+
+        if (0<xi<ap.XSciSize) and (0<yi<ap.YSciSize):
+            ind_keep.append(i)
+
+        # Close FITS file
+        hdul.close()
+
+    return files[ind_keep]
+
+def get_save_dir(pid):
+    """Return save directory for processed files
+    
+    Takes the MAST directory for a given PID and adds
+    '_proc' to the end. If it doesn't exist, it will be created.
+    """
+    mast_dir = os.getenv('JWSTDOWNLOAD_OUTDIR')
+
+    # Output directory
+    if mast_dir[-1]=='/':
+        mast_proc_dir = mast_dir[:-1] + '_proc/'
+    else:
+        mast_proc_dir = mast_dir + '_proc/'
+    save_dir = os.path.join(mast_proc_dir, f'{pid:05d}/')
+
+    # Create directory if it doesn't exist
+    if not os.path.isdir(save_dir):
+        os.makedirs(save_dir)
+
+    return save_dir
+
+def load_cropped_files(save_dir, files, xysub=65, bgsub=False, 
+                       fix_bad_pixels=True, **kwargs):
+
+    from jwst.datamodels import dqflags
+
+    # Get index location and 'sci' position
+    halfwidth = kwargs.get('halfwidth', 15)
+    com_ind = get_loc_all(files, save_dir, find_func=get_com,
+                          fix_bad_pixels=fix_bad_pixels, 
+                          halfwidth=halfwidth)
+
+    imsub_arr = []
+    dqsub_arr = []
+    xyind_arr = []
+    for i, f in enumerate(files):
+        fpath = os.path.join(save_dir, f)
+        hdul = fits.open(fpath)
+
+        # Crop and roughly center image
+        data, xy = crop_image(hdul['SCI'].data, xysub, xyloc=com_ind[i], return_xy=True)
+        try:
+            dqmask = crop_image(hdul['DQ'].data, xysub, xyloc=com_ind[i])
+        except KeyError:
+            dqmask = np.zeros_like(data).astype(np.uint64)
+        
+        # For arrays padded with 0s, flag those pixels as DO_NOT_USE
+        indz = (data==0)
+        dqmask[indz] = dqmask[indz] | dqflags.pixel['DO_NOT_USE']
+        
+        imsub_arr.append(data)
+        dqsub_arr.append(dqmask)
+        xyind_arr.append(xy)
+        
+        hdul.close()
+
+    imsub_arr = np.array(imsub_arr)
+    dqsub_arr = np.array(dqsub_arr)
+    xyind_arr = np.array(xyind_arr)
+    bp_masks1 = (dqsub_arr & dqflags.pixel['OTHER_BAD_PIXEL']) > 0
+    bp_masks2 = (dqsub_arr & dqflags.pixel['DO_NOT_USE']) > 0
+    bp_masks = bp_masks1 | bp_masks2 | np.isnan(imsub_arr)
+
+    # Do bg subtraction from r>bg_rad and only include good pixels
+    if bgsub:
+        # Radial position to set background
+        bg_rad = int(0.7 * xysub / 2)
+        ind_bg = dist_image(np.zeros([xysub,xysub])) > bg_rad
+        for i in range(len(files)):
+            indgood = (~bp_masks[i]) & ind_bg
+            imsub_arr[i] -= np.nanmedian(data[indgood])
+
+    return imsub_arr, dqsub_arr, xyind_arr, bp_masks
 
 ###########################################################################
 #    Target Acquisition
@@ -346,8 +537,14 @@ def read_ta_files(indir, pid, obsid, sca, file_type='rate.fits', uncal_dir=None,
         d['date'] = date
         hdul.close()
 
-        d['apname'] = d['hdr0']['APERNAME']
+        d['apname'] = get_coron_apname(d['hdr0'])
+        # Apername supplied by PPS for pointing control
+        d['apname_pps'] = d['hdr0']['PPS_APER']
+
         d['ap'] = nrc_siaf[d['apname']]
+        d['ap_pps'] = nrc_siaf[d['apname_pps']]
+
+        # Exposure type
         d['exp_type'] = d['hdr0']['EXP_TYPE']
 
         # bad pixel fixing for TA confirmation
@@ -355,78 +552,6 @@ def read_ta_files(indir, pid, obsid, sca, file_type='rate.fits', uncal_dir=None,
             im = crop_observation(d['data'], d['ap'], 100)
             # Perform pixel fixing in place
             _ = bp_fix(im, sigclip=10, niter=1, in_place=True)
-        
-    return ta_dict
-
-def _read_ta_conf_files_old(indir, pid, obsid, sca, bpfix=False):
-    """Store all TA and Conf data into a dictionary"""
-
-    sca = sca.lower()
-    allfiles_uncals = np.sort([f for f in os.listdir(indir) if f'{sca}_uncal.fits' in f])
-    allfiles_rates = np.sort([f for f in os.listdir(indir) if f'{sca}_rate.fits' in f])
-
-    # Select only Obs ID files
-    file_start = f'jw{pid:05d}{obsid:03d}'
-    obsfiles_uncals = np.sort([f for f in allfiles_uncals if file_start in f])
-    obsfiles_rates = np.sort([f for f in allfiles_rates if file_start in f])
-
-    # For TA files, search for EXP_TYPE=*_TACQ
-    fta = None
-    for f in obsfiles_uncals:
-        fpath = os.path.join(indir, f)
-        hdr = fits.getheader(fpath, ext=0)
-        if '_TACQ' in hdr['EXP_TYPE']:
-            fta = f
-            break
-    if fta is None:
-        print("WARNING - TA uncal.fits not found, attempting _rate.fits...")
-        for f in obsfiles_rates:
-            fpath = os.path.join(indir, f)
-            hdr = fits.getheader(fpath, ext=0)
-            if '_TACQ' in hdr['EXP_TYPE']:
-                fta = f
-                break
-
-    # Find Conf1 and Conf2 in rate.fits files
-    for f in obsfiles_rates:
-        fpath = os.path.join(indir, f)
-        hdr = fits.getheader(fpath, ext=0)
-        # 1st TACONFIM has TAMASK in APERNAME while 2nd is a science apname
-        if ('_TACONFIRM' in hdr['EXP_TYPE']) and ('TAMASK' in hdr['APERNAME']):
-            fconf1 = f
-        elif ('_TACONFIRM' in hdr['EXP_TYPE']):
-            fconf2 = f
-
-    ta_dict = {
-        'dta':    {'file': fta, 'type': 'Target Acq'},
-        'dconf1': {'file': fconf1, 'type': 'TA Conf1'},
-        'dconf2': {'file': fconf2, 'type': 'TA Conf2'},
-    }
-    
-    # Build dictionary of data and header info
-    for k in ta_dict.keys():
-        d = ta_dict[k]
-
-        f = d['file']
-        hdul = fits.open(indir + f)
-        # Get data and take diff if uncal
-        data = hdul[1].data.astype('float')        
-        if 'uncal.fits' in f:
-            data = diff_ta_data(data)
-        
-        d['data'] = data
-        d['hdr0'] = hdul[0].header
-        d['hdr1'] = hdul[1].header
-        hdul.close()
-
-        d['apname'] = d['hdr0']['APERNAME']
-        d['ap'] = nrc_siaf[d['apname']]
-
-        # bad pixel fixing for TA confirmation around a 100=pixel region
-        if bpfix and ('conf' in k):
-            im = crop_observation(d['data'], d['ap'], 100)
-            # Perform pixel fixing in place
-            _ = bp_fix(im, sigclip=10, niter=10, in_place=True)
         
     return ta_dict
 
@@ -496,10 +621,17 @@ def read_sgd_files(indir, pid, obsid, filter, sca, bpfix=False,
         # Close data model
         data_model.close()
  
-        d['apname'] = d['hdr0']['APERNAME']
+        d['apname'] = get_coron_apname(d['hdr0'])
+        # Apername supplied by PPS for pointing control
+        d['apname_pps'] = d['hdr0']['PPS_APER']
+
+        # Add SIAF apertures
         d['ap'] = nrc_siaf[d['apname']]
+        d['ap_pps'] = nrc_siaf[d['apname_pps']]
+
+        # Exposure type
         d['exp_type'] = d['hdr0']['EXP_TYPE']
-        
+
         sgd_dict[i] = d
 
         # bad pixel fixing 
@@ -507,79 +639,7 @@ def read_sgd_files(indir, pid, obsid, filter, sca, bpfix=False,
             im = crop_observation(d['data'], d['ap'], 100)
             # Perform pixel fixing in place
             _ = bp_fix(im, sigclip=10, niter=1, in_place=True)
-        
-    return sgd_dict
 
-def _read_sgd_files_old(indir, pid, obsid, sca, expid=None, filter=None, fext='_rate.fits'):
-    """Store all observations of a given filter into a dictionary
-    
-    Mostly used for grabbing a series of SGD data to analyze.
-
-    Parameters
-    ==========
-    indir : str
-        Input directory
-    pid : int
-        Program ID number
-    obsid : int
-        Observation number
-    sca : str
-        SCA name, such as a1, a2, a3, a4, along, etc
-    expid : str or None
-        Five-digit string of exposure ID: {VisitGrp:02d}{SeqID:01d}{ActID:02d}.
-        Second sub-string in filesname, usually 03105 or 03106.
-        Should be set to None if filter is specified.
-    filter : str or None
-        Name of filter element.
-    fext : str
-        File extension, such as _uncal.fits, _rate.fits, _cal.fits, etc.
-    """
-
-    sca = sca.lower()
-    file_end = f'{sca}_{fext}'
-
-    allfiles_rates = np.sort([f for f in os.listdir(indir) if file_end in f])
-    
-    # Select only SGD files
-    file_start = f'jw{pid:05d}{obsid:03d}'
-    obsfiles_rates = np.sort([f for f in allfiles_rates if (file_start in f)])
-
-    if filter is None and expid is None:
-        print('WARNING: No filter or expid specificed. Will read in all SGD files.')
-    elif (filter is not None) and (expid is not None):
-        print('WARNING: Both filter and expid are specifed. If in conflict, expid takes priority.')
-
-    if expid is not None:
-        # Priority goes to expid value, ignore filters, and NRC_CORON header
-        fsgd = np.sort([f for f in obsfiles_rates if (f'_{expid}_' in f)])
-    else:
-        fsgd = []
-        for f in obsfiles_rates:
-            fpath = os.path.join(indir, f)
-            hdr = fits.getheader(fpath, ext=0)
-
-            # Append if EXP_TYPE = NRC_CORON and specified filter matches
-            # Will ta
-            if ('_CORON' in hdr['EXP_TYPE']) and ((filter is None) or (hdr['FILTER']==filter)):
-                fsgd.append(f)
-        fsgd = np.sort(fsgd)
-    
-    sgd_dict = {}
-    for i, f in enumerate(fsgd):
-        fpath = os.path.join(indir, f)
-        d = {'file': fpath}
-        
-        hdul = fits.open(fpath)
-        d['data'] = hdul[1].data.astype('float')
-        d['hdr0'] = hdul[0].header
-        d['hdr1'] = hdul[1].header
-        hdul.close()        
- 
-        d['apname'] = d['hdr0']['APERNAME']
-        d['ap'] = nrc_siaf[d['apname']]
-        
-        sgd_dict[i] = d
-        
     return sgd_dict
 
 
@@ -619,9 +679,10 @@ def get_expected_loc(input, return_indices=True, add_sroffset=None):
     
     from astropy.time import Time
 
+    apname = get_coron_apname(input)
+
     if isinstance(input, (fits.header.Header)):
         # Aperture names
-        apname = input['APERNAME']
         apname_pps = input['PPS_APER']
         # Dither offsets
         xoff_asec = input['XOFFSET']
@@ -638,7 +699,6 @@ def get_expected_loc(input, return_indices=True, add_sroffset=None):
         meta = input.meta
 
         # Aperture names
-        apname = meta.aperture.name
         apname_pps = meta.aperture.pps_name
         # Dither offsets
         xoff_asec = meta.dither.x_offset
@@ -677,7 +737,7 @@ def get_expected_loc(input, return_indices=True, add_sroffset=None):
         add_sroffset = False if Time(date_obs) < Time('2022-07-01') else True
 
     # If offsets excluded, then reset xoff and yoff to 0
-    # and add in SGD offsets if they exist
+    # but add in SGD offsets if they exist
     if not add_sroffset:
         xoff_asec = yoff_asec = 0.0
         # Add in a SGD offsets if they exist
@@ -699,7 +759,7 @@ def get_expected_loc(input, return_indices=True, add_sroffset=None):
         ysci_exp = ysci_exp + yoff_asec / ap.YSciScale
     else:
         if np.allclose([xoff_asec, yoff_asec], 0.0):
-            xtel, ytel = (ap.V2Ref, ap.V3Ref)
+            xtel, ytel = (ap_pps.V2Ref, ap_pps.V3Ref)
         else:
             xtel, ytel = ap_pps.idl_to_tel(xoff_asec, yoff_asec)
         xsci_exp, ysci_exp = ap.tel_to_sci(xtel, ytel)
@@ -717,9 +777,13 @@ def get_com(im, halfwidth=7, return_sci=False, **kwargs):
     # Set NaNs to 0
     ind_nan = np.isnan(im)
     im[ind_nan] = 0
-    
+
     # Find center of mass centroid
-    com = fwcentroid(im, halfwidth=halfwidth, **kwargs)
+    try:
+        com = fwcentroid(im, halfwidth=halfwidth, **kwargs)
+    except IndexError:
+        hw = int(halfwidth / 2)
+        com = fwcentroid(im, halfwidth=hw, **kwargs)
     yind_com, xind_com = com
 
     # Return to NaNs
@@ -729,6 +793,52 @@ def get_com(im, halfwidth=7, return_sci=False, **kwargs):
         return xind_com+1, yind_com+1
     else:
         return xind_com, yind_com
+
+def get_loc_all(files, indir, find_func=get_com, 
+                fix_bad_pixels=True, **kwargs):
+
+    from jwst.datamodels import dqflags
+    from .image_manip import bp_fix
+    
+    star_locs = []
+    for f in files:
+        fpath = os.path.join(indir, f)
+        
+        # Open FITS file
+        hdul = fits.open(fpath)
+
+        # Crop and roughly center image
+        data = hdul['SCI'].data
+        try:
+            dqmask = hdul['DQ'].data
+        except KeyError:
+            dqmask = np.zeros_like(data).astype(np.uint64)
+
+        # Get rough stellar position
+        if find_func is get_expected_loc:
+            xy = get_expected_loc(hdul[0].header, **kwargs)
+        elif find_func is get_com:
+            # Fix bad pixels
+            bp_mask1 = (dqmask & dqflags.pixel['OTHER_BAD_PIXEL']) > 0
+            bp_mask2 = (dqmask & dqflags.pixel['DO_NOT_USE']) > 0
+            bpmask = bp_mask1 | bp_mask2
+
+            if fix_bad_pixels:
+                data = bp_fix(data, sigclip=20, in_place=False)
+                data = bp_fix(data, bpmask=bpmask)
+            else:
+                data[bpmask] = np.nan
+
+            xy = get_com(data, **kwargs)
+        else:
+            xy = find_func(data, **kwargs)
+        
+        star_locs.append(xy)
+        
+        # Close FITS file
+        hdul.close()
+        
+    return np.array(star_locs)
 
 def recenter_psf(psfs_over, niter=3, halfwidth=7):
     """Use center of mass algorithm to relocate PSF to center of image.
@@ -1104,9 +1214,17 @@ def find_max_crosscorr(corr, xsh_arr, ysh_arr, sub_sample):
     return xsh_fine, ysh_fine
 
 
+def apply_pixel_diffusion(im, pixel_sigma):
+    """Apply charge diffusion kernel to image
+    
+    Approximates the effect of charge diffusion as a Gaussian.
+    """
+    from scipy.ndimage import gaussian_filter
+    return gaussian_filter(im, pixel_sigma)
+
 def gen_psf_offsets(psf, crop=65, xlim_pix=(-3,3), ylim_pix=(-3,3), dxy=0.05,
     psf_osamp=1, shift_func=fourier_imshift, ipc_vals=None, kipc=None,
-    monitor=False, prog_leave=False, **kwargs):
+    kppc=None, diffusion_sigma=None, monitor=False, prog_leave=False, **kwargs):
     """ Generate a series of downsampled cropped and shifted PSF images
 
     If fov_pix is odd, then crop should be odd. 
@@ -1115,10 +1233,16 @@ def gen_psf_offsets(psf, crop=65, xlim_pix=(-3,3), ylim_pix=(-3,3), dxy=0.05,
     Add IPC:
         Either ipc_vals = 0.006 or ipc_vals=[0.006,0.0004].
         The former add 0.6% to each side pixel, while the latter
-        adds 0.04% to the corners.
+        includes 0.04% to the corners. Can also supply kernel
+        directly with kipc.
+
+    Add PPC:
+        Specify kppc kernel directly. This must be correctly
+        oriented for the PSF image readout direction. Assumes
+        single output amplifier.
     """
     
-    from pynrc.simul.ngNRC import add_ipc
+    from pynrc.simul.ngNRC import add_ipc, add_ppc
 
     psf_is_even = np.mod(psf.shape[0] / psf_osamp, 2) == 0
     psf_is_odd = not psf_is_even
@@ -1166,14 +1290,20 @@ def gen_psf_offsets(psf, crop=65, xlim_pix=(-3,3), ylim_pix=(-3,3), dxy=0.05,
         # psf_sh = pad_or_cut_to_size(psf0, crop_over, offset_vals=(-yoff_over,-xoff_over), 
         #                             shift_func=shift_func, pad=True)
 
+        # Apply pixel diffusion as Gaussian kernel
+        if (diffusion_sigma is not None) and (diffusion_sigma > 0):
+            dsig = diffusion_sigma * psf_osamp
+            psf_sh = apply_pixel_diffusion(psf_sh, dsig)
+
         # Rebin to detector pixels
         psf_sh = frebin(psf_sh, scale=1/psf_osamp)
         psf_sh_all.append(psf_sh)
+
     psf_sh_all = np.asarray(psf_sh_all)
     psf_sh_all[np.isnan(psf_sh_all)] = 0
     
     # Add IPC
-    if kipc is not None or ipc_vals is not None:
+    if (kipc is not None) or (ipc_vals is not None):
         # Build kernel if it wasn't already specified
         if kipc is None:
             if isinstance(ipc_vals, (tuple, list, np.ndarray)):
@@ -1183,6 +1313,10 @@ def gen_psf_offsets(psf, crop=65, xlim_pix=(-3,3), ylim_pix=(-3,3), dxy=0.05,
             kipc = np.array([[a2,a1,a2], [a1,1-4*(a1+a2),a1], [a2,a1,a2]])
         psf_sh_all = add_ipc(psf_sh_all, kernel=kipc)
     
+    # Add PPC
+    if (kppc is not None):
+        # Build kernel if it wasn't already specified
+        psf_sh_all = add_ppc(psf_sh_all, kernel=kppc, nchans=1)
 
     # Reshape to grid
     # sh_grid = (len(yoff_pix), len(xoff_pix))
@@ -1408,3 +1542,113 @@ def find_offsets_phase(input, psf, crop=65, rin=0, rout=None, dxy_fine=0.01,
     
     return res.squeeze()
 
+def find_pix_offsets(imsub_arr, psfs, psf_osamp=1, kipc=None, kppc=None,
+    diffusion_sigma=None, phase=False, bpmask_arr=None, crop=None, **kwargs):
+    """Find number of pixels to offset PSFs to corrsponding images
+    
+    Parameters
+    ----------
+    imsub_arr : ndarray
+        Array of cropped images
+    psfs : ndarray
+        Array of PSFs to align to images
+    psf_osamp : int
+        Oversampling factor of PSFs
+    diffusion_sigma : float
+        Diffusion kernel sigma value
+    kipc : ndarray
+        IPC kernel
+    kppc : ndarray
+        PPC kernel. Should already align to readout direction 
+        of detector along rows.
+    phase : bool
+        Use phase cross-correlation to find offsets
+    bpmask_arr : ndarray
+        Bad pixel mask array. Should be same shape as imsub_arr.
+    
+    Keyword Args
+    ============
+    rin : float
+        Exclude pixels interior to this radius.
+    rout : float or None
+        Exclude pixel exterior to this radius.
+    xylim_pix : tuple or list
+        Initial coarse step range in detector pixels.
+    """
+
+    # from webbpsf_ext.image_manip import frebin
+    # from webbpsf_ext.imreg_tools import find_offsets_phase
+    # from webbpsf_ext.imreg_tools import gen_psf_offsets, find_offsets2
+    from pynrc.simul.ngNRC import add_ipc, add_ppc
+
+    sh_orig = imsub_arr.shape
+    if len(sh_orig)==2:
+        imsub_arr = [imsub_arr]
+        psfs = [psfs]
+        bpmask_arr = [bpmask_arr]
+
+    def find_pix_phase(im, psf, psf_osamp, kipc=None, kppc=None, diffusion_sigma=None, crop=15):
+        # Rebin to detector sampling
+        if psf_osamp!=1:
+            psf = frebin(psf, scale=1/psf_osamp)
+
+        # Add diffusion
+        if (diffusion_sigma is not None) and (diffusion_sigma>0):
+            psf = apply_pixel_diffusion(psf, diffusion_sigma)
+        # Add IPC
+        if kipc is not None:
+            psf = add_ipc(psf, kernel=kipc)
+        # Add PPC
+        if kppc is not None:
+            psf = add_ppc(psf, kernel=kppc, nchans=1)
+
+        res = find_offsets_phase(im, psf, crop=crop, rin=0, rout=None, dxy_fine=0.01)
+        return res
+
+    def find_pix_cc(im, psf, psf_osamp, kipc=None, kppc=None, diffusion_sigma=None,
+                    crop=33, bpmask=None, **kwargs):
+        """Cross correlate by shifting PSF in fine steps"""
+
+        # Create a series of coarse offset PSFs to find initial estimate
+        xylim_pix = kwargs.get('xylim_pix')
+        if xylim_pix is not None:
+            xlim_pix = ylim_pix = xylim_pix
+        else:
+            xlim_pix = ylim_pix = (-10,10)
+        res = gen_psf_offsets(psf, crop=crop, xlim_pix=xlim_pix, ylim_pix=xlim_pix, dxy=1,
+                              psf_osamp=psf_osamp, kipc=None, kppc=None, diffusion_sigma=None,
+                              prog_leave=False, shift_func=fshift, **kwargs)
+        xoff_pix, yoff_pix, psf_sh_all = res
+        # psf_sh_all are cropped to `crop`` value, whereas im is still input size
+        xsh_coarse, ysh_coarse = find_offsets2(im, xoff_pix, yoff_pix, psf_sh_all, crop=crop,
+                                               dxy_fine=0.5, bpmasks=bpmask, prog_leave=False, **kwargs)
+
+        # Create finer grid off offset PSFs
+        xlim_pix = (xsh_coarse-1.5, xsh_coarse+1.5)
+        ylim_pix = (ysh_coarse-1.5, ysh_coarse+1.5)
+        res = gen_psf_offsets(psf, crop=crop, xlim_pix=xlim_pix, ylim_pix=ylim_pix, dxy=0.05,
+                              psf_osamp=psf_osamp, kipc=kipc, kppc=kppc, diffusion_sigma=diffusion_sigma,
+                              prog_leave=False, **kwargs)
+
+        # Perform cross correlations and interpolate at 0.01 pixel
+        xoff_pix, yoff_pix, psf_sh_all = res
+        return find_offsets2(im, xoff_pix, yoff_pix, psf_sh_all, crop=crop,
+                             dxy_fine=0.01, bpmasks=bpmask, prog_leave=False, **kwargs)
+
+    xysh_pix = []
+    for i, im in enumerate(imsub_arr):
+        if phase:
+            crop = 15 if crop is None else crop
+            res = find_pix_phase(im, psfs[i], psf_osamp, kipc=kipc, kppc=kppc, 
+                                 diffusion_sigma=diffusion_sigma, crop=crop)
+        else:
+            crop = 21 if crop is None else crop
+            res = find_pix_cc(im, psfs[i], psf_osamp, kipc=kipc, kppc=kppc, 
+                              diffusion_sigma=diffusion_sigma, crop=crop, 
+                              bpmask=bpmask_arr[i], **kwargs)
+        xysh_pix.append(res)
+        
+    if len(sh_orig)==2:
+        return xysh_pix[0]
+    else:
+        return np.asarray(xysh_pix)
