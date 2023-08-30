@@ -757,7 +757,9 @@ class NIRCam_ext(webbpsf_NIRCam):
             analytic prediction when source overlaps coronagraphic occulting 
             mask. Primarily used for planetary companion and disk PSFs.
             Default: True.
-        """        
+        """
+
+        # # TODO: Add charge_diffusion_sigma keyword
 
         res = _calc_psf_from_coeff(self, sp=sp, return_oversample=return_oversample, 
                                    coord_vals=coord_vals, coord_frame=coord_frame, 
@@ -850,6 +852,7 @@ class NIRCam_ext(webbpsf_NIRCam):
             Only valid for `reaturn_hdul=False`, otherwise full HDUList returned. Default: True.
         """
 
+        # TODO: Add charge_diffusion_sigma keyword
         calc_psf_func = super().calc_psf
         res = _calc_psf_webbpsf(self, calc_psf_func, add_distortion=add_distortion, 
                                 fov_pixels=fov_pixels, oversample=oversample, wfe_drift=wfe_drift, 
@@ -1447,7 +1450,10 @@ class MIRI_ext(webbpsf_MIRI):
 
         return_hdul : bool
             Return PSFs in an HDUList rather than set of arrays (default: True).
-        """        
+        """
+
+        # TODO: Add diffusion keyword
+
         return _calc_psf_from_coeff(self, sp=sp, return_oversample=return_oversample, 
                                     coord_vals=coord_vals, coord_frame=coord_frame, 
                                     wfe_drift=wfe_drift, return_hdul=return_hdul, **kwargs)
@@ -1515,6 +1521,9 @@ class MIRI_ext(webbpsf_MIRI):
             Returns the oversampled version of the PSF instead of detector-sampled PSF.
             Only valid for `reaturn_hdul=False`, otherwise full HDUList returned. Default: True.
         """
+
+        # TODO: Add charge_diffusion_sigma keyword
+
         calc_psf_func = super().calc_psf
         res = _calc_psf_webbpsf(self, calc_psf_func, add_distortion=add_distortion, 
                                 fov_pixels=fov_pixels, oversample=oversample, wfe_drift=wfe_drift, 
@@ -1665,7 +1674,7 @@ def _init_inst(self, filter=None, pupil_mask=None, image_mask=None,
 
     # Options to include or exclude distortions
     self.include_distortions = True
-    # Excldue charge diffusion and IPC / PPC effects by default
+    # Exclude charge diffusion and IPC / PPC effects by default
     self.options['charge_diffusion_sigma'] = 0
     self.options['add_ipc'] = False
     
@@ -2231,6 +2240,8 @@ def _calc_psf_webbpsf(self, calc_psf_func, add_distortion=None, fov_pixels=None,
     Slight modification of inherent WebbPSF `calc_psf` function. If add_distortion, fov_pixels,
     and oversample are not specified, then we automatically use the associated attributes.
     """
+
+    # TODO: Add charge_diffusion_sigma keyword
 
     # Automatically use already defined properties
     add_distortion = self.include_distortions if add_distortion is None else add_distortion
@@ -3671,6 +3682,8 @@ def _calc_psf_from_coeff(self, sp=None, return_oversample=True, return_hdul=True
         than simultaneously, which can save on memory for large PSFs.
     """        
 
+    # TODO: Add charge_diffusion_sigma keyword
+
     psf_coeff_hdr = self.psf_coeff_header
     psf_coeff     = self.psf_coeff
 
@@ -4331,7 +4344,7 @@ def _calc_psfs_grid(self, sp=None, wfe_drift=0, osamp=1, npsf_per_full_fov=15,
         npos = len(xtel_psf)
         for xoff, yoff in tqdm(zip(xtel_psf, ytel_psf), total=npos):
             res = self.calc_psf(sp=sp, coord_vals=(xoff,yoff), coord_frame='tel', 
-                                return_oversample=True)
+                                return_oversample=True, **kwargs)
             # If add_distortion take index 2, otherwise index 0
             hdu = res[2] if len(res)==4 else res[0]
             hdul_psfs.append(hdu)
