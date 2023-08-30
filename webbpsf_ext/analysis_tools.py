@@ -178,7 +178,9 @@ def ppc_info(sca_input):
     Returns
     -------
     ppc_frac : float
-
+        Fraction of signal transferred to trailing pixel.
+    kppc : ndarray
+        3x3 PPC kernel
     """
 
     from .utils import get_detname
