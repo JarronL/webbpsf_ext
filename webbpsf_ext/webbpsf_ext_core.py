@@ -1754,13 +1754,16 @@ def _init_inst(self, filter=None, pupil_mask=None, image_mask=None,
     self.ndeg = kwargs.get('ndeg', self._ndeg)
     
     # Set up initial OPD file info
-    opd_name = 'JWST_OTE_OPD_RevAA_prelaunch_predicted.fits'
+    opd_name = 'JWST_OTE_OPD_cycle1_example_2022-07-30.fits'
     try:
         opd_name = check_fitsgz(opd_name)
+        self._opd_default = opd_name
     except OSError:
-        opd_name = f'OPD_RevW_ote_for_{self.name}_predicted.fits'
-        opd_name = check_fitsgz(opd_name, self.name)
-    self._opd_default = (opd_name, 0)
+        opd_name = 'JWST_OTE_OPD_RevAA_prelaunch_predicted.fits'
+        opd_name = check_fitsgz(opd_name)
+        # opd_name = f'OPD_RevW_ote_for_{self.name}_predicted.fits'
+        # opd_name = check_fitsgz(opd_name, self.name)
+        self._opd_default = (opd_name, 0)
     self.pupilopd = self._opd_default
 
     # Update telescope pupil and pupil OPD
@@ -1990,13 +1993,16 @@ def _get_opd_info(self, opd=None, pupil=None, HDUL_to_OTELM=True):
         opd_num  = opd[1] # OPD slice
         rev = [s for s in opd_name.split('_') if "Rev" in s]
         rev = '' if len(rev)==0 else rev[0]
-        opd_str = '{}slice{:.0f}'.format(rev,opd_num)
+        if rev=='':
+            opd_str = 'OPD-' + opd_name.split('.')[0].split('_')[-1]
+        else:
+            opd_str = '{}slice{:.0f}'.format(rev,opd_num)
         opd = OPDFile_to_HDUList(opd_name, opd_num)
     elif isinstance(opd, fits.HDUList):
         # A custom OPD is passed. 
-        opd_name = 'OPD from FITS HDUlist'
+        opd_name = 'OPD from FITS HDUList'
         opd_num = 0
-        opd_str = 'OPDcustomFITS'
+        opd_str = 'OPDcustomHDUL'
     elif isinstance(opd, poppy.OpticalElement):
         # OTE Linear Model
         # opd_name = 'OPD from OTE LM'
