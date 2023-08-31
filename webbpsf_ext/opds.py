@@ -52,7 +52,7 @@ def OPDFile_to_HDUList(file, slice=0):
             inst = 'FGS'
 
         if 'JWST_OTE_OPD' in file:
-            # Location of JWST_OTE_OPD_RevAA_prelaunch_predicted.fits.gz
+            # Location of JWST_OTE_OPD*.fits.gz
             opd_dir = get_webbpsf_data_path()
         else:
             opd_dir = os.path.join(get_webbpsf_data_path(),inst,'OPD')
