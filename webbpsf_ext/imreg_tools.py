@@ -128,7 +128,7 @@ def get_coron_apname(input):
 
 
 def get_files(indir, pid, obsid=None, sca=None, filt=None, file_type='uncal.fits', 
-              exp_type=None, apername=None):
+              exp_type=None, apername=None, apername_pps=None):
     """Get files of interest
     
     Parameters
@@ -147,6 +147,8 @@ def get_files(indir, pid, obsid=None, sca=None, filt=None, file_type='uncal.fits
         Exposure type such as NRC_TACQ, NRC_TACONFIRM
     apername : str
         Name of aperture (e.g., NRCA5_FULL)
+    apername_pps : str
+        Name of aperture from PPS (e.g., NRCA5_FULL)
     """
 
     sca = '' if sca is None else get_detname(sca).lower()
@@ -195,7 +197,16 @@ def get_files(indir, pid, obsid=None, sca=None, filt=None, file_type='uncal.fits
         for f in allfiles:
             hdr = fits.getheader(os.path.join(indir,f))
             apname_obs = hdr.get('APERNAME', 'none')
-            if apname_obs==apername:
+            if apname_obs==apername or apername==get_coron_apname(hdr):
+                files2.append(f)
+        allfiles = np.array(files2)
+
+    if apername_pps is not None:
+        files2 = []
+        for f in allfiles:
+            hdr = fits.getheader(os.path.join(indir,f))
+            apname_pps = hdr.get('PPS_APER', 'none')
+            if apname_pps==apername_pps:
                 files2.append(f)
         allfiles = np.array(files2)
     
@@ -451,7 +462,8 @@ def diff_ta_data(uncal_data):
     
     return np.minimum(im1,im2)
 
-def read_ta_files(indir, pid, obsid, sca, file_type='rate.fits', uncal_dir=None, bpfix=False):
+def read_ta_files(indir, pid, obsid, sca, file_type='rate.fits', 
+                  uncal_dir=None, bpfix=False):
     """Store all TA and Conf data into a dictionary
     
     indir should include rate.fits. For the initial TACQ, can use
@@ -562,7 +574,8 @@ def read_ta_files(indir, pid, obsid, sca, file_type='rate.fits', uncal_dir=None,
 
 
 def read_sgd_files(indir, pid, obsid, filter, sca, bpfix=False, 
-                   file_type='rate.fits', exp_type=None, apername=None):
+                   file_type='rate.fits', exp_type=None, 
+                   apername=None, apername_pps=None):
     """Store SGD or science data into a dictionary
 
     By default, excludes any TAMASK or TACONFIRM data, but can be overridden
@@ -586,6 +599,8 @@ def read_sgd_files(indir, pid, obsid, filter, sca, bpfix=False,
         Exposure type such as NRC_TACQ, NRC_TACONFIRM
     apername : str
         Name of aperture (e.g., NRCA5_FULL)
+    apername_pps : str
+        Name of aperture from PPS (e.g., NRCA5_FULL)
     bpfix : bool
         If True, perform bad pixel fixing on the data.
         Mainly for display purposes.
@@ -594,7 +609,8 @@ def read_sgd_files(indir, pid, obsid, filter, sca, bpfix=False,
     from jwst import datamodels
 
     files = get_files(indir, pid, obsid=obsid, sca=sca, filt=filter,
-                      file_type=file_type, exp_type=exp_type, apername=apername)
+                      file_type=file_type, exp_type=exp_type, 
+                      apername=apername, apername_pps=apername_pps)
     
     # Exclude any TAMASK or TACONFIRM data by default
     if exp_type is None:
