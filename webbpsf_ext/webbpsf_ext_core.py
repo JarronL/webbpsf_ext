@@ -397,7 +397,11 @@ class NIRCam_ext(webbpsf_NIRCam):
         return bp
 
     def _update_coron_detector(self):
-        """Depending on filter and image_mask setting, get correct detector"""
+        """Depending on filter and image_mask setting, get correct detector
+        
+        Bar masks will always be aperture for the center of the bar, and exclude the
+        filter and narrow positions.
+        """
 
         image_mask = self.image_mask
 
@@ -405,20 +409,26 @@ class NIRCam_ext(webbpsf_NIRCam):
         if self.is_coron and self.name=='NIRCam':
             bp = nircam_filter(self.filter)
             avgwave = bp.avgwave() / 1e4
+
             # SW Observations
             if avgwave<2.4:
                 if ('210R' in image_mask) or ('335R' in image_mask) or ('430R' in image_mask):
                     self.detector = 'NRCA2'
-                    self.aperturename = 'NRCA2' + self.aperturename[5:]
-                elif ('LWB' in image_mask)or ('SWB' in image_mask):
+                    apn = 'NRCA2' + self.aperturename[5:]
+                elif ('LWB' in image_mask) or ('SWB' in image_mask):
                     self.detector = 'NRCA4'
-                    self.aperturename = 'NRCA4' + self.aperturename[5:]
+                    apn = 'NRCA4' + self.aperturename[5:]
             # LW Observations
             else:
-                self.aperturename = 'NRCA5' + self.aperturename[5:]
-                # self.detector = 'NRCA5'
+                apn = 'NRCA5' + self.aperturename[5:]
 
-    def get_bar_offset(self, narrow=None, filter=None):
+            # Exclude filter and narrow positions
+            if ('_F1' in apn) or ('_F2' in apn) or ('_F3' in apn) or ('_F4' in apn) or ('NARROW' in apn):
+                apn = '_'.join(apn.split('_')[:-1])
+
+            self.aperturename = apn
+
+    def get_bar_offset(self, narrow=None, filter=None, ignore_options=False):
         """
         Obtain the value of the bar offset that would be passed through to
         PSF calculations for bar/wedge coronagraphic masks.
@@ -432,25 +442,31 @@ class NIRCam_ext(webbpsf_NIRCam):
         filter : str or None
             If not None, then use this filter to determine the bar offset position.
             The `narrow` keyword or aperture name in `self.siaf_ap` takes priority.
+        ignore_options : bool
+            If True, then ignore any values in self.options['bar_offset']. Otherwise,
+            if 'bar_offset' is not None, it returns already that configured value in 
+            self.options.
         """
         from webbpsf.optics import NIRCam_BandLimitedCoron
 
         if (self.is_coron) and ('WB' in self.image_mask):
             # Determine bar offset for Wedge masks either based on filter 
             # or explicit specification
-            bar_offset = self.options.get('bar_offset', None)
-            if bar_offset is None:
+            bar_offset = None if ignore_options else self.options.get('bar_offset', None)
+            if (bar_offset is None):
                 filter = self.filter if filter is None else filter
                 # Default to narrow, otherwise use filter-dependent offset
                 if narrow is None:
                     narrow = ('NARROW' in self.siaf_ap.AperName)
                 auto_offset = 'narrow' if narrow else filter
             else:
+                # Using the value in self.options['bar_offset']
                 try:
-                    _ = float(bar_offset)
-                    auto_offset = None
+                    # bar_offset = float(bar_offset)
+                    return float(bar_offset)
+                    # auto_offset = None
                 except ValueError:
-                    # If the "bar_offset" isn't a float, pass it to auto_offset instead
+                    # If the "bar_offset" isn't a float, pass it to auto_offset instead as a string
                     auto_offset = bar_offset
                     bar_offset = None
 
@@ -788,7 +804,7 @@ class NIRCam_ext(webbpsf_NIRCam):
             If multiple values, then this should be an array ([xvals], [yvals]).
             Relative to `self.aperturename` and `self.detector_position`.
         coord_frame : str
-            Type of input coordinates. 
+            Type of input coordinates relative to `self.aperturename` aperture.
 
                 * 'tel': arcsecs V2,V3
                 * 'sci': pixels, in DMS axes orientation; aperture-dependent
@@ -888,7 +904,7 @@ class NIRCam_ext(webbpsf_NIRCam):
             If multiple values, then this should be an array ([xvals], [yvals]).
             Relative to `self.aperturename` and `self.detector_position`.
         coord_frame : str
-            Type of input coordinates. 
+            Type of input coordinates relative to self.aperturename aperture.
 
                 * 'tel': arcsecs V2,V3
                 * 'sci': pixels, in DMS axes orientation; aperture-dependent
@@ -1490,8 +1506,9 @@ class MIRI_ext(webbpsf_MIRI):
         coord_vals : tuple or None
             Coordinates (in arcsec or pixels) to calculate field-dependent PSF.
             If multiple values, then this should be an array ([xvals], [yvals]).
+            Relative to `self.aperturename` and `self.detector_position`.
         coord_frame : str
-            Type of input coordinates. 
+            Type of input coordinates relative to `self.aperturename` aperture.
 
                 * 'tel': arcsecs V2,V3
                 * 'sci': pixels, in conventional DMS axes orientation
@@ -1522,11 +1539,9 @@ class MIRI_ext(webbpsf_MIRI):
 
         Parameters
         ----------
-        sp : :mod:`pysynphot.spectrum`
-            Source input spectrum. If not specified, the default is flat in phot lam.
-            (equal number of photons per spectral bin).
         source : synphot.spectrum.SourceSpectrum or dict
             TODO: synphot not yet implemented in webbpsf_ext!!
+            Use ``sp`` keyword instead for pysynphot.
         nlambda : int
             How many wavelengths to model for broadband?
             The default depends on how wide the filter is: (5,3,1) for types (W,M,N) respectively
@@ -1565,6 +1580,21 @@ class MIRI_ext(webbpsf_MIRI):
 
         Keyword Args
         ------------
+        sp : :mod:`pysynphot.spectrum`
+            Source input spectrum. If not specified, the default is flat in phot lam.
+            (equal number of photons per spectral bin).
+        coord_vals : tuple or None
+            Coordinates (in arcsec or pixels) to calculate field-dependent PSF.
+            If multiple values, then this should be an array ([xvals], [yvals]).
+            Relative to `self.aperturename` and `self.detector_position`.
+        coord_frame : str
+            Type of input coordinates relative to self.aperturename aperture.
+
+                * 'tel': arcsecs V2,V3
+                * 'sci': pixels, in DMS axes orientation; aperture-dependent
+                * 'det': pixels, in raw detector read out axes orientation
+                * 'idl': arcsecs relative to aperture reference location.
+
         return_hdul : bool
             Return PSFs in an HDUList rather than set of arrays (default: True).
         return_oversample : bool
@@ -2311,6 +2341,43 @@ def _calc_psf_webbpsf(self, calc_psf_func, add_distortion=None, fov_pixels=None,
 
     Slight modification of inherent WebbPSF `calc_psf` function. If add_distortion, fov_pixels,
     and oversample are not specified, then we automatically use the associated attributes.
+
+    Parameters
+    ----------
+    add_distortion : bool
+        If True, will add 2 new extensions to the PSF HDUlist object. The 2nd extension
+        will be a distorted version of the over-sampled PSF and the 3rd extension will
+        be a distorted version of the detector-sampled PSF.
+    fov_pixels : int
+        field of view in pixels. This is an alternative to fov_arcsec.
+    oversample, detector_oversample, fft_oversample : int
+        How much to oversample. Default=4. By default the same factor is used for final output
+        pixels and intermediate optical planes, but you may optionally use different factors
+        if so desired.
+    wfe_drift : float or None
+        Wavefront error drift amplitude in nm.
+    coord_vals : tuple or None
+        Coordinates (in arcsec or pixels) to calculate field-dependent PSF.
+        If multiple values, then this should be an array ([xvals], [yvals]).
+        Relative to `self.aperturename` and `self.detector_position`.
+    coord_frame : str
+        Type of input coordinates relative to self.aperturename aperture.
+
+            * 'tel': arcsecs V2,V3
+            * 'sci': pixels, in DMS axes orientation; aperture-dependent
+            * 'det': pixels, in raw detector read out axes orientation
+            * 'idl': arcsecs relative to aperture reference location.
+
+    Keyword Args
+    ------------
+    sp : :mod:`pysynphot.spectrum`
+        Source input spectrum. If not specified, the default is flat in phot lam.
+        (equal number of photons per spectral bin).
+    return_hdul : bool
+        Return PSFs in an HDUList rather than set of arrays (default: True).
+    return_oversample : bool
+        Returns the oversampled version of the PSF instead of detector-sampled PSF.
+        Only valid for `reaturn_hdul=False`, otherwise full HDUList returned. Default: True.
     """
 
     # TODO: Add charge_diffusion_sigma keyword
@@ -2371,7 +2438,8 @@ def _calc_psf_webbpsf(self, calc_psf_func, add_distortion=None, fov_pixels=None,
     # Get new sci coord
     if coord_vals is not None:
         # Use webbpsf aperture to convert to detector coordinates
-        siaf_ap = self.siaf[self.aperturename]
+        siaf_ap_webbpsf = self.siaf[self.aperturename]
+        siaf_ap_ext = self.siaf_ap
         xorig, yorig = self.detector_position
         xnew, ynew = coord_vals
 
@@ -2381,16 +2449,22 @@ def _calc_psf_webbpsf(self, calc_psf_func, add_distortion=None, fov_pixels=None,
             bar_offset_orig = self.options.get('bar_offset', None)
             self.options['bar_offset'] = 0
 
-        # Offsets are relative to webbpsf's aperture reference location
+        # Offsets are relative to self.siaf_ap reference location
         # Use (xidl, yidl) for mask shifting
         # Use (xsci, ysci) for detector position to calc WFE
-        xidl, yidl = siaf_ap.convert(xnew, ynew, coord_frame, 'idl')
-        xsci, ysci = siaf_ap.convert(xnew, ynew, coord_frame, 'sci')
+        xidl, yidl = siaf_ap_webbpsf.convert(xnew, ynew, coord_frame, 'idl')
+        xsci, ysci = siaf_ap_ext.convert(xnew, ynew, coord_frame, 'sci')
         self.detector_position = (xsci, ysci)
+
+        print(xidl, yidl)
 
         # For coronagraphy, perform mask shift
         if self.is_coron:
             # Mask shift information
+            
+            # Include bar offsets
+            xidl += self.get_bar_offset(ignore_options=True)
+            print(xidl, yidl)
 
             field_rot = 0 if self._rotation is None else self._rotation
 
@@ -2399,6 +2473,7 @@ def _calc_psf_webbpsf(self, calc_psf_func, add_distortion=None, fov_pixels=None,
             # yoff_asec = (ysci - siaf_ap.YSciRef) * siaf_ap.YSciScale  # asec offset from reference
             xoff_asec, yoff_asec = (xidl, yidl)
             xoff_mask, yoff_mask = xy_rot(-1*xoff_asec, -1*yoff_asec, field_rot)
+            print(xoff_mask, yoff_mask)
 
             # print(xnew, ynew, coord_frame)
             # print(xsci, ysci, siaf_ap.AperName)
@@ -2488,7 +2563,8 @@ def _inst_copy(self):
 
 
     # Other options
-    inst.options = self.options
+    inst.options = self.options.copy()
+    inst.options['bar_offset'] = 0
 
     # PSF coeff info
     inst.use_legendre = self.use_legendre
@@ -2672,6 +2748,7 @@ def _gen_psf_coeff(self, nproc=None, wfe_drift=0, force=False, save=True,
     # Make a paired down copy of self with limited data for 
     # copying to multiprocessor theads. This reduces memory
     # swapping overheads and limitations.
+    # bar_offset is also explicitly set 0
     inst_copy = _inst_copy(self) if nproc > 1 else self
 
     t0 = time.time()
@@ -3737,9 +3814,9 @@ def _calc_psf_from_coeff(self, sp=None, return_oversample=True, return_hdul=True
     coord_vals : tuple or None
         Coordinates (in arcsec or pixels) to calculate field-dependent PSF.
         If multiple values, then this should be an array ([xvals], [yvals]).
-        Relative to self.aperturename aperture.
+        Relative to `self.aperturename` and `self.detector_position`.
     coord_frame : str
-        Type of input coordinates relative to self.aperturename aperture.
+        Type of input coordinates relative to `self.aperturename` aperture.
 
             * 'tel': arcsecs V2,V3
             * 'sci': pixels, in conventional DMS axes orientation
@@ -4156,7 +4233,7 @@ def _coeff_mod_wfe_mask(self, coord_vals, coord_frame, siaf_ap=None):
     coord_vals : tuple or None
         Coordinates (in arcsec or pixels) to calculate field-dependent PSF.
     coord_frame : str
-        Type of desired output coordinates. 
+        Type of input coordinates relative to `self.aperturename` aperture.
 
             * 'tel': arcsecs V2,V3
             * 'sci': pixels, in conventional DMS axes orientation
@@ -4180,7 +4257,7 @@ def _coeff_mod_wfe_mask(self, coord_vals, coord_frame, siaf_ap=None):
     # No coord values, but NIRCam bar/wedge mask in place
     elif (coord_vals is None) and (self.name=='NIRCam') and (self.image_mask[-1]=='B'):
         # Determine desired location along bar
-        bar_offset = self.get_bar_offset()
+        bar_offset = self.get_bar_offset(ignore_optics=True)
         if (bar_offset != 0) and (cf_fit is None):
             _log.warning("You must run `gen_wfemask_coeff` to obtain PSFs offset along bar mask.")
             _log.info("`calc_psf_from_coeff` will continue assuming bar_offset=0.")
@@ -4189,18 +4266,17 @@ def _coeff_mod_wfe_mask(self, coord_vals, coord_frame, siaf_ap=None):
             # Get coords in arcsec
             xidl = bar_offset
             yidl = 0
-            # # Get sci coords in pixels
-            # bar_offset_pix = bar_offset / siaf_ap.XSciScale
-            # xsci = siaf_ap.XSciRef + bar_offset_pix
-            # ysci = siaf_ap.YSciRef
+    # Coord vals are specified and coefficients are available
     elif (coord_vals is not None):
         si_mask_apname = self._psf_coeff_mod.get('si_mask_apname')
         siaf_ap_mask = self.siaf[si_mask_apname]
 
-        # Assume cframe corresponds to siaf_ap input
-        siaf_ap = siaf_ap_mask if siaf_ap is None else siaf_ap
+        # coord_frame corresponds to siaf_ap input or self.siaf_ap
+        # siaf_ap = siaf_ap_mask if siaf_ap is None else siaf_ap
+        siaf_ap = self.siaf_ap if siaf_ap is None else siaf_ap
         cframe = coord_frame.lower()
 
+        # We want xidl and yidl values relative to siaf_ap_mask
         # Convert to common 'tel' coordinates
         if (siaf_ap.AperName != siaf_ap_mask.AperName):
             x = np.array(coord_vals[0])
@@ -4214,21 +4290,19 @@ def _coeff_mod_wfe_mask(self, coord_vals, coord_frame, siaf_ap=None):
             y = np.array(coord_vals[1])
             xidl, yidl = siaf_ap.convert(x,y, cframe, 'idl')
         else:
-            _log.warning("coord_frame setting '{}' not recognized.".format(coord_frame))
+            _log.warning(f"coord_frame setting '{coord_frame}' not recognized.")
             _log.warning("`calc_psf_from_coeff` will continue with default PSF.")
 
-    # PSF Modifications assuming we successfully found (xsci,ysci)
+    # PSF Modifications assuming we successfully found (xidl,yidl)
     # print(xidl, yidl)
     if (xidl is not None):
         _log.debug("Generating mask-dependent modifications...")
-        # print(v2,v3)
         nfield = np.size(xidl)
         field_rot = 0 if self._rotation is None else self._rotation
 
         # Convert to mask shifts (arcsec)
         xoff_asec, yoff_asec = (xidl, yidl)
         xoff_cf, yoff_cf = xy_rot(-1*xoff_asec, -1*yoff_asec, field_rot)
-
 
         if (self.name=='NIRCam') and (np.any(np.abs(xoff_asec)>12) or np.any(np.abs(yoff_asec)>12)):
             _log.warn("Some values outside mask FoV (beyond 12 asec offset)!")
@@ -4249,7 +4323,7 @@ def _coeff_mod_wfe_mask(self, coord_vals, coord_frame, siaf_ap=None):
 
 
 def coron_grid(self, npsf_per_axis, xoff_vals=None, yoff_vals=None):
-    """Get grid points based on coronagraphic obseervation
+    """Get grid points based on coronagraphic observation
     
     Returns sci pixels values around mask center.
     """
