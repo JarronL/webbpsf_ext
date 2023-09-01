@@ -487,7 +487,7 @@ class NIRCam_ext(webbpsf_NIRCam):
                     mask = NIRCam_BandLimitedCoron(name=self.image_mask, module=self.module, kind='nircamwedge',
                                                    bar_offset=None, auto_offset=filter)
                 else:
-                    print(f"Aperture Name: {apname}; Filter: {self.filter}")
+                    _log.error(f"Cannot determine bar offset for Aperture Name: {apname}; Filter: {self.filter}")
                     raise e
 
             return mask.bar_offset
@@ -827,7 +827,8 @@ class NIRCam_ext(webbpsf_NIRCam):
                                    wfe_drift=wfe_drift, return_hdul=return_hdul, **kwargs)
 
         # Ensure correct scaling for off-axis PSFs
-        if self.is_coron and coron_rescale and (coord_vals is not None):
+        apname_mask = self._psf_coeff_mod.get('si_mask_apname', None)
+        if self.is_coron and coron_rescale and (coord_vals is not None) and (apname_mask is not None):
             siaf_ap = kwargs.get('siaf_ap', None)
             res = _nrc_coron_rescale(self, res, coord_vals, coord_frame, siaf_ap=siaf_ap, sp=sp)
 
@@ -2452,19 +2453,18 @@ def _calc_psf_webbpsf(self, calc_psf_func, add_distortion=None, fov_pixels=None,
         # Offsets are relative to self.siaf_ap reference location
         # Use (xidl, yidl) for mask shifting
         # Use (xsci, ysci) for detector position to calc WFE
-        xidl, yidl = siaf_ap_webbpsf.convert(xnew, ynew, coord_frame, 'idl')
-        xsci, ysci = siaf_ap_ext.convert(xnew, ynew, coord_frame, 'sci')
+        xidl, yidl = self.siaf_ap.convert(xnew, ynew, coord_frame, 'idl')
+        xsci, ysci = self.siaf_ap.convert(xnew, ynew, coord_frame, 'sci')
         self.detector_position = (xsci, ysci)
-
-        print(xidl, yidl)
 
         # For coronagraphy, perform mask shift
         if self.is_coron:
-            # Mask shift information
-            
+            # Mask shift relative to the webbpsf aperture reference location
+
             # Include bar offsets
-            xidl += self.get_bar_offset(ignore_options=True)
-            print(xidl, yidl)
+            bar_offset = self.get_bar_offset(ignore_options=True)
+            bar_offset = 0 if bar_offset is None else bar_offset
+            xidl += bar_offset
 
             field_rot = 0 if self._rotation is None else self._rotation
 
@@ -2473,7 +2473,6 @@ def _calc_psf_webbpsf(self, calc_psf_func, add_distortion=None, fov_pixels=None,
             # yoff_asec = (ysci - siaf_ap.YSciRef) * siaf_ap.YSciScale  # asec offset from reference
             xoff_asec, yoff_asec = (xidl, yidl)
             xoff_mask, yoff_mask = xy_rot(-1*xoff_asec, -1*yoff_asec, field_rot)
-            print(xoff_mask, yoff_mask)
 
             # print(xnew, ynew, coord_frame)
             # print(xsci, ysci, siaf_ap.AperName)
@@ -2611,7 +2610,7 @@ def _wrap_coeff_for_mp(args):
     try:
         hdu_list = inst.calc_psf(monochromatic=w*1e-6, crop_psf=True)
     except Exception as e:
-        print('Caught exception in worker thread (w = {}):'.format(w))
+        _log.error('Caught exception in worker thread (w = {}):'.format(w))
         # This prints the type, value, and stack trace of the
         # current exception being handled.
         traceback.print_exc()
@@ -3373,8 +3372,9 @@ def _gen_wfemask_coeff(self, force=False, save=True, large_grid=None,
         _log.warn('Generating mask position-dependent coeffs (small grid). This may take some time...')
 
     # Current mask positions to return to at end
+    # Bar offset is set to 0 during psf_coeff calculation
     coron_shift_x_orig = self.options.get('coron_shift_x', 0)
-    coron_shift_y_orig = self.options.get('coron_shift_y', 0)
+    coron_shift_y_orig = self.options.get('coron_shift_y', 0)    
     detector_position_orig = self.detector_position
     apname = self.aperturename
 
@@ -3856,8 +3856,7 @@ def _calc_psf_from_coeff(self, sp=None, return_oversample=True, return_hdul=True
         nspec = len(sp)
 
     if coord_vals is not None:
-        coord_vals = np.array(coord_vals)
-
+        coord_vals = np.array(coord_vals, dtype='float')
     # If large number of requested field points, then break into single event calls
     if coord_vals is not None:
         c1_all, c2_all = coord_vals
@@ -4241,6 +4240,7 @@ def _coeff_mod_wfe_mask(self, coord_vals, coord_frame, siaf_ap=None):
             * 'idl': arcsecs relative to aperture reference location.
     """
 
+    # Defaults
     xidl = yidl = None
     cf_mod = 0
     nfield = None
@@ -4250,6 +4250,10 @@ def _coeff_mod_wfe_mask(self, coord_vals, coord_frame, siaf_ap=None):
 
     cf_fit = self._psf_coeff_mod.get('si_mask', None) 
 
+    # Information for bar offsetting (in arcsec)
+    bar_offset = self.get_bar_offset(ignore_options=True)
+    bar_offset = 0 if bar_offset is None else bar_offset
+
     # Coord values are set, but no coefficients supplied
     if (coord_vals is not None) and (cf_fit is None):
         _log.warning("You must run `gen_wfemask_coeff` first before setting the coord_vals parameter for masked focal planes.")
@@ -4257,7 +4261,6 @@ def _coeff_mod_wfe_mask(self, coord_vals, coord_frame, siaf_ap=None):
     # No coord values, but NIRCam bar/wedge mask in place
     elif (coord_vals is None) and (self.name=='NIRCam') and (self.image_mask[-1]=='B'):
         # Determine desired location along bar
-        bar_offset = self.get_bar_offset(ignore_optics=True)
         if (bar_offset != 0) and (cf_fit is None):
             _log.warning("You must run `gen_wfemask_coeff` to obtain PSFs offset along bar mask.")
             _log.info("`calc_psf_from_coeff` will continue assuming bar_offset=0.")
@@ -4268,27 +4271,13 @@ def _coeff_mod_wfe_mask(self, coord_vals, coord_frame, siaf_ap=None):
             yidl = 0
     # Coord vals are specified and coefficients are available
     elif (coord_vals is not None):
-        si_mask_apname = self._psf_coeff_mod.get('si_mask_apname')
-        siaf_ap_mask = self.siaf[si_mask_apname]
-
-        # coord_frame corresponds to siaf_ap input or self.siaf_ap
-        # siaf_ap = siaf_ap_mask if siaf_ap is None else siaf_ap
-        siaf_ap = self.siaf_ap if siaf_ap is None else siaf_ap
+        # We want 'idl' values relative to self.siaf_ap
         cframe = coord_frame.lower()
-
-        # We want xidl and yidl values relative to siaf_ap_mask
-        # Convert to common 'tel' coordinates
-        if (siaf_ap.AperName != siaf_ap_mask.AperName):
+        if cframe in ['idl', 'det', 'tel', 'sci']:
             x = np.array(coord_vals[0])
             y = np.array(coord_vals[1])
-            xtel, ytel = siaf_ap.convert(x,y, cframe, 'tel')
-            xidl, yidl = siaf_ap_mask.convert(xtel, ytel, 'tel', 'idl')
-        elif cframe=='idl':
-            xidl, yidl = coord_vals
-        elif cframe in ['det', 'tel', 'sci']:
-            x = np.array(coord_vals[0])
-            y = np.array(coord_vals[1])
-            xidl, yidl = siaf_ap.convert(x,y, cframe, 'idl')
+            xidl, yidl = self.siaf_ap.convert(x,y, cframe, 'idl')
+            xidl += bar_offset
         else:
             _log.warning(f"coord_frame setting '{coord_frame}' not recognized.")
             _log.warning("`calc_psf_from_coeff` will continue with default PSF.")
@@ -4634,7 +4623,7 @@ def _transmission_map(self, coord_vals, coord_frame, siaf_ap=None):
     if not self.is_coron:
         return None
 
-    apname_mask = self._psf_coeff_mod['si_mask_apname']
+    apname_mask = self._psf_coeff_mod.get('si_mask_apname', None)
     if apname_mask is None:
         apname_mask = self.aperturename
     siaf_ap_mask = self.siaf[apname_mask]
@@ -4647,17 +4636,9 @@ def _transmission_map(self, coord_vals, coord_frame, siaf_ap=None):
     cx, cy = np.asarray(coord_vals)
     if (siaf_ap.AperName != siaf_ap_mask.AperName):
         cx_tel, cy_tel = siaf_ap.convert(cx, cy, coord_frame, 'tel')
-        cx_idl, cy_idl = siaf_ap_mask.tel_to_idl(cx_tel, cy_tel)
-    elif coord_frame=='idl':
-        cx_idl, cy_idl = (cx, cy)
-    elif coord_frame=='tel':
-        cx_idl, cy_idl = siaf_ap_mask.tel_to_idl(cx, cy)
-    elif coord_frame=='det':
-        cx_idl, cy_idl = siaf_ap_mask.det_to_idl(cx, cy)
-    elif coord_frame=='sci':
-        cx_idl, cy_idl = siaf_ap_mask.sci_to_idl(cx, cy)
-    # elif coord_frame in ['det', 'tel', 'sci']:
-    #     cx_idl, cy_idl = siaf_ap_mask.convert(cx, cy, coord_frame, 'idl')
+        cx_idl, cy_idl = siaf_ap.convert(cx, cy, 'tel', 'idl')
+    else:
+        cx_idl, cy_idl = siaf_ap_mask.convert(cx, cy, coord_frame, 'idl')
 
     # Get mask transmission
     trans = nrc_mask_trans(self.image_mask, cx_idl, cy_idl)
@@ -4704,12 +4685,17 @@ def _nrc_coron_psf_sums(self, coord_vals, coord_frame, siaf_ap=None, return_max=
         psf_sums_dict = {}
         self._psf_sums = psf_sums_dict
 
+    # Information for bar offsetting (in arcsec)
+    bar_offset = self.get_bar_offset(ignore_options=True)
+    bar_offset = 0 if bar_offset is None else bar_offset
+
     # Offset PSF sum
     psf_off_sum = psf_sums_dict.get('psf_off', None)
     psf_off_max = psf_sums_dict.get('psf_off_max', None)
     if (psf_off_sum is None) or (psf_off_max is None):
+        cv_offaxis = (10-bar_offset, 10)
         psf = _calc_psf_from_coeff(self, return_oversample=False, return_hdul=False, 
-                                   coord_vals=(10,10), coord_frame='idl')
+                                   coord_vals=cv_offaxis, coord_frame='idl')
         psf_off_sum = psf.sum()
         psf_off_max = np.max(pad_or_cut_to_size(psf,10))
         psf_sums_dict['psf_off'] = psf_off_sum
@@ -4731,7 +4717,7 @@ def _nrc_coron_psf_sums(self, coord_vals, coord_frame, siaf_ap=None, return_max=
         psf_cen_max_arr = psf_sums_dict.get('psf_cen_max_arr', None)
 
         if (psf_cen_sum_arr is None) or (psf_cen_max_arr is None):
-            xvals = np.linspace(-8,8,9)
+            xvals = np.linspace(-8,8,9) - bar_offset
             psf_sums_dict['psf_cen_xvals'] = xvals
 
             psf_cen_sum_arr = []
