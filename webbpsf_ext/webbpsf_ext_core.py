@@ -2509,12 +2509,14 @@ def _calc_psf_webbpsf(self, calc_psf_func, add_distortion=None, fov_pixels=None,
 
     # Crop distorted borders
     if add_distortion:
+        # Detector-sampled cropping
+        hdul[1].data = hdul[1].data[npix_extra:-npix_extra,npix_extra:-npix_extra]
+        hdul[3].data = hdul[3].data[npix_extra:-npix_extra,npix_extra:-npix_extra]
+        # Oversampled cropping
         osamp = hdul[0].header['DET_SAMP']
         npix_over = npix_extra * osamp
         hdul[0].data = hdul[0].data[npix_over:-npix_over,npix_over:-npix_over]
         hdul[2].data = hdul[2].data[npix_over:-npix_over,npix_over:-npix_over]
-        hdul[1].data = hdul[1].data[npix_extra:-npix_extra,npix_extra:-npix_extra]
-        hdul[3].data = hdul[3].data[npix_extra:-npix_extra,npix_extra:-npix_extra]
 
     # Check if we set return_hdul=False
     if return_hdul:
