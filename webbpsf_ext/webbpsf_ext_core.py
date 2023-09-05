@@ -802,9 +802,8 @@ class NIRCam_ext(webbpsf_NIRCam):
         coord_vals : tuple or None
             Coordinates (in arcsec or pixels) to calculate field-dependent PSF.
             If multiple values, then this should be an array ([xvals], [yvals]).
-            Relative to `self.aperturename` and `self.detector_position`.
         coord_frame : str
-            Type of input coordinates relative to `self.aperturename` aperture.
+            Type of input coordinates relative to `self.siaf_ap` aperture.
 
                 * 'tel': arcsecs V2,V3
                 * 'sci': pixels, in DMS axes orientation; aperture-dependent
@@ -903,9 +902,8 @@ class NIRCam_ext(webbpsf_NIRCam):
         coord_vals : tuple or None
             Coordinates (in arcsec or pixels) to calculate field-dependent PSF.
             If multiple values, then this should be an array ([xvals], [yvals]).
-            Relative to `self.aperturename` and `self.detector_position`.
         coord_frame : str
-            Type of input coordinates relative to self.aperturename aperture.
+            Type of input coordinates relative to `self.siaf_ap` aperture.
 
                 * 'tel': arcsecs V2,V3
                 * 'sci': pixels, in DMS axes orientation; aperture-dependent
@@ -1507,9 +1505,8 @@ class MIRI_ext(webbpsf_MIRI):
         coord_vals : tuple or None
             Coordinates (in arcsec or pixels) to calculate field-dependent PSF.
             If multiple values, then this should be an array ([xvals], [yvals]).
-            Relative to `self.aperturename` and `self.detector_position`.
         coord_frame : str
-            Type of input coordinates relative to `self.aperturename` aperture.
+            Type of input coordinates relative to `self.siaf_ap` aperture.
 
                 * 'tel': arcsecs V2,V3
                 * 'sci': pixels, in conventional DMS axes orientation
@@ -1587,9 +1584,8 @@ class MIRI_ext(webbpsf_MIRI):
         coord_vals : tuple or None
             Coordinates (in arcsec or pixels) to calculate field-dependent PSF.
             If multiple values, then this should be an array ([xvals], [yvals]).
-            Relative to `self.aperturename` and `self.detector_position`.
         coord_frame : str
-            Type of input coordinates relative to self.aperturename aperture.
+            Type of input coordinates relative to `self.siaf_ap` aperture.
 
                 * 'tel': arcsecs V2,V3
                 * 'sci': pixels, in DMS axes orientation; aperture-dependent
@@ -2360,9 +2356,8 @@ def _calc_psf_webbpsf(self, calc_psf_func, add_distortion=None, fov_pixels=None,
     coord_vals : tuple or None
         Coordinates (in arcsec or pixels) to calculate field-dependent PSF.
         If multiple values, then this should be an array ([xvals], [yvals]).
-        Relative to `self.aperturename` and `self.detector_position`.
     coord_frame : str
-        Type of input coordinates relative to self.aperturename aperture.
+        Type of input coordinates relative to `self.siaf_ap` aperture.
 
             * 'tel': arcsecs V2,V3
             * 'sci': pixels, in DMS axes orientation; aperture-dependent
@@ -2439,8 +2434,6 @@ def _calc_psf_webbpsf(self, calc_psf_func, add_distortion=None, fov_pixels=None,
     # Get new sci coord
     if coord_vals is not None:
         # Use webbpsf aperture to convert to detector coordinates
-        siaf_ap_webbpsf = self.siaf[self.aperturename]
-        siaf_ap_ext = self.siaf_ap
         xorig, yorig = self.detector_position
         xnew, ynew = coord_vals
 
@@ -2680,6 +2673,17 @@ def _gen_psf_coeff(self, nproc=None, wfe_drift=0, force=False, save=True,
 
     save_name = self.save_name
     outfile = str(self.save_dir / save_name)
+
+    # # TODO: If file doesn't exist, check for fov_pix+1, then crop for even oversampling
+    # use_fov_pix_plus1 = False
+    # if not os.path.exists(outfile) and np.mod(self.oversample, 2)==0 and (not force):
+    #     pstr_old = f'pix{self.fov_pix}'
+    #     pstr_new = f'pix{self.fov_pix+1}'
+    #     outfile_p1 = outfile.replace(pstr_old, pstr_new)
+    #     if os.path.exists(outfile_p1):
+    #         outfile = outfile_p1
+    #         use_fov_pix_plus1 = True
+
     # Load data from already saved FITS file
     if os.path.exists(outfile) and (not force):
         if return_extras:
@@ -2690,6 +2694,11 @@ def _gen_psf_coeff(self, nproc=None, wfe_drift=0, force=False, save=True,
         data = hdul[0].data.astype(float)
         hdr  = hdul[0].header
         hdul.close()
+
+        # # TODO: Crop by oversampling amount if use_fov_pix_plus1
+        # if use_fov_pix_plus1:
+        #     osamp_half = self.oversample // 2
+        #     data = data[:, osamp_half:-osamp_half, osamp_half:-osamp_half]
 
         # Output if return_results=True, otherwise save to attributes
         if return_results:
@@ -3814,9 +3823,8 @@ def _calc_psf_from_coeff(self, sp=None, return_oversample=True, return_hdul=True
     coord_vals : tuple or None
         Coordinates (in arcsec or pixels) to calculate field-dependent PSF.
         If multiple values, then this should be an array ([xvals], [yvals]).
-        Relative to `self.aperturename` and `self.detector_position`.
     coord_frame : str
-        Type of input coordinates relative to `self.aperturename` aperture.
+        Type of input coordinates relative to `self.siaf_ap` aperture.
 
             * 'tel': arcsecs V2,V3
             * 'sci': pixels, in conventional DMS axes orientation
@@ -3926,23 +3934,11 @@ def _calc_psf_from_coeff(self, sp=None, return_oversample=True, return_hdul=True
 
     # Modify PSF coefficients based on WFE drift
     # TODO: Allow negative WFE drift, but subtract delta WFE?
-    assert wfe_drift>=0, '`wfe_drift` should not be negative' 
-    wfe_drift_keys = _wfe_drift_key(self, coord_vals, coord_frame)
-    ukeys = np.unique(wfe_drift_keys)
-    nkeys = len(ukeys)
-    if nkeys==1:
-        psf_coeff_mod += _coeff_mod_wfe_drift(self, wfe_drift, key=ukeys[0])
-    else:
-        # Create coefficients for each unique key
-        cf_mod_list = []
-        for key in ukeys:
-            cf_mod = _coeff_mod_wfe_drift(self, wfe_drift, key=key)
-            cf_mod_list.append(cf_mod)
-        # At each field position, find the corresponding coeff modification
-        for i in range(nfield):
-            ind = np.where(ukeys==wfe_drift_keys[i])[0][0]
-            cf_mod = cf_mod_list[ind]
-            psf_coeff_mod[i] += cf_mod
+    assert wfe_drift>=0, '`wfe_drift` should not be negative'
+    if wfe_drift>0:
+        cf_mod = _coeff_mod_wfe_drift(self, wfe_drift, coord_vals, coord_frame, 
+                                      siaf_ap=siaf_ap)
+        psf_coeff_mod += cf_mod
 
     # return psf_coeff, psf_coeff_mod
 
@@ -4039,114 +4035,73 @@ def _calc_psf_from_coeff(self, sp=None, return_oversample=True, return_hdul=True
     
     return output
 
-def _wfe_drift_key(self, coord_vals, coord_frame):
-    """
-    Choose which WFE drift coefficient key to use based on coordinate position.
-    Only for coronagraphic observations (on-axis vs off-axis PSFs).
-    """
-    xsci = ysci = None
-
-    # Preceed only if coronagraphic observation
-    if not self.is_coron:
-        return 'wfe_drift' 
-
-    # Modify PSF coefficients based on position
-    if coord_vals is None:
-        return 'wfe_drift'
-    else:
-        # Determine sci coordinates
-        cframe = coord_frame.lower()
-        if cframe=='sci':
-            xsci, ysci = coord_vals  # pixels
-        elif cframe in ['det', 'tel', 'idl']:
-            x = np.array(coord_vals[0])
-            y = np.array(coord_vals[1])
-            
-            # TODO: Clean up this section
-            try:
-                apname = self.aperturename
-                siaf_ap = self.siaf[apname]
-                xsci, ysci = siaf_ap.convert(x,y, cframe, 'sci')  
-            except: 
-                # apname = self.get_siaf_apname()
-                self._update_aperturename()
-                apname = self.aperturename
-                if apname is None:
-                    _log.warning('No suitable aperture name defined to determine (xsci,ysci) coordiantes')
-                else:
-                    _log.warning('self.siaf_ap not defined; assuming {}'.format(apname))
-                    siaf_ap = self.siaf[apname]
-                    xsci, ysci = siaf_ap.convert(x,y, cframe, 'sci')  # arcsec
-                _log.warning('Update self.siaf_ap for more specific conversions to (xsci,ysci).')
-        else:
-            # Can't figure out coordinate frames, so assume 0
-            return 'wfe_drift'
-
-    # Assume we successfully found (xsci,ysci)
-    if (xsci is not None):
-        nfield = np.size(xsci)
-        field_rot = 0 if self._rotation is None else self._rotation
-
-        apname = self.aperturename
-        siaf_ap = self.siaf[apname]
-
-        # Convert to mask shifts (arcsec)
-        xoff_asec = (xsci - siaf_ap.XSciRef) * siaf_ap.XSciScale
-        yoff_asec = (ysci - siaf_ap.YSciRef) * siaf_ap.YSciScale
-        xoff, yoff = xy_rot(-1*xoff_asec, -1*yoff_asec, field_rot)
-        roff = np.sqrt(xoff**2 + yoff**2)
-
-        # For bar masks, evaluate based on vertical distance
-        if self.is_coron and self.image_mask[-1]=='B':
-            roff = np.abs(yoff)
-
-        if nfield==1:
-            roff = [roff]
-
-        # Choose either wfe_drift or wfe_drift_off for each position
-        res = []
-        for r in roff:
-            key = 'wfe_drift' if r<0.1 else 'wfe_drift_off'
-            res.append(key)
-
-        return res
-    else:
-        return 'wfe_drift'
-
-
-def _coeff_mod_wfe_drift(self, wfe_drift, key='wfe_drift'):
-    """
-    Modify PSF polynomial coefficients as a function of WFE drift.
+def _coeff_mod_wfe_drift(self, wfe_drift, coord_vals, coord_frame, siaf_ap=None):
+    """ Modify PSF polynomial coefficients as a function of WFE drift.
     """
 
     # Modify PSF coefficients based on WFE drift
     if wfe_drift==0:
-        cf_mod = 0 # Don't modify coefficients
-    elif (self._psf_coeff_mod[key] is None):
+        return 0 # Don't modify coefficients
+    elif (self._psf_coeff_mod['wfe_drift'] is None):
         _log.warning("You must run `gen_wfedrift_coeff` first before setting the wfe_drift parameter.")
         _log.warning("Will continue assuming `wfe_drift=0`.")
-        cf_mod = 0
+        return 0
+    elif self.is_coron:
+        _log.info("Generating WFE drift modifications...")
+        if coord_vals is None:
+            t_temp = 0
+        else:
+            t_temp, cx, cy = _transmission_map(self, coord_vals, coord_frame, siaf_ap=siaf_ap)
+        t_temp = np.atleast_1d(t_temp)
+        trans = t_temp**2
+
+        # Linearly combine on- and off-axis coefficients based on transmission
+        cf_fit_on  = self._psf_coeff_mod['wfe_drift'] 
+        cf_fit_off = self._psf_coeff_mod['wfe_drift_off'] 
+        lxmap      = self._psf_coeff_mod['wfe_drift_lxmap'] 
+
+        # Fit functions
+        cf_mod_list = []
+        for cf_fit in [cf_fit_on, cf_fit_off]:
+            cf_fit_shape = cf_fit.shape
+            cf_fit = cf_fit.reshape([cf_fit.shape[0], -1])
+            wfe_drift = np.atleast_1d(wfe_drift)
+            cf_mod = jl_poly(wfe_drift, cf_fit, use_legendre=True, lxmap=lxmap)
+            cf_mod = cf_mod.reshape(cf_fit_shape[1:])
+            cf_mod_list.append(cf_mod)
+
+        cf_mod = []
+        for t in trans:
+            # Linear combination of on/off to determine final mod
+            # Get a and b values for each position            
+            avals, bvals = (t, 1-t)
+            cf_mod_on, cf_mod_off = cf_mod_list
+            cf_mod.append(avals * cf_mod_off + bvals * cf_mod_on)
+        cf_mod = np.asarray(cf_mod)
+
+        if len(trans)==1:
+            cf_mod = cf_mod[0]
+
     else:
         _log.info("Generating WFE drift modifications...")
-        psf_coeff = self.psf_coeff
-
-        cf_fit = self._psf_coeff_mod[key] 
+        cf_fit = self._psf_coeff_mod['wfe_drift'] 
         lxmap  = self._psf_coeff_mod['wfe_drift_lxmap'] 
 
         # Fit function
         cf_fit_shape = cf_fit.shape
         cf_fit = cf_fit.reshape([cf_fit.shape[0], -1])
-        cf_mod = jl_poly(np.array([wfe_drift]), cf_fit, use_legendre=True, lxmap=lxmap)
+        wfe_drift = np.atleast_1d(wfe_drift)
+        cf_mod = jl_poly(wfe_drift, cf_fit, use_legendre=True, lxmap=lxmap)
         cf_mod = cf_mod.reshape(cf_fit_shape[1:])
 
-        # Pad cf_mod array with 0s if undersized
-        if not np.allclose(psf_coeff.shape, cf_mod.shape):
-            new_shape = psf_coeff.shape[1:]
-            cf_mod_resize = np.asarray([pad_or_cut_to_size(im, new_shape) for im in cf_mod])
-            cf_mod = cf_mod_resize
+    # Pad cf_mod array with 0s if undersized
+    psf_coeff = self.psf_coeff
+    if not np.allclose(psf_coeff.shape[-2:], cf_mod.shape[-2:]):
+        new_shape = psf_coeff.shape[1:]
+        cf_mod_resize = np.asarray([pad_or_cut_to_size(im, new_shape) for im in cf_mod])
+        cf_mod = cf_mod_resize
     
     return cf_mod
-
 
 def _coeff_mod_wfe_field(self, coord_vals, coord_frame, siaf_ap=None):
     """
@@ -4164,7 +4119,7 @@ def _coeff_mod_wfe_field(self, coord_vals, coord_frame, siaf_ap=None):
     v2grid  = self._psf_coeff_mod['si_field_v2grid'] 
     v3grid  = self._psf_coeff_mod['si_field_v3grid']
     apname  = self.aperturename # self._psf_coeff_mod['si_field_apname']
-    siaf_ap = self.siaf[apname] if apname is not None else None
+    siaf_ap = self.siaf[apname] if siaf_ap is None else siaf_ap
 
     # Modify PSF coefficients based on position
     if coord_vals is None:
@@ -4232,7 +4187,7 @@ def _coeff_mod_wfe_mask(self, coord_vals, coord_frame, siaf_ap=None):
     coord_vals : tuple or None
         Coordinates (in arcsec or pixels) to calculate field-dependent PSF.
     coord_frame : str
-        Type of input coordinates relative to `self.aperturename` aperture.
+        Type of input coordinates relative to `self.siaf_ap` aperture.
 
             * 'tel': arcsecs V2,V3
             * 'sci': pixels, in conventional DMS axes orientation
@@ -4251,8 +4206,22 @@ def _coeff_mod_wfe_mask(self, coord_vals, coord_frame, siaf_ap=None):
     cf_fit = self._psf_coeff_mod.get('si_mask', None) 
 
     # Information for bar offsetting (in arcsec)
-    bar_offset = self.get_bar_offset(ignore_options=True)
-    bar_offset = 0 if bar_offset is None else bar_offset
+    siaf_ap = self.siaf_ap if siaf_ap is None else siaf_ap
+    if (siaf_ap.AperName != self.siaf_ap.AperName):
+        apname = siaf_ap.AperName
+        if ('_F1' in apname) or ('_F2' in apname) or ('_F3' in apname) or ('_F4' in apname):
+            filter = apname.split('_')[-1]
+            narrow = False
+        elif 'NARROW' in apname:
+            filter = None
+            narrow = True
+
+        # Add in any bar offset
+        bar_offset = self.get_bar_offset(filter=filter, narrow=narrow, ignore_options=True)
+        bar_offset = 0 if bar_offset is None else bar_offset
+    else:
+        bar_offset = self.get_bar_offset(ignore_options=True)
+        bar_offset = 0 if bar_offset is None else bar_offset
 
     # Coord values are set, but no coefficients supplied
     if (coord_vals is not None) and (cf_fit is None):
@@ -4550,7 +4519,7 @@ def nrc_mask_trans(image_mask, x, y):
 
     Based on the Krist et al. SPIE paper on NIRCam coronagraph design
 
-    *Note* : To get the actual transmission, these values should be squared.
+    *NOTE* : To get the actual transmission, these values should be squared.
 
     """
 
@@ -4619,26 +4588,39 @@ def nrc_mask_trans(image_mask, x, y):
 
 
 def _transmission_map(self, coord_vals, coord_frame, siaf_ap=None):
+    """Get mask transmission for a given set of coordinates"""
 
     if not self.is_coron:
         return None
 
+    # Mask aperture is always relative to center of mask
     apname_mask = self._psf_coeff_mod.get('si_mask_apname', None)
     if apname_mask is None:
         apname_mask = self.aperturename
     siaf_ap_mask = self.siaf[apname_mask]
 
-    # Assume cframe corresponds to siaf_ap input
+    # Assume coord_frame corresponds to siaf_ap input
     siaf_ap = siaf_ap_mask if siaf_ap is None else siaf_ap
     coord_frame = coord_frame.lower()
 
-    # Convert to 'idl' coordinates
+    # Convert to 'idl' from input frame relative to siaf_ap
     cx, cy = np.asarray(coord_vals)
+    cx_idl, cy_idl = siaf_ap.convert(cx, cy, coord_frame, 'idl')
+    # Determine if there is any bar offset relative to centered mask aperture
     if (siaf_ap.AperName != siaf_ap_mask.AperName):
-        cx_tel, cy_tel = siaf_ap.convert(cx, cy, coord_frame, 'tel')
-        cx_idl, cy_idl = siaf_ap.convert(cx, cy, 'tel', 'idl')
-    else:
-        cx_idl, cy_idl = siaf_ap_mask.convert(cx, cy, coord_frame, 'idl')
+        apname = siaf_ap.AperName
+        if ('_F1' in apname) or ('_F2' in apname) or ('_F3' in apname) or ('_F4' in apname):
+            filter = apname.split('_')[-1]
+            narrow = False
+        elif 'NARROW' in apname:
+            filter = None
+            narrow = True
+
+        # Add in any bar offset
+        bar_offset = self.get_bar_offset(filter=filter, narrow=narrow, ignore_options=True)
+        bar_offset = 0 if bar_offset is None else bar_offset
+        cx_idl += bar_offset
+    # From here on out, coord values are relative to siaf_ap_mask
 
     # Get mask transmission
     trans = nrc_mask_trans(self.image_mask, cx_idl, cy_idl)
@@ -4754,6 +4736,17 @@ def _nrc_coron_rescale(self, res, coord_vals, coord_frame, siaf_ap=None, sp=None
     Rescale total flux of off-axis coronagraphic PSF to better match 
     analytic prediction when source overlaps coronagraphic occulting 
     mask. Primarily used for planetary companion and disk PSFs.
+
+    Parameters
+    ----------
+    self : webbpsf_ext object
+        WebbPSF extension object (e.g., `webbpsf_ext.NIRCam_ext`)
+    res : fits.HDUList or ndarray
+        PSF image(s) to rescale
+    coord_vals : tuple
+        Tuple of (x,y) coordinates in arcsec relative to aperture center
+    coord_frame : str
+        Frame of input coordinates ('tel', 'idl', 'sci', 'det')
     """
 
     if coord_vals is None:
