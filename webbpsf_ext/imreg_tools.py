@@ -87,10 +87,12 @@ def get_coron_apname(input):
         apname = meta.aperture.name
         apname_pps = meta.aperture.pps_name
 
+    # print(apname, apname_pps)
+
     # No need to do anything if the aperture names are the same
     # Also skip if MASK not in apname_pps
     if (apname==apname_pps) or ('MASK' not in apname_pps):
-        return apname
+        apname_new = apname
     else:
         # Should only get here if coron mask and apname doesn't match PPS
         apname_str_split = apname.split('_')
@@ -98,10 +100,12 @@ def get_coron_apname(input):
         image_mask = get_mask_from_pps(apname_pps)
 
         # Get subarray info
-        if 'FULL' in apname:
+        # Sometimes apname erroneously has 'FULL' in it
+        # So, first for subarray info in apname_pps 
+        if ('400X256' in apname_pps):
+            apn0 = f'{sca}_400X256'
+        elif ('FULL' in apname_pps):
             apn0 = f'{sca}_FULL'
-        elif '400x256' in apname:
-            apn0 = f'{sca}_400x256'
         else:
             apn0 = sca
 
@@ -117,18 +121,38 @@ def get_coron_apname(input):
             # Filter is always appended to end, but can have different string sizes (F322W2)
             filter = apname_pps[inds[-1]+1:]
             apname_new += f'_{filter}'
-        elif ('LWB' in apname_pps) and ('TAMASK' in apname_pps):
-            apname_new += '_F335M'
-        elif ('SWB' in apname_pps) and ('TAMASK' in apname_pps):
-            apname_new += '_F210M'
         elif last_str=='NARROW':
             apname_new += '_NARROW'
+        elif ('TAMASK' in apname_pps) and ('WB' in apname_pps[-1]):
+            apname_new += '_WEDGE_BAR'
+        elif ('TAMASK' in apname_pps) and (apname_pps[-1]=='R'):
+            apname_new += '_WEDGE_RND'
 
+    # print(apname_new)
+
+    # If apname_new doesn't exit, we need to fall back to apname
+    # even if it may not fully make sense.
+    if apname_new in nrc_siaf.apernames:
         return apname_new
+    else:
+        return apname
 
+def apname_full_frame_coron(apname):
+    """Retrieve full frame version of corongraphic aperture name"""
+
+    if 'FULL' in apname:
+        if 'FULL_WEDGE' in apname:
+            _log.warning(f'Aperture name {apname} does not specify occulting mask.')
+        return apname
+    else:
+        # Remove 400X256 string
+        apname = apname.replace('_400X256', '')
+        # Add in FULL string
+        apname_full = apname.replace('_', '_FULL_', 1)
+        return apname_full
 
 def get_files(indir, pid, obsid=None, sca=None, filt=None, file_type='uncal.fits', 
-              exp_type=None, apername=None, apername_pps=None):
+              exp_type=None, act_id=None, apername=None, apername_pps=None):
     """Get files of interest
     
     Parameters
@@ -145,6 +169,8 @@ def get_files(indir, pid, obsid=None, sca=None, filt=None, file_type='uncal.fits
         uncal.fits or rate.fits, etc
     exp_type : str
         Exposure type such as NRC_TACQ, NRC_TACONFIRM
+    act_id : str
+        Activity ID. The <aa> in _<gg><s><aa>_ portion of the file name.
     apername : str
         Name of aperture (e.g., NRCA5_FULL)
     apername_pps : str
@@ -187,8 +213,16 @@ def get_files(indir, pid, obsid=None, sca=None, filt=None, file_type='uncal.fits
         files2 = []
         for f in allfiles:
             hdr = fits.getheader(os.path.join(indir,f))
-            exptype_obs = hdr.get('EXP_TYPE', 'none')
-            if exptype_obs==exp_type:
+            if hdr.get('EXP_TYPE', 'none')==exp_type:
+                files2.append(f)
+        allfiles = np.array(files2)
+
+    # Filter by activity ID
+    if act_id is not None:
+        files2 = []
+        for f in allfiles:
+            hdr = fits.getheader(os.path.join(indir,f))
+            if hdr.get('ACT_ID', 'none')==act_id:
                 files2.append(f)
         allfiles = np.array(files2)
 
@@ -511,7 +545,8 @@ def read_ta_files(indir, pid, obsid, sca, file_type='rate.fits',
     ta_dict = {'dta': {'file': fta_path, 'type': 'Target Acq'}}
 
     # Get TACONFIRM 
-    fconf = get_files(taconf_dir, pid, obsid, sca=sca, file_type=file_type, exp_type='NRC_TACONFIRM')
+    fconf = get_files(taconf_dir, pid, obsid=obsid, sca=sca, 
+                      file_type=file_type, exp_type='NRC_TACONFIRM')
     if len(fconf)>0:
         fconf1, fconf2 = fconf
         # Full paths of files
@@ -574,8 +609,8 @@ def read_ta_files(indir, pid, obsid, sca, file_type='rate.fits',
 
 
 def read_sgd_files(indir, pid, obsid, filter, sca, bpfix=False, 
-                   file_type='rate.fits', exp_type=None, 
-                   apername=None, apername_pps=None):
+                   file_type='rate.fits', exp_type=None, act_id=None,
+                   apername=None, apername_pps=None, nodata=False):
     """Store SGD or science data into a dictionary
 
     By default, excludes any TAMASK or TACONFIRM data, but can be overridden
@@ -604,14 +639,16 @@ def read_sgd_files(indir, pid, obsid, filter, sca, bpfix=False,
     bpfix : bool
         If True, perform bad pixel fixing on the data.
         Mainly for display purposes.
+    nodata : bool
+        If True, only return header info and not data.
     """
 
     from jwst import datamodels
 
     files = get_files(indir, pid, obsid=obsid, sca=sca, filt=filter,
-                      file_type=file_type, exp_type=exp_type, 
+                      file_type=file_type, exp_type=exp_type, act_id=act_id,
                       apername=apername, apername_pps=apername_pps)
-    
+
     # Exclude any TAMASK or TACONFIRM data by default
     if exp_type is None:
         ikeep = []
@@ -630,7 +667,8 @@ def read_sgd_files(indir, pid, obsid, filter, sca, bpfix=False,
         d = {'file': fpath}
         
         hdul = fits.open(fpath)
-        d['data'] = hdul['SCI'].data.astype('float')
+        if not nodata:
+            d['data'] = hdul['SCI'].data.astype('float')
         d['dq']   = hdul['DQ'].data
         d['hdr0'] = hdul[0].header
         d['hdr1'] = hdul[1].header
@@ -656,7 +694,7 @@ def read_sgd_files(indir, pid, obsid, filter, sca, bpfix=False,
         sgd_dict[i] = d
 
         # bad pixel fixing 
-        if bpfix:
+        if bpfix and not nodata:
             im = crop_observation(d['data'], d['ap'], 100)
             # Perform pixel fixing in place
             _ = bp_fix(im, sigclip=10, niter=1, in_place=True)
