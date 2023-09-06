@@ -4688,7 +4688,7 @@ def _transmission_map(self, coord_vals, coord_frame, siaf_ap=None):
     # Square this number to get photon attenuation (intesnity transmission)
     trans = nrc_mask_trans(self.image_mask, cx_idl, cy_idl)
 
-    print(trans**2, cx_idl, cy_idl)
+    # print(trans**2, cx_idl, cy_idl)
 
     return trans, cx_idl, cy_idl
 
