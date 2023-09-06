@@ -431,7 +431,11 @@ class NIRCam_ext(webbpsf_NIRCam):
     def get_bar_offset(self, narrow=None, filter=None, ignore_options=False):
         """
         Obtain the value of the bar offset that would be passed through to
-        PSF calculations for bar/wedge coronagraphic masks.
+        PSF calculations for bar/wedge coronagraphic masks. By default, this
+        uses the filter information. Secondary is the aperture name (e.g.,
+        _F250M or _NARROW). If the bar offset is explicitly set in 
+        `self.options['bar_offset']`, then that value is returned unless
+        `ignore_options=True`.
 
         Parameters
         ----------
@@ -478,9 +482,9 @@ class NIRCam_ext(webbpsf_NIRCam):
                 # Try to auto-determine filter from aperture name
                 apname = self.siaf_ap.AperName
                 if ('_F1' in apname) or ('_F2' in apname) or ('_F3' in apname) or ('_F4' in apname):
+                    # Filter is always appended to end, but can have different string sizes (F322W2)
                     # Find all instances of "_"
                     inds = [pos for pos, char in enumerate(apname) if char == '_']
-                    # Filter is always appended to end, but can have different string sizes (F322W2)
                     filter = apname[inds[-1]+1:]
 
                     # Try again
@@ -541,6 +545,46 @@ class NIRCam_ext(webbpsf_NIRCam):
             im = np.ones([npix,npix])
 
         return im
+
+    def gen_mask_transmission_map(self, coord_vals, coord_frame, siaf_ap=None, return_more=False):
+        """Return mask transmission for a set of coordinates
+        
+        Similar to `self.gen_mask_image`, but instead of returning a full image,
+        can query the transmission at a set of coordinates. This is useful for
+        calculating the transmission at the location of a source or for plotting
+        the transmission across the mask. Returns the intensity transmission 
+        (ie., photon loss), wich is the amplitude transmission squared (as supplied
+        by the WebbPSF `BandLimitedCoron` class and `nrc_mask_trans` function).
+
+        Parameters
+        ----------
+        coord_vals : tuple or None
+            Coordinates (in arcsec or pixels) to calculate field-dependent PSF.
+            If multiple values, then this should be an array ([xvals], [yvals]).
+        coord_frame : str
+            Type of input coordinates relative to `self.siaf_ap` aperture.
+
+                * 'tel': arcsecs V2,V3
+                * 'sci': pixels, in DMS axes orientation; aperture-dependent
+                * 'det': pixels, in raw detector read out axes orientation
+                * 'idl': arcsecs relative to aperture reference location.
+
+        siaf_ap : pysiaf.SiafAperture
+            SIAF aperture object. If not specified, then uses `self.siaf_ap`.
+        return_more : bool
+            If True, then return additional information about the mask transmission,
+            specifically the x and y coordinates relative to the center of the mask
+            in arcsec.
+        """
+
+        # cx and cy are transformed coordinate relative to center of mask in arcsec
+        amp_trans, cx, cy = _transmission_map(self, coord_vals, coord_frame, siaf_ap=siaf_ap)
+        # Return intensity transmission (ie., photon loss)
+        trans = amp_trans**2
+        if return_more:
+            return trans, cx, cy
+        else:
+            return trans
 
     def get_opd_info(self, opd=None, pupil=None, HDUL_to_OTELM=True):
         """
@@ -4051,11 +4095,11 @@ def _coeff_mod_wfe_drift(self, wfe_drift, coord_vals, coord_frame, siaf_ap=None)
     elif self.is_coron:
         _log.info("Generating WFE drift modifications...")
         if coord_vals is None:
-            t_temp = 0
+            trans = 0
         else:
-            t_temp, cx, cy = _transmission_map(self, coord_vals, coord_frame, siaf_ap=siaf_ap)
-        t_temp = np.atleast_1d(t_temp)
-        trans = t_temp**2
+            # This is intensity transmission, which is the amplitude squared
+            trans = self.gen_mask_transmission_map(coord_vals, coord_frame, siaf_ap=siaf_ap)
+        trans = np.atleast_1d(trans)
 
         # Linearly combine on- and off-axis coefficients based on transmission
         cf_fit_on  = self._psf_coeff_mod['wfe_drift'] 
@@ -4214,13 +4258,20 @@ def _coeff_mod_wfe_mask(self, coord_vals, coord_frame, siaf_ap=None):
         if ('_F1' in apname) or ('_F2' in apname) or ('_F3' in apname) or ('_F4' in apname):
             filter = apname.split('_')[-1]
             narrow = False
+            do_bar = True
         elif 'NARROW' in apname:
             filter = None
             narrow = True
+            do_bar = True
+        else:
+            do_bar = False
 
         # Add in any bar offset
-        bar_offset = self.get_bar_offset(filter=filter, narrow=narrow, ignore_options=True)
-        bar_offset = 0 if bar_offset is None else bar_offset
+        if do_bar:
+            bar_offset = self.get_bar_offset(filter=filter, narrow=narrow, ignore_options=True)
+            bar_offset = 0 if bar_offset is None else bar_offset
+        else:
+            bar_offset = 0
     else:
         bar_offset = self.get_bar_offset(ignore_options=True)
         bar_offset = 0 if bar_offset is None else bar_offset
@@ -4263,6 +4314,8 @@ def _coeff_mod_wfe_mask(self, coord_vals, coord_frame, siaf_ap=None):
         # Convert to mask shifts (arcsec)
         xoff_asec, yoff_asec = (xidl, yidl)
         xoff_cf, yoff_cf = xy_rot(-1*xoff_asec, -1*yoff_asec, field_rot)
+
+        # print(xoff_asec, yoff_asec)
 
         if (self.name=='NIRCam') and (np.any(np.abs(xoff_asec)>12) or np.any(np.abs(yoff_asec)>12)):
             _log.warn("Some values outside mask FoV (beyond 12 asec offset)!")
@@ -4521,7 +4574,7 @@ def nrc_mask_trans(image_mask, x, y):
 
     Based on the Krist et al. SPIE paper on NIRCam coronagraph design
 
-    *NOTE* : To get the actual transmission, these values should be squared.
+    *NOTE* : To get the actual intensity transmission, these values should be squared.
 
     """
 
@@ -4590,44 +4643,55 @@ def nrc_mask_trans(image_mask, x, y):
 
 
 def _transmission_map(self, coord_vals, coord_frame, siaf_ap=None):
-    """Get mask transmission for a given set of coordinates"""
+    """Get mask amplitude transmission for a given set of coordinates
+
+    *NOTE* : To get the actual intensity transmission, these values should be squared.
+    """
 
     if not self.is_coron:
         return None
 
-    # Mask aperture is always relative to center of mask
-    apname_mask = self._psf_coeff_mod.get('si_mask_apname', None)
-    if apname_mask is None:
-        apname_mask = self.aperturename
-    siaf_ap_mask = self.siaf[apname_mask]
-
-    # Assume coord_frame corresponds to siaf_ap input
-    siaf_ap = siaf_ap_mask if siaf_ap is None else siaf_ap
-    coord_frame = coord_frame.lower()
-
-    # Convert to 'idl' from input frame relative to siaf_ap
-    cx, cy = np.asarray(coord_vals)
-    cx_idl, cy_idl = siaf_ap.convert(cx, cy, coord_frame, 'idl')
-    # Determine if there is any bar offset relative to centered mask aperture
-    if (siaf_ap.AperName != siaf_ap_mask.AperName):
+    # Information for bar offsetting (in arcsec)
+    # relative to center of mask
+    siaf_ap = self.siaf_ap if siaf_ap is None else siaf_ap
+    if (siaf_ap.AperName != self.siaf_ap.AperName):
         apname = siaf_ap.AperName
         if ('_F1' in apname) or ('_F2' in apname) or ('_F3' in apname) or ('_F4' in apname):
             filter = apname.split('_')[-1]
             narrow = False
+            do_bar = True
         elif 'NARROW' in apname:
             filter = None
             narrow = True
+            do_bar = True
+        else:
+            do_bar = False
 
         # Add in any bar offset
-        bar_offset = self.get_bar_offset(filter=filter, narrow=narrow, ignore_options=True)
+        if do_bar:
+            bar_offset = self.get_bar_offset(filter=filter, narrow=narrow, ignore_options=True)
+            bar_offset = 0 if bar_offset is None else bar_offset
+        else:
+            bar_offset = 0
+    else:
+        bar_offset = self.get_bar_offset(ignore_options=True)
         bar_offset = 0 if bar_offset is None else bar_offset
-        cx_idl += bar_offset
-    # From here on out, coord values are relative to siaf_ap_mask
 
-    # Get mask transmission
+    # Convert to 'idl' from input frame relative to siaf_ap
+    cx, cy = np.asarray(coord_vals)
+    cx_idl, cy_idl = siaf_ap.convert(cx, cy, coord_frame, 'idl')
+
+    # Add bar offset
+    cx_idl += bar_offset
+
+    # Get mask transmission (amplitude)
+    # Square this number to get photon attenuation (intesnity transmission)
     trans = nrc_mask_trans(self.image_mask, cx_idl, cy_idl)
 
+    print(trans**2, cx_idl, cy_idl)
+
     return trans, cx_idl, cy_idl
+
 
 def _nrc_coron_psf_sums(self, coord_vals, coord_frame, siaf_ap=None, return_max=False, trans=None):
     """
