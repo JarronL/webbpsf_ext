@@ -152,6 +152,59 @@ def nircam_com_nd(wave_out=None):
     else:
         return np.interp(wave_out, wdata, odata, left=0, right=0)
 
+def nircam_lyot_th(channel, wave_out=None):
+    """Lyot wedge throughput for NIRCam
+    
+    If `wave_out` is not specified, then return the raw data,
+    both wavelength and throughput. Otherwise, interpolate
+    onto the specified wavelength grid and return only the
+    throughput values.
+    """
+
+    # Transmission values for wedges in Lyot stop
+    if 'SW' in channel:
+        fname = 'jwst_nircam_sw-lyot_trans_modmean.fits'
+        hdulist = fits.open(_bp_dir / fname)
+        wtemp = hdulist[1].data['WAVELENGTH']
+        ttemp = hdulist[1].data['THROUGHPUT']
+        # Estimates for w<1.5um
+        wtemp = np.insert(wtemp, 0, [0.50, 1.00])
+        ttemp = np.insert(ttemp, 0, [0.95, 0.95])
+        # Estimates for w>2.3um
+        wtemp = np.append(wtemp, [2.50,3.00])
+        ttemp = np.append(ttemp, [0.85,0.85])
+
+        hdulist.close()
+
+    elif 'LW' in channel:
+        fname = 'jwst_nircam_lw-lyot_trans_modmean.fits'
+        hdulist = fits.open(_bp_dir / fname)
+        wtemp = hdulist[1].data['WAVELENGTH']
+        ttemp = hdulist[1].data['THROUGHPUT']
+        ttemp *= 100 # Factors of 100 error in saved values
+
+        # Smooth the raw data
+        ws = 200
+        s = np.r_[ttemp[ws-1:0:-1],ttemp,ttemp[-1:-ws:-1]]
+        w = np.blackman(ws)
+        y = np.convolve(w/w.sum(),s,mode='valid')
+        ttemp = y[int((ws/2-1)):int(-(ws/2))]
+
+        # Estimates for w<2.3um
+        wtemp = np.insert(wtemp, 0, [1.00])
+        ttemp = np.insert(ttemp, 0, [0.95])
+        # Estimates for w>5.0um
+        wtemp = np.append(wtemp, [6.0])
+        ttemp = np.append(ttemp, [0.9])
+
+        hdulist.close()
+
+    # Interpolate substrate transmission onto filter wavelength grid
+    if wave_out is None:
+        return wtemp, ttemp
+    else:
+        return np.interp(wave_out, wtemp, ttemp, left=0, right=0)
+
 
 def nircam_grism_si_ar(module, return_bp=False):
     """NIRCam grism Si and AR coating transmission data"""
@@ -651,62 +704,19 @@ def nircam_filter(filter, pupil=None, mask=None, module=None, sca=None, ND_acq=F
     if ((mask  is not None) and ('MASK' in mask)) or coron_substrate or ND_acq:
         # Sapphire mask transmission values for coronagraphic substrate
         # Did we explicitly set the ND acquisition square?
-        # This is a special case and doesn't necessarily need to be set.
-        # WebbPSF has a provision to include ND filters in the field, but we include
-        # this option if the user doesn't want to figure out offset positions.
+        #   This is a special case and doesn't necessarily need to be set.
+        #   WebbPSF has a provision to include ND filters in the field, but we include
+        #   this option if the user doesn't want to figure out offset positions.
         th_coron_sub = nircam_com_th(wave_out=bp.wave/1e4, ND_acq=ND_acq)
         th_new = th_coron_sub * bp.throughput
         bp = S.ArrayBandpass(bp.wave, th_new)
 
     # Lyot stop wedge modifications 
-    # Substrate transmission (located in pupil wheel to deflect beam)
     if (pupil is not None) and ('LYOT' in pupil):
-
-        # Transmission values for wedges in Lyot stop
-        if 'SW' in channel:
-            fname = 'jwst_nircam_sw-lyot_trans_modmean.fits'
-            hdulist = fits.open(_bp_dir / fname)
-            wtemp = hdulist[1].data['WAVELENGTH']
-            ttemp = hdulist[1].data['THROUGHPUT']
-            # Estimates for w<1.5um
-            wtemp = np.insert(wtemp, 0, [0.50, 1.00])
-            ttemp = np.insert(ttemp, 0, [0.95, 0.95])
-            # Estimates for w>2.3um
-            wtemp = np.append(wtemp, [2.50,3.00])
-            ttemp = np.append(ttemp, [0.85,0.85])
-            # Interpolate substrate transmission onto filter wavelength grid
-            th_wedge = np.interp(bp.wave/1e4, wtemp, ttemp, left=0, right=0)
-
-            hdulist.close()
-
-        elif 'LW' in channel:
-            fname = 'jwst_nircam_lw-lyot_trans_modmean.fits'
-            hdulist = fits.open(_bp_dir / fname)
-            wtemp = hdulist[1].data['WAVELENGTH']
-            ttemp = hdulist[1].data['THROUGHPUT']
-            ttemp *= 100 # Factors of 100 error in saved values
-
-            # Smooth the raw data
-            ws = 200
-            s = np.r_[ttemp[ws-1:0:-1],ttemp,ttemp[-1:-ws:-1]]
-            w = np.blackman(ws)
-            y = np.convolve(w/w.sum(),s,mode='valid')
-            ttemp = y[int((ws/2-1)):int(-(ws/2))]
-
-            # Estimates for w<2.3um
-            wtemp = np.insert(wtemp, 0, [1.00])
-            ttemp = np.insert(ttemp, 0, [0.95])
-            # Estimates for w>5.0um
-            wtemp = np.append(wtemp, [6.0])
-            ttemp = np.append(ttemp, [0.9])
-            # Interpolate substrate transmission onto filter wavelength grid
-            th_wedge = np.interp(bp.wave/1e4, wtemp, ttemp, left=0, right=0)
-
-            hdulist.close()
-
+        # Substrate transmission (located in pupil wheel to deflect beam)
+        th_wedge = nircam_lyot_th(channel, wave_out=bp.wave/1e4)
         th_new = th_wedge * bp.throughput
         bp = S.ArrayBandpass(bp.wave, th_new, name=bp.name)
-
 
     # Weak Lens substrate transmission
     # TODO: Update WLP4 with newer flight version
