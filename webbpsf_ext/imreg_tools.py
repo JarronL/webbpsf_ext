@@ -349,7 +349,15 @@ def load_cropped_files(save_dir, files, xysub=65, bgsub=False,
 ###########################################################################
 
 def get_ictm_event_log(startdate, enddate, hdr=None, mast_api_token=None, verbose=False):
-    """"""
+    """Get ICTM event log from MAST
+    
+    Parameters
+    ==========
+    startdate : str
+        Start date of observation of format YYYY-MM-DD HH:MM:SS.sss
+    enddate : str
+        End date of observation of format YYYY-MM-DD HH:MM:SS.sss
+    """
 
     from datetime import datetime, timedelta, timezone
     from requests import Session
@@ -383,11 +391,18 @@ def get_ictm_event_log(startdate, enddate, hdr=None, mast_api_token=None, verbos
         enddate = hdr['VISITEND']
     
     startdate = startdate.replace(' ', '+')
-    idot = startdate.index('.')
-    startdate = startdate[0:idot]
+    try:
+        idot = startdate.index('.')
+        startdate = startdate[0:idot]
+    except ValueError:
+        pass
+
     enddate = enddate.replace(' ', '+')
-    idot = enddate.index('.')
-    enddate = enddate[0:idot]
+    try:
+        idot = enddate.index('.')
+        enddate = enddate[0:idot]
+    except ValueError:
+        pass
 
     # fetch event messages from MAST engineering database (lags FOS EDB)
     start = datetime.fromisoformat(startdate)
