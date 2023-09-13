@@ -243,7 +243,7 @@ def nrc_ref_info(apname, orientation='sci'):
     upper = int(w-(det_size-y2))
     left  = int(w-x1)
     right = int(w-(det_size-x2))
-    # Keep as list rather than np.array to prevent type convesion to int64
+    # Keep as list rather than np.array to prevent type conversion to int64
     ref_all = [lower,upper,left,right]
     for i, r in enumerate(ref_all):
         if r<0:
