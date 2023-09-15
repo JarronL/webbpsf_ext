@@ -152,7 +152,7 @@ def apname_full_frame_coron(apname):
         return apname_full
 
 def get_files(indir, pid, obsid=None, sca=None, filt=None, file_type='uncal.fits', 
-              exp_type=None, act_id=None, apername=None, apername_pps=None):
+              exp_type=None, vst_grp_act=None, apername=None, apername_pps=None):
     """Get files of interest
     
     Parameters
@@ -169,8 +169,9 @@ def get_files(indir, pid, obsid=None, sca=None, filt=None, file_type='uncal.fits
         uncal.fits or rate.fits, etc
     exp_type : str
         Exposure type such as NRC_TACQ, NRC_TACONFIRM
-    act_id : str
-        Activity ID. The <aa> in _<gg><s><aa>_ portion of the file name.
+    vst_grp_act : str
+        The _<gg><s><aa>_ portion of the file name.
+        hdr0['VISITGRP'] + hdr0['SEQ_ID'] + hdr0['ACT_ID']
     apername : str
         Name of aperture (e.g., NRCA5_FULL)
     apername_pps : str
@@ -217,12 +218,14 @@ def get_files(indir, pid, obsid=None, sca=None, filt=None, file_type='uncal.fits
                 files2.append(f)
         allfiles = np.array(files2)
 
-    # Filter by activity ID
-    if act_id is not None:
+    # Filter by visit group
+    if vst_grp_act is not None:
         files2 = []
         for f in allfiles:
             hdr = fits.getheader(os.path.join(indir,f))
-            if hdr.get('ACT_ID', 'none')==act_id:
+            if hdr.get('VISITGRP', 'none')==vst_grp_act[0:2] and \
+               hdr.get('SEQ_ID', 'none')==vst_grp_act[2] and \
+               hdr.get('ACT_ID', 'none')==vst_grp_act[3:]:
                 files2.append(f)
         allfiles = np.array(files2)
 
@@ -422,6 +425,36 @@ def get_ictm_event_log(startdate, enddate, hdr=None, mast_api_token=None, verbos
 
     return lines
 
+def tasub_to_apname(tasub):
+
+    # Get aperture name from TA subarray name
+
+    # Dictionary of aperture names
+    apname_dict={
+        'SUBFSA210R' : 'NRCA2_FSTAMASK210R' ,
+        'SUBFSA335R' : 'NRCA5_FSTAMASKM335R',
+        'SUBFSA430R' : 'NRCA5_FSTAMASKM430R',
+        'SUBFSALWB'  : 'NRCA5_FSTAMASKLWB'  ,
+        'SUBFSASWB'  : 'NRCA4_FSTAMASKSWB'  ,
+        'SUBNDA210R' : 'NRCA2_TAMASK210R'   ,
+        'SUBNDA335R' : 'NRCA5_TAMASK335R'   ,
+        'SUBNDA430R' : 'NRCA5_TAMASK430R'   ,
+        'SUBNDALWBL' : 'NRCA5_TAMASKLWBL'   ,
+        'SUBNDALWBS' : 'NRCA5_TAMASKLWB'    ,
+        'SUBNDASWBL' : 'NRCA4_TAMASKSWB'    ,
+        'SUBNDASWBS' : 'NRCA4_TAMASKSWBS'   ,
+        'SUBNDB210R' : 'NRCB1_TAMASK210R'   ,
+        'SUBNDB335R' : 'NRCB5_TAMASK335R'   ,
+        'SUBNDB430R' : 'NRCB5_TAMASK430R'   ,
+        'SUBNDBLWBL' : 'NRCB5_TAMASKLWBL'   ,
+        'SUBNDBLWBS' : 'NRCB5_TAMASKLWB'    ,
+        'SUBNDBSWBL' : 'NRCB3_TAMASKSWB'    ,
+        'SUBNDBSWBS' : 'NRCB3_TAMASKSWBS'   ,
+    }
+
+    return apname_dict[tasub]
+
+
 
 def find_centroid_det(eventlog, selected_visit_id):
     """Get centroid position of TA as reported in JWST event logs"""
@@ -436,14 +469,33 @@ def find_centroid_det(eventlog, selected_visit_id):
     in_ta = False
 
     for value in reader(eventlog, delimiter=',', quotechar='"'):
+        val_str = value[2]
+
+        # Get subarray name for visit
+        if in_selected_visit and  'Configured NIRCam subarray' in val_str:
+            val_str_list = val_str.split(' ')
+            tasub = val_str_list[-1].split(',')[0]
+            _log.info(val_str)
+            
         if in_selected_visit and ((not ta_only) or in_ta) :
             # print(value[0][0:22], "\t", value[2])
             
             # Print coordinate location info
-            val_str = value[2]
             if ('postage-stamp coord' in val_str) or ('detector coord' in val_str): 
                 _log.info(val_str)
         
+            # Backup coords in case of TA centroid failure
+            if 'postage-stamp coord (colPeak, rowPeak)' in val_str:
+                val_str_list = val_str.split('=')
+                xcen, ycen = val_str_list[1].split(',')
+                ind1 = xcen.find('(')
+                xcen = xcen[ind1+1:]
+                ind2 = ycen.find(')')
+                ycen = ycen[0:ind2]
+                # These are NOT 'sci' coords, but instead a 
+                # subarray cut-out in detector coords
+                peak_coords = (float(xcen), float(ycen))
+
             # Parse centroid position reported in detector coordinates
             if 'detector coord (colCentroid, rowCentroid)' in val_str:
                 val_str_list = val_str.split('=')
@@ -455,10 +507,11 @@ def find_centroid_det(eventlog, selected_visit_id):
 
                 return float(xcen), float(ycen)
 
-        if value[2][:6] == 'VISIT ':
-            if value[2][-7:] == 'STARTED':
+        # Flag if current line is between when visit starts and ends
+        if val_str[:6] == 'VISIT ':
+            if val_str[-7:] == 'STARTED':
                 vstart = 'T'.join(value[0].split())[:-3]
-                vid = value[2].split()[1]
+                vid = val_str.split()[1]
 
                 if vid==selected_visit_id:
                     _log.debug(f"VISIT {selected_visit_id} START FOUND at {vstart}")
@@ -466,24 +519,41 @@ def find_centroid_det(eventlog, selected_visit_id):
                     # if ta_only:
                     #     print("Only displaying TARGET ACQUISITION RESULTS:")
 
-            elif value[2][-5:] == 'ENDED' and in_selected_visit:
-                assert vid == value[2].split()[1]
-                assert selected_visit_id  == value[2].split()[1]
+            elif val_str[-5:] == 'ENDED' and in_selected_visit:
+                assert vid == val_str.split()[1]
+                assert selected_visit_id  == val_str.split()[1]
 
                 vend = 'T'.join(value[0].split())[:-3]
                 _log.debug(f"VISIT {selected_visit_id} END FOUND at {vend}")
 
                 in_selected_visit = False
-        elif value[2][:31] == f'Script terminated: {vid}':
-            if value[2][-5:] == 'ERROR':
-                script = value[2].split(':')[2]
+        elif val_str[:31] == f'Script terminated: {vid}':
+            if val_str[-5:] == 'ERROR':
+                script = val_str.split(':')[2]
                 vend = 'T'.join(value[0].split())[:-3]
                 dur = datetime.fromisoformat(vend) - datetime.fromisoformat(vstart)
                 note = f'Halt in {script}'
                 in_selected_visit = False
-        elif in_selected_visit and value[2].startswith('*'): 
+        elif in_selected_visit and val_str.startswith('*'): 
             # this string is used to mark the start and end of TA sections
             in_ta = not in_ta
+
+    # If we've gotten here, then no centroid was found
+    # Return peak coords if available
+    if 'peak_coords' in locals():
+        _log.warning(f'No centroid found for {selected_visit_id}. Using peak coords instead.')
+        apname = tasub_to_apname(tasub)
+        ap = nrc_siaf[apname]
+        x0, y0 = np.min(ap.corners('det'), axis=1)
+
+        # Figure out location of peak in full frame
+        xp_full = peak_coords[0] + x0 - 0.5
+        yp_full = peak_coords[1] + y0 - 0.5
+
+        return np.array([xp_full, yp_full])
+    else:
+        _log.warning(f'No centroid found for {selected_visit_id}.')
+        return None
 
 def diff_ta_data(uncal_data):
     """Onboard algorithm to difference TA data"""
@@ -563,6 +633,7 @@ def read_ta_files(indir, pid, obsid, sca, file_type='rate.fits',
         d = ta_dict[k]
 
         f = d['file']
+        print(f)
         hdul = fits.open(f)
         # Get data and take diff if uncal
         data = hdul['SCI'].data.astype('float')
@@ -609,7 +680,7 @@ def read_ta_files(indir, pid, obsid, sca, file_type='rate.fits',
 
 
 def read_sgd_files(indir, pid, obsid, filter, sca, bpfix=False, 
-                   file_type='rate.fits', exp_type=None, act_id=None,
+                   file_type='rate.fits', exp_type=None, vst_grp_act=None,
                    apername=None, apername_pps=None, nodata=False):
     """Store SGD or science data into a dictionary
 
@@ -632,6 +703,9 @@ def read_sgd_files(indir, pid, obsid, filter, sca, bpfix=False,
         File extension, such as uncal.fits, rate.fits, cal.fits, etc.
     exp_type : str
         Exposure type such as NRC_TACQ, NRC_TACONFIRM
+    vst_grp_act : str
+        The _<gg><s><aa>_ portion of the file name.
+        hdr0['VISITGRP'] + hdr0['SEQ_ID'] + hdr0['ACT_ID']
     apername : str
         Name of aperture (e.g., NRCA5_FULL)
     apername_pps : str
@@ -646,7 +720,7 @@ def read_sgd_files(indir, pid, obsid, filter, sca, bpfix=False,
     from jwst import datamodels
 
     files = get_files(indir, pid, obsid=obsid, sca=sca, filt=filter,
-                      file_type=file_type, exp_type=exp_type, act_id=act_id,
+                      file_type=file_type, exp_type=exp_type, vst_grp_act=vst_grp_act,
                       apername=apername, apername_pps=apername_pps)
 
     # Exclude any TAMASK or TACONFIRM data by default
