@@ -138,7 +138,7 @@ def get_coron_apname(input):
         return apname
 
 def apname_full_frame_coron(apname):
-    """Retrieve full frame version of corongraphic aperture name"""
+    """Retrieve full frame version of coronagraphic aperture name"""
 
     if 'FULL' in apname:
         if 'FULL_WEDGE' in apname:
@@ -168,7 +168,7 @@ def get_files(indir, pid, obsid=None, sca=None, filt=None, file_type='uncal.fits
     file_type : str
         uncal.fits or rate.fits, etc
     exp_type : str
-        Exposure type such as NRC_TACQ, NRC_TACONFIRM
+        Exposure type such as NRC_TACQ, NRC_TACONFIRM, NRC_CORON, etc.
     vst_grp_act : str
         The _<gg><s><aa>_ portion of the file name.
         hdr0['VISITGRP'] + hdr0['SEQ_ID'] + hdr0['ACT_ID']
