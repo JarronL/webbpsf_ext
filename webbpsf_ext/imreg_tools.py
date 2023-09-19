@@ -79,6 +79,7 @@ def get_coron_apname(input):
         # Aperture names
         apname = input['APERNAME']
         apname_pps = input['PPS_APER']
+        subarray = input['SUBARRAY']
     else:
         # Data model meta info
         meta = input.meta
@@ -86,12 +87,13 @@ def get_coron_apname(input):
         # Aperture names
         apname = meta.aperture.name
         apname_pps = meta.aperture.pps_name
+        subarray = meta.subarray.name
 
-    # print(apname, apname_pps)
+    # print(apname, apname_pps, subarray)
 
     # No need to do anything if the aperture names are the same
     # Also skip if MASK not in apname_pps
-    if (apname==apname_pps) or ('MASK' not in apname_pps):
+    if ((apname==apname_pps) or ('MASK' not in apname_pps)) and ('400X256' not in subarray):
         apname_new = apname
     else:
         # Should only get here if coron mask and apname doesn't match PPS
@@ -102,7 +104,7 @@ def get_coron_apname(input):
         # Get subarray info
         # Sometimes apname erroneously has 'FULL' in it
         # So, first for subarray info in apname_pps 
-        if ('400X256' in apname_pps):
+        if ('400X256' in apname_pps) or ('400X256' in subarray):
             apn0 = f'{sca}_400X256'
         elif ('FULL' in apname_pps):
             apn0 = f'{sca}_FULL'
