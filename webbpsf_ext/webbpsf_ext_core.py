@@ -1060,8 +1060,10 @@ class MIRI_ext(webbpsf_MIRI):
             Name of input filter.
         pupil_mask : str, None
             Pupil elements such as grisms or lyot stops (default: None).
+            'MASKFQPM', 'MASKLYOT', or 'P750L'
         image_mask : str, None
             Specify which coronagraphic occulter (default: None).
+            'FQPM1065', 'FQPM1140', 'FQPM1550', 'LYOT2300', or 'LRS slit'.
         fov_pix : int
             Size of the PSF FoV in pixels (real SW or LW pixels).
             The defaults depend on the type of observation.
@@ -1780,7 +1782,8 @@ def _init_inst(self, filter=None, pupil_mask=None, image_mask=None,
         self.filter = filter
 
     # For NIRCam, update detector depending mask and filter
-    self._update_coron_detector()
+    if self.name=='NIRCam':
+        self._update_coron_detector()
         
     # Don't include SI WFE error for MIRI coronagraphy
     if self.name=='MIRI':
