@@ -1907,3 +1907,175 @@ def bp_fix(im, sigclip=5, niter=1, pix_shift=1, rows=True, cols=True,
         return arr_out, maskout
     else:
         return arr_out
+
+
+def add_ipc(im, alpha_min=0.0065, alpha_max=None, kernel=None):
+    """Convolve image with IPC kernel
+    
+    Given an image in electrons, apply IPC convolution.
+    NIRCam average IPC values (alpha) reported 0.005 - 0.006.
+    
+    Parameters
+    ==========
+    im : ndarray
+        Input image or array of images.
+    alpha_min : float
+        Minimum coupling coefficient between neighboring pixels.
+        If alpha_max is None, then this is taken to be constant
+        with respect to signal levels.
+    alpha_max : float or None
+        Maximum value of coupling coefficent. If specificed, then
+        coupling between pixel pairs is assumed to vary depending
+        on signal values. See Donlon et al., 2019, PASP 130.
+    kernel : ndarry or None
+        Option to directly specify the convolution kernel. 
+        `alpha_min` and `alpha_max` are ignored.
+    
+    Examples
+    ========
+    Constant Kernel
+
+        >>> im_ipc = add_ipc(im, alpha_min=0.0065)
+
+    Constant Kernel (manual)
+
+        >>> alpha = 0.0065
+        >>> k = np.array([[0,alpha,0], [alpha,1-4*alpha,alpha], [0,alpha,0]])
+        >>> im_ipc = add_ipc(im, kernel=k)
+
+    Signal-dependent Kernel
+
+        >>> im_ipc = add_ipc(im, alpha_min=0.0065, alpha_max=0.0145)
+
+    """
+    
+    sh = im.shape
+    ndim = len(sh)
+    if ndim==2:
+        im = im.reshape([1,sh[0],sh[1]])
+        sh = im.shape
+    
+    if kernel is None:
+        xp = yp = 1
+    else:
+        yp, xp = np.array(kernel.shape) / 2
+        yp, xp = int(yp), int(xp)
+
+    # Pad images to have a pixel border of zeros
+    im_pad = np.pad(im, ((0,0), (yp,yp), (xp,xp)), 'symmetric')
+    
+    # Check for custom kernel (overrides alpha values)
+    if (kernel is not None) or (alpha_max is None):
+        # Reshape to stack all images along horizontal axes
+        im_reshape = im_pad.reshape([-1, im_pad.shape[-1]])
+    
+        if kernel is None:
+            kernel = np.array([[0.0, alpha_min, 0.0],
+                               [alpha_min, 1.-4*alpha_min, alpha_min],
+                               [0.0, alpha_min, 0.0]])
+    
+        # Convolve IPC kernel with images
+        im_ipc = convolve(im_reshape, kernel).reshape(im_pad.shape)
+    
+    # Exponential coupling strength
+    # Equation 7 of Donlon et al. (2018)
+    else:
+        arrsqr = im_pad**2
+
+        amin = alpha_min
+        amax = alpha_max
+        ascl = (amax-amin) / 2
+        
+        alpha_arr = []
+        for ax in [1,2]:
+            # Shift by -1
+            diff = np.abs(im_pad - np.roll(im_pad, -1, axis=ax))
+            sumsqr = arrsqr + np.roll(arrsqr, -1, axis=ax)
+            
+            imtemp = amin + ascl * np.exp(-diff/20000) + \
+                     ascl * np.exp(-np.sqrt(sumsqr / 2) / 10000)
+            alpha_arr.append(imtemp)
+            # Take advantage of symmetries to shift in other direction
+            alpha_arr.append(np.roll(imtemp, 1, axis=ax))
+            
+        alpha_arr = np.array(alpha_arr)
+
+        # Flux remaining in parent pixel
+        im_ipc = im_pad * (1 - alpha_arr.sum(axis=0))
+        # Flux shifted to adjoining pixels
+        for i, (shft, ax) in enumerate(zip([-1,+1,-1,+1], [1,1,2,2])):
+            im_ipc += alpha_arr[i]*np.roll(im_pad, shft, axis=ax)
+        del alpha_arr
+
+    # Trim excess
+    im_ipc = im_ipc[:,yp:-yp,xp:-xp]
+    if ndim==2:
+        im_ipc = im_ipc.squeeze()
+    return im_ipc
+    
+    
+def add_ppc(im, ppc_frac=0.002, nchans=4, kernel=None,
+    same_scan_direction=False, reverse_scan_direction=False,
+    in_place=False):
+    """ Add Post-Pixel Coupling (PPC)
+    
+    This effect is due to the incomplete settling of the analog
+    signal when the ADC sample-and-hold pulse occurs. The measured
+    signals for a given pixel will have a value that has not fully
+    transitioned to the real analog signal. Mathematically, this
+    can be treated in the same way as IPC, but with a different
+    convolution kernel.
+    
+    Parameters
+    ==========
+    im : ndarray
+        Image or array of images
+    ppc_frac : float
+        Fraction of signal contaminating next pixel in readout. 
+    kernel : ndarry or None
+        Option to directly specify the convolution kernel, in
+        which case `ppc_frac` is ignored.
+    nchans : int
+        Number of readout output channel amplifiers.
+    same_scan_direction : bool
+        Are all the output channels read in the same direction?
+        By default fast-scan readout direction is ``[-->,<--,-->,<--]``
+        If ``same_scan_direction``, then all ``-->``
+    reverse_scan_direction : bool
+        If ``reverse_scan_direction``, then ``[<--,-->,<--,-->]`` or all ``<--``
+    in_place : bool
+        Apply in place to input image.
+    """
+
+                       
+    sh = im.shape
+    ndim = len(sh)
+    if ndim==2:
+        im = im.reshape([1,sh[0],sh[1]])
+        sh = im.shape
+
+    nz, ny, nx = im.shape
+    chsize = nx // nchans
+    
+    # Do each channel separately
+    if kernel is None:
+        kernel = np.array([[0.0, 0.0, 0.0],
+                           [0.0, 1.0-ppc_frac, ppc_frac],
+                           [0.0, 0.0, 0.0]])
+
+    res = im if in_place else im.copy()
+    for ch in np.arange(nchans):
+        if same_scan_direction:
+            k = kernel[:,::-1] if reverse_scan_direction else kernel
+        elif np.mod(ch,2)==0:
+            k = kernel[:,::-1] if reverse_scan_direction else kernel
+        else:
+            k = kernel if reverse_scan_direction else kernel[:,::-1]
+
+        x1 = chsize*ch
+        x2 = x1 + chsize
+        res[:,:,x1:x2] = add_ipc(im[:,:,x1:x2], kernel=k)
+    
+    if ndim==2:
+        res = res.squeeze()
+    return res

@@ -919,6 +919,39 @@ def get_expected_loc(input, return_indices=True, add_sroffset=None):
     else:
         return xsci_exp, ysci_exp
 
+def get_gfit_cen(im, xysub=11, return_sci=False):
+    """Gaussion fit to get centroid position"""
+    
+    from astropy.modeling import models, fitting
+
+    # Set NaNs to 0
+    ind_nan = np.isnan(im)
+    im[ind_nan] = 0
+
+    im_sub, (x1, x2, y1, y2) = crop_image(im, xysub, return_xy=True)
+
+    # Add crop indices create grid in terms of full image indices
+    xv = np.arange(x1, x2)
+    yv = np.arange(y1, y2)
+    xgrid, ygrid = np.meshgrid(xv, yv)
+    xc, yc = (xv.mean(), yv.mean())
+
+    # Fit the data using astropy.modeling
+    p_init = models.Gaussian2D(amplitude=im_sub.max(), x_mean=xc, y_mean=yc, x_stddev=1, y_stddev=2)
+    fit_p = fitting.LevMarLSQFitter()
+
+    pfit = fit_p(p_init, xgrid, ygrid, im_sub)
+    xind_cen = pfit.x_mean.value
+    yind_cen = pfit.y_mean.value
+
+    # Return to NaNs
+    im[ind_nan] = np.nan
+
+    if return_sci:
+        return xind_cen+1, yind_cen+1
+    else:
+        return xind_cen, yind_cen
+
 def get_com(im, halfwidth=7, return_sci=False, **kwargs):
     """Center of mass centroiding"""
     
@@ -990,7 +1023,7 @@ def get_loc_all(files, indir, find_func=get_com,
         
     return np.array(star_locs)
 
-def recenter_psf(psfs_over, niter=3, halfwidth=7):
+def recenter_psf(psfs_over, niter=3, halfwidth=7, gfit=True):
     """Use center of mass algorithm to relocate PSF to center of image.
     
     Returns recentered PSFs and shift values used.
@@ -1006,7 +1039,7 @@ def recenter_psf(psfs_over, niter=3, halfwidth=7):
         Default is 7, which is a 15x15 box.
     """
 
-    from webbpsf_ext.image_manip import fourier_imshift
+    from .image_manip import fourier_imshift
 
     ndim = len(psfs_over.shape)
     if ndim==2:
@@ -1018,7 +1051,10 @@ def recenter_psf(psfs_over, niter=3, halfwidth=7):
         xc_psf, yc_psf = get_im_cen(psf)
         xsh_sum, ysh_sum = (0, 0)
         for j in range(niter):
-            xc, yc = get_com(psf, halfwidth=halfwidth, return_sci=False)
+            if gfit:
+                xc, yc = get_gfit_cen(psf, xysub=2*halfwidth+1, return_sci=False)
+            else:
+                xc, yc = get_com(psf, halfwidth=halfwidth, return_sci=False)
             xsh, ysh = (xc_psf - xc, yc_psf - yc)
             psf = fourier_imshift(psf, xsh, ysh)
             xsh_sum += xsh
@@ -1099,8 +1135,8 @@ def crop_observation(im_full, ap, xysub, xyloc=None, delx=0, dely=0,
         for `fshift`.
     return_xy : bool
         If True, then return the x and y indices used to crop the
-        image prior to any shifting from `delx` and `dely`. 
-        Default is False.
+        image prior to any shifting from `delx` and `dely`; 
+        (x1, x2, y1, y2). Default is False.
     fill_val : float
         Value to use for filling in the empty pixels after shifting.
         Default = np.nan.
@@ -1245,8 +1281,8 @@ def crop_image(im, xysub, xyloc=None, **kwargs):
         for `fshift`.
     return_xy : bool
         If True, then return the x and y indices used to crop the
-        image prior to any shifting from `delx` and `dely`. 
-        Default is False.
+        image prior to any shifting from `delx` and `dely`; 
+        (x1, x2, y1, y2). Default is False.
     fill_val : float
         Value to use for filling in the empty pixels after shifting.
         Default = np.nan.
@@ -1392,7 +1428,7 @@ def gen_psf_offsets(psf, crop=65, xlim_pix=(-3,3), ylim_pix=(-3,3), dxy=0.05,
         single output amplifier.
     """
     
-    from pynrc.simul.ngNRC import add_ipc, add_ppc
+    from .image_manip import add_ipc, add_ppc
 
     psf_is_even = np.mod(psf.shape[0] / psf_osamp, 2) == 0
     psf_is_odd = not psf_is_even
@@ -1729,7 +1765,7 @@ def find_pix_offsets(imsub_arr, psfs, psf_osamp=1, kipc=None, kppc=None,
     # from webbpsf_ext.image_manip import frebin
     # from webbpsf_ext.imreg_tools import find_offsets_phase
     # from webbpsf_ext.imreg_tools import gen_psf_offsets, find_offsets2
-    from pynrc.simul.ngNRC import add_ipc, add_ppc
+    from .image_manip import add_ipc, add_ppc
 
     sh_orig = imsub_arr.shape
     if len(sh_orig)==2:

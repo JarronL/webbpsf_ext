@@ -1611,7 +1611,7 @@ class MIRI_ext(webbpsf_MIRI):
             the propagation. This is useful if you want to e.g. examine the intensity in the Lyot plane for a
             coronagraphic propagation.
         normalize : string
-            Desired normalization for output PSFs. See doc string for OpticalSystem.calc_psf. Default is
+            Desired normalization for output PSFs. See doc string for `OpticalSystem.calc_psf`. Default is
             to normalize the entrance pupil to have integrated total intensity = 1.
         add_distortion : bool
             If True, will add 2 new extensions to the PSF HDUlist object. The 2nd extension
