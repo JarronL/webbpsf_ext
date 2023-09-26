@@ -650,7 +650,7 @@ def read_ta_files(indir, pid, obsid, sca, file_type='rate.fits',
         d = ta_dict[k]
 
         f = d['file']
-        print(f)
+        # print(f)
         hdul = fits.open(f)
         # Get data and take diff if uncal
         data = hdul['SCI'].data.astype('float')
