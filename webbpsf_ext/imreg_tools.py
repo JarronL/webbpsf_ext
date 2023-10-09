@@ -225,9 +225,10 @@ def get_files(indir, pid, obsid=None, sca=None, filt=None, file_type='uncal.fits
         files2 = []
         for f in allfiles:
             hdr = fits.getheader(os.path.join(indir,f))
-            if hdr.get('VISITGRP', 'none')==vst_grp_act[0:2] and \
-               hdr.get('SEQ_ID', 'none')==vst_grp_act[2] and \
-               hdr.get('ACT_ID', 'none')==vst_grp_act[3:]:
+            if hdr.get('VISITGRP', 'none')==vst_grp_act[0:2].upper() and \
+               hdr.get('SEQ_ID', 'none')==vst_grp_act[2].upper() and \
+               hdr.get('ACT_ID', 'none')==vst_grp_act[3:].upper():
+                print(f)
                 files2.append(f)
         allfiles = np.array(files2)
 

@@ -1776,7 +1776,7 @@ def expand_mask(bpmask, npix, grow_diagonal=False):
     
     Parameters
     ==========
-    bpmask : 2D array
+    bpmask : 2D, 3D+ array
         Boolean bad pixel mask
     npix : int
         Number of pixels to expand mask by
@@ -1794,6 +1794,18 @@ def expand_mask(bpmask, npix, grow_diagonal=False):
 
     if npix==0:
         return bpmask
+    
+    # Check dimensions
+    ndim = bpmask.ndim
+    # If 3D or more, then apply recursively
+    if ndim>2:
+        # Reshape into cube and expand image by image
+        sh_orig = bpmask.shape
+        ny, nx = bpmask.shape[-2:]
+        bpmask.reshape([-1,ny,nx])
+
+        res = np.array([expand_mask(im, npix, grow_diagonal=grow_diagonal) for im in bpmask])
+        return res.reshape(sh_orig)
 
     # Expand mask by npix pixels, including corners
     if grow_diagonal:

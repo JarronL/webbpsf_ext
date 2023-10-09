@@ -5,7 +5,7 @@ from astropy.io import fits, ascii
 
 from webbpsf_ext.maths import jl_poly
 
-from .utils import webbpsf, S, get_detname
+from .utils import S
 
 import logging
 _log = logging.getLogger('webbpsf_ext')
@@ -50,6 +50,8 @@ def miri_filter(filter, **kwargs):
     Read in MIRI filters from webbpsf and scale to rough peak 
     transmission throughput as indicated on JDOCS.
     """
+
+    import webbpsf
     
     filter = filter.upper()
     filt_dir = Path(webbpsf.utils.get_webbpsf_data_path()) / 'MIRI/filters/'
@@ -289,6 +291,8 @@ def nircam_grism_th(module, grism_order=1, wave_out=None, return_bp=False):
 def qe_nircam(sca, wave=None, flight=True):
     """NIRCam QE Curves"""
 
+    from .utils import get_detname
+
     if flight:
         return qe_nircam_flight(sca, wave=wave)
     else:
@@ -301,6 +305,7 @@ def qe_nircam_flight(sca, wave=None):
     """NIRCam Flight QE Curve Estimates"""
 
     from .maths import jl_poly
+    from .utils import get_detname
 
     sca = get_detname(sca)
     cf_dict = {
@@ -441,6 +446,8 @@ def qe_nirspec(wave=None):
 def _sca_throughput_scaling(sca, filter):
     """Empirical scale factors necessary to match P330E observations"""
 
+    from .utils import get_detname
+
     sca = get_detname(sca)
 
     # SWA
@@ -557,6 +564,9 @@ def nircam_filter(filter, pupil=None, mask=None, module=None, sca=None, ND_acq=F
     :mod:`pysynphot.obsbandpass`
         A Pysynphot bandpass object.
     """
+
+    from .utils import get_detname
+
     if sca is None and module is None:
         # Set default module
         module = 'A'
