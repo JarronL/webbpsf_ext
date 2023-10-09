@@ -291,8 +291,7 @@ def get_save_dir(pid):
     save_dir = os.path.join(mast_proc_dir, f'{pid:05d}/')
 
     # Create directory if it doesn't exist
-    if not os.path.isdir(save_dir):
-        os.makedirs(save_dir)
+    os.makedirs(save_dir, exist_ok=True)
 
     return save_dir
 
