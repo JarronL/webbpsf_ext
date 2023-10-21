@@ -626,7 +626,14 @@ class source_spectrum(object):
         # Stores input as astropy table.
         if is_str and (not os.path.exists(self.votable_input)):
             _log.warning('VOTable does not exist. Downloading from Vizier...')
-            self.votable_input = download_votable(self.name, **kwargs)
+            tbl = download_votable(self.name, **kwargs)
+
+            # Save VOTable to file
+            save_name = self.votable_input
+            _log.info('Writing VOTable to {}'.format(save_name))
+            tbl.write(save_name, format='votable')
+
+            self.votable_input = tbl
 
     def _gen_table(self):
         """Read VOTable and convert to astropy table"""
