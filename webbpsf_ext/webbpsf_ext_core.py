@@ -3012,9 +3012,10 @@ def _gen_psf_coeff(self, nproc=None, wfe_drift=0, force=False, save=True,
         # Crop by oversampling amount if use_fov_pix_plus1
         if self.use_fov_pix_plus1:
             osamp_half = self.oversample // 2
-            data = coeff_all[:, osamp_half:-osamp_half, osamp_half:-osamp_half]
+            coeff_all = coeff_all[:, osamp_half:-osamp_half, osamp_half:-osamp_half]
             hdr['FOVPIX'] = (self.fov_pix, 'WebbPSF pixel FoV')
-        self.psf_coeff = data
+            
+        self.psf_coeff = coeff_all
         self.psf_coeff_header = hdr
 
     # Create an extras dictionary for debugging purposes
