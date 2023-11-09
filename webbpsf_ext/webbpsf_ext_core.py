@@ -222,7 +222,27 @@ class NIRCam_ext(webbpsf_NIRCam):
     @oversample.setter
     def oversample(self, value):
         self._oversample = value
-    
+
+    @property
+    def use_fov_pix_plus1(self):
+        """ 
+        If fov_pix is even, then set use_fov_pix_plus1 to True.
+        This will create PSF coefficients with an odd number of pixels
+        that are then cropped to fov_pix so we don't have to generate the
+        same data twice.
+        """
+        if self._use_fov_pix_plus1 is None:
+            if np.mod(self.oversample, 2)==0 and np.mod(self.fov_pix, 2)==0:
+                use_fov_pix_plus1 = True 
+            else: 
+                use_fov_pix_plus1 = False
+        else:
+            use_fov_pix_plus1 = self._use_fov_pix_plus1
+        return use_fov_pix_plus1
+    @use_fov_pix_plus1.setter
+    def use_fov_pix_plus1(self, value):
+        self._use_fov_pix_plus1 = value
+
     @property
     def wave_fit(self):
         """Wavelength range to fit"""
@@ -1149,6 +1169,23 @@ class MIRI_ext(webbpsf_MIRI):
         self._oversample = value
     
     @property
+    def use_fov_pix_plus1(self):
+        """ 
+        If fov_pix is even, then set use_fov_pix_plus1 to True.
+        This will create PSF coefficients with an odd number of pixels
+        that are then cropped to fov_pix so we don't have to generate the
+        same data twice.
+        """
+        if self._use_fov_pix_plus1 is None:
+            use_fov_pix_plus1 = True if np.mod(self.oversample, 2)==0 else False
+        else:
+            use_fov_pix_plus1 = self._use_fov_pix_plus1
+        return use_fov_pix_plus1
+    @use_fov_pix_plus1.setter
+    def use_fov_pix_plus1(self, value):
+        self._use_fov_pix_plus1 = value
+
+    @property
     def wave_fit(self):
         """Wavelength range to fit"""
         if self.quick:
@@ -1803,13 +1840,12 @@ def _init_inst(self, filter=None, pupil_mask=None, image_mask=None,
     self.options['add_ipc'] = False
     
     # Settings for fov_pix and oversample
-    # Default odd for normal imaging, even for coronagraphy
+    # Default odd
     if fov_pix is None:
-        # TODO: Do these even/odd settings make sense?
-        # fov_pix = 128 if self.is_coron else 129
         fov_pix = 257
     self._fov_pix = fov_pix
     self._oversample = oversample
+    self._use_fov_pix_plus1 = None
 
     # Legendre polynomials are more stable
     # self.use_legendre = True
@@ -1960,7 +1996,7 @@ def _gen_save_name(self, wfe_drift=0):
     fmp_str = f'{fstr}{pstr}_{mstr}'
 
     # PSF image size and sampling
-    fov_pix = self.fov_pix
+    fov_pix = self.fov_pix + 1 if self.use_fov_pix_plus1 else self.fov_pix
     osamp = self.oversample
 
     if self.name=='NIRCam':
@@ -2583,7 +2619,8 @@ def _inst_copy(self):
         'image_mask': self.image_mask, 
         'fov_pix'   : self.fov_pix, 
         'oversample': self.oversample,
-        'auto_gen_coeffs': False
+        'auto_gen_coeffs': False,
+        'use_fov_pix_plus1' : False,
     }
 
     # Init same subclass
@@ -2723,16 +2760,6 @@ def _gen_psf_coeff(self, nproc=None, wfe_drift=0, force=False, save=True,
     save_name = self.save_name
     outfile = str(self.save_dir / save_name)
 
-    # # TODO: If file doesn't exist, check for fov_pix+1, then crop for even oversampling
-    # use_fov_pix_plus1 = False
-    # if not os.path.exists(outfile) and np.mod(self.oversample, 2)==0 and (not force):
-    #     pstr_old = f'pix{self.fov_pix}'
-    #     pstr_new = f'pix{self.fov_pix+1}'
-    #     outfile_p1 = outfile.replace(pstr_old, pstr_new)
-    #     if os.path.exists(outfile_p1):
-    #         outfile = outfile_p1
-    #         use_fov_pix_plus1 = True
-
     # Load data from already saved FITS file
     if os.path.exists(outfile) and (not force):
         if return_extras:
@@ -2744,11 +2771,6 @@ def _gen_psf_coeff(self, nproc=None, wfe_drift=0, force=False, save=True,
         hdr  = hdul[0].header
         hdul.close()
 
-        # # TODO: Crop by oversampling amount if use_fov_pix_plus1
-        # if use_fov_pix_plus1:
-        #     osamp_half = self.oversample // 2
-        #     data = data[:, osamp_half:-osamp_half, osamp_half:-osamp_half]
-
         # Output if return_results=True, otherwise save to attributes
         if return_results:
             return data, hdr
@@ -2757,6 +2779,12 @@ def _gen_psf_coeff(self, nproc=None, wfe_drift=0, force=False, save=True,
                 del self.psf_coeff, self.psf_coeff_header
             except AttributeError:
                 pass
+
+            # Crop by oversampling amount if use_fov_pix_plus1
+            if self.use_fov_pix_plus1:
+                osamp_half = self.oversample // 2
+                data = data[:, osamp_half:-osamp_half, osamp_half:-osamp_half]
+                hdr['FOVPIX'] = (self.fov_pix, 'WebbPSF pixel FoV')
 
             self.psf_coeff = data
             self.psf_coeff_header = hdr
@@ -2775,7 +2803,7 @@ def _gen_psf_coeff(self, nproc=None, wfe_drift=0, force=False, save=True,
     npsf = self.npsf
     waves = np.linspace(w1, w2, npsf)
         
-    fov_pix = self.fov_pix 
+    fov_pix = self.fov_pix + 1 if self.use_fov_pix_plus1 else self.fov_pix
     oversample = self.oversample 
             
     # Get OPD info and convert to OTE LM
@@ -2807,6 +2835,7 @@ def _gen_psf_coeff(self, nproc=None, wfe_drift=0, force=False, save=True,
     # swapping overheads and limitations.
     # bar_offset is also explicitly set 0
     inst_copy = _inst_copy(self) if nproc > 1 else self
+    inst_copy.fov_pix = fov_pix
 
     t0 = time.time()
     # Setup the multiprocessing pool and arguments to pass to each pool
@@ -2823,6 +2852,7 @@ def _gen_psf_coeff(self, nproc=None, wfe_drift=0, force=False, save=True,
             if hdu_arr[0] is None:
                 raise RuntimeError('Returned None values. Issue with multiprocess or WebbPSF??')
         except Exception as e:
+            setup_logging(log_prev, verbose=False)
             _log.error('Caught an exception during multiprocess.')
             _log.info('Closing multiprocess pool.')
             raise e
@@ -2978,8 +3008,16 @@ def _gen_psf_coeff(self, nproc=None, wfe_drift=0, force=False, save=True,
             del self.psf_coeff, self.psf_coeff_header
         except AttributeError:
             pass
-        self.psf_coeff = coeff_all
+
+        # Crop by oversampling amount if use_fov_pix_plus1
+        if self.use_fov_pix_plus1:
+            osamp_half = self.oversample // 2
+            data = coeff_all[:, osamp_half:-osamp_half, osamp_half:-osamp_half]
+            hdr['FOVPIX'] = (self.fov_pix, 'WebbPSF pixel FoV')
+        self.psf_coeff = data
         self.psf_coeff_header = hdr
+
+    # Create an extras dictionary for debugging purposes
     extras_dict = {'images' : images, 'waves': waves}
 
     # Options to return results from function
@@ -3053,6 +3091,9 @@ def _gen_wfedrift_coeff(self, force=False, save=True, wfe_list=[0,1,2,5,10,20,40
     if self.fov_pix>fov_max:
         self.fov_pix = fov_max if (self.fov_pix % 2 == 0) else fov_max + 1
 
+    # Are computed PSFs slightly larger than requested fov_pix?
+    use_fov_pix_plus1 = self.use_fov_pix_plus1
+
     # Name to save array of oversampled coefficients
     save_dir = self.save_dir
     save_name = os.path.splitext(self.save_name)[0] + '_wfedrift.npz'
@@ -3076,6 +3117,17 @@ def _gen_wfedrift_coeff(self, force=False, save=True, wfe_list=[0,1,2,5,10,20,40
         if return_results:
             return wfe_drift, wfe_drift_off, wfe_drift_lxmap
         else:
+            # Crop by oversampling amount if use_fov_pix_plus1
+            if use_fov_pix_plus1:
+                osamp_half = self.oversample // 2
+                wfe_drift = wfe_drift[:, :, 
+                                      osamp_half:-osamp_half, 
+                                      osamp_half:-osamp_half]
+                if wfe_drift_off is not None:
+                    wfe_drift_off = wfe_drift_off[:, :, 
+                                                  osamp_half:-osamp_half, 
+                                                  osamp_half:-osamp_half]
+
             self._psf_coeff_mod['wfe_drift'] = wfe_drift
             self._psf_coeff_mod['wfe_drift_off'] = wfe_drift_off
             self._psf_coeff_mod['wfe_drift_lxmap'] = wfe_drift_lxmap
@@ -3095,36 +3147,45 @@ def _gen_wfedrift_coeff(self, force=False, save=True, wfe_list=[0,1,2,5,10,20,40
 
     log_prev = conf.logging_level
     setup_logging('WARN', verbose=False)
-    # Calculate residuals
-    cf_wfe = []
-    for wfe_drift in tqdm(wfe_list, leave=False, desc='WFE Drift'):
-        cf, _ = self.gen_psf_coeff(wfe_drift=wfe_drift, force=True, save=False, return_results=True, **kwargs)
-        cf_wfe.append(cf)
-    cf_wfe = np.asarray(cf_wfe)
+    # Calculate coefficients for each WFE drift
+    try:
+        cf_wfe = []
+        for wfe_drift in tqdm(wfe_list, leave=False, desc='WFE Drift'):
+            cf, _ = self.gen_psf_coeff(wfe_drift=wfe_drift, force=True, save=False, return_results=True, **kwargs)
+            cf_wfe.append(cf)
+        cf_wfe = np.asarray(cf_wfe)
+    except Exception as e:
+        self.fov_pix = fov_pix_orig
+        setup_logging(log_prev, verbose=False)
+        raise e
 
     # For coronagraphic observations, produce an off-axis PSF by turning off mask
-    cf_fit_off = cf_wfe_off = None
+    cf_fit_off = None
+    cf_wfe_off = None
     if self.is_coron:
         image_mask_orig = self.image_mask
         apername_orig = self._aperturename
         self.image_mask = None
         
-        cf_wfe_off = []
-        for wfe_drift in tqdm(wfe_list, leave=False, desc="Off-Axis"):
-            cf, _ = self.gen_psf_coeff(wfe_drift=wfe_drift, force=True, save=False, return_results=True, **kwargs)
-            cf_wfe_off.append(cf)
-        cf_wfe_off = np.asarray(cf_wfe_off)
-        # Return to original values
-        self.image_mask = image_mask_orig
-        self.aperturename = apername_orig
+        try:
+            cf_wfe_off = []
+            for wfe_drift in tqdm(wfe_list, leave=False, desc="Off-Axis"):
+                cf, _ = self.gen_psf_coeff(wfe_drift=wfe_drift, force=True, save=False, return_results=True, **kwargs)
+                cf_wfe_off.append(cf)
+            cf_wfe_off = np.asarray(cf_wfe_off)
+        except Exception as e:
+            raise e
+        finally:
+            # Return to original values
+            self.image_mask = image_mask_orig
+            self.aperturename = apername_orig
+            self.fov_pix = fov_pix_orig
+            setup_logging(log_prev, verbose=False)
 
-        # Return fov_pix to original size
-        self.fov_pix = fov_pix_orig
-        setup_logging(log_prev, verbose=False)
         if return_raw:
             return cf_wfe, cf_wfe_off, wfe_list
 
-        # Get residuals
+        # Get residuals of off-axis PSF
         cf_wfe_off = cf_wfe_off - cf_wfe_off[0]
 
         # Fit each pixel with a polynomial and save the coefficient
@@ -3154,6 +3215,8 @@ def _gen_wfedrift_coeff(self, force=False, save=True, wfe_list=[0,1,2,5,10,20,40
     cf_fit = jl_poly_fit(wfe_list, cf_wfe, deg=4, use_legendre=True, lxmap=lxmap)
     cf_fit = cf_fit.reshape([-1, cf_shape[0], cf_shape[1], cf_shape[2]])
 
+    del cf_wfe
+
     if save:
         _log.info(f"Saving to {outname}")
         np.savez(outname, wfe_drift=cf_fit, wfe_drift_off=cf_fit_off, wfe_drift_lxmap=lxmap)
@@ -3163,6 +3226,13 @@ def _gen_wfedrift_coeff(self, force=False, save=True, wfe_list=[0,1,2,5,10,20,40
     if return_results:
         return cf_fit, cf_fit_off, lxmap
     else:
+        # Crop by oversampling amount if use_fov_pix_plus1
+        if use_fov_pix_plus1:
+            osamp_half = self.oversample // 2
+            cf_fit = cf_fit[:, :, osamp_half:-osamp_half, osamp_half:-osamp_half]
+            if cf_fit_off is not None:
+                cf_fit_off = cf_fit_off[:, :, osamp_half:-osamp_half, osamp_half:-osamp_half]
+                    
         self._psf_coeff_mod['wfe_drift'] = cf_fit
         self._psf_coeff_mod['wfe_drift_off'] = cf_fit_off
         self._psf_coeff_mod['wfe_drift_lxmap'] = lxmap
@@ -3219,6 +3289,9 @@ def _gen_wfefield_coeff(self, force=False, save=True, return_results=False, retu
     if self.fov_pix>fov_max:
         self.fov_pix = fov_max if (self.fov_pix % 2 == 0) else fov_max + 1
 
+    # Are computed PSFs slightly larger than requested fov_pix?
+    use_fov_pix_plus1 = self.use_fov_pix_plus1
+
     # Name to save array of oversampled coefficients
     save_dir = self.save_dir
     save_name = os.path.splitext(self.save_name)[0] + '_wfefields.npz'
@@ -3233,7 +3306,13 @@ def _gen_wfefield_coeff(self, force=False, save=True, return_results=False, retu
         if return_results:
             return out['arr_0'], out['arr_1'], out['arr_2'], out['arr_3']
         else:
-            self._psf_coeff_mod['si_field'] = out['arr_0']
+            si_field = out['arr_0']
+            # Crop by oversampling amount if use_fov_pix_plus1
+            if use_fov_pix_plus1:
+                osamp_half = self.oversample // 2
+                si_field = si_field[:, :, :, osamp_half:-osamp_half, osamp_half:-osamp_half]
+
+            self._psf_coeff_mod['si_field'] = si_field
             self._psf_coeff_mod['si_field_v2grid'] = out['arr_1']
             self._psf_coeff_mod['si_field_v3grid'] = out['arr_2']
             self._psf_coeff_mod['si_field_apname'] = out['arr_3'].flatten()[0]
@@ -3326,22 +3405,25 @@ def _gen_wfefield_coeff(self, force=False, save=True, return_results=False, retu
     x0, y0 = self.detector_position
 
     # Calculate new coefficients at each position
-    cf_fields = []
-    # Create progress bar object
-    pbar = tqdm(zip(xsci_all, ysci_all), total=npos, desc='Field Points')
-    for xsci, ysci in pbar:
-        # Update progress bar description
-        pbar.set_description(f"xsci, ysci = ({xsci:.0f}, {ysci:.0f})")
-        # Update saved detector position and calculate PSF coeff
-        self.detector_position = (xsci, ysci)
-        cf, _ = self.gen_psf_coeff(force=True, save=False, return_results=True, **kwargs)
-        cf_fields.append(cf)
-    cf_fields = np.asarray(cf_fields)
-
-    # Reset to initial values
-    self.detector_position = (x0,y0)
-    self.fov_pix = fov_pix_orig
-    setup_logging(log_prev, verbose=False)
+    try:
+        cf_fields = []
+        # Create progress bar object
+        pbar = tqdm(zip(xsci_all, ysci_all), total=npos, desc='Field Points')
+        for xsci, ysci in pbar:
+            # Update progress bar description
+            pbar.set_description(f"xsci, ysci = ({xsci:.0f}, {ysci:.0f})")
+            # Update saved detector position and calculate PSF coeff
+            self.detector_position = (xsci, ysci)
+            cf, _ = self.gen_psf_coeff(force=True, save=False, return_results=True, **kwargs)
+            cf_fields.append(cf)
+        cf_fields = np.asarray(cf_fields)
+    except Exception as e:
+        raise e
+    finally:
+        # Reset to initial values
+        self.detector_position = (x0,y0)
+        self.fov_pix = fov_pix_orig
+        setup_logging(log_prev, verbose=False)
 
     # Return raw results for further analysis
     if return_raw:
@@ -3370,6 +3452,11 @@ def _gen_wfefield_coeff(self, force=False, save=True, return_results=False, retu
     if return_results:
         return res, v2grid, v3grid, apname
     else:
+        # Crop by oversampling amount if use_fov_pix_plus1
+        if use_fov_pix_plus1:
+            osamp_half = self.oversample // 2
+            res = res[:, :, :, osamp_half:-osamp_half, osamp_half:-osamp_half]
+
         self._psf_coeff_mod['si_field'] = res
         self._psf_coeff_mod['si_field_v2grid'] = v2grid
         self._psf_coeff_mod['si_field_v3grid'] = v3grid
@@ -3401,6 +3488,9 @@ def _gen_wfemask_coeff(self, force=False, save=True, large_grid=None,
     if self.fov_pix>fov_max:
         self.fov_pix = fov_max if (self.fov_pix % 2 == 0) else fov_max + 1
 
+    # Are computed PSFs slightly larger than requested fov_pix?
+    use_fov_pix_plus1 = self.use_fov_pix_plus1
+
     # Name to save array of oversampled coefficients
     save_dir = self.save_dir
     file_ext = '_large_grid_wfemask.npz' if large_grid else '_wfemask.npz'
@@ -3417,7 +3507,13 @@ def _gen_wfemask_coeff(self, force=False, save=True, large_grid=None,
         if return_results:
             return out['arr_0'], out['arr_1'], out['arr_2'], out['arr_3']
         else:
-            self._psf_coeff_mod['si_mask'] = out['arr_0']
+            si_mask = out['arr_0']
+            # Crop by oversampling amount if use_fov_pix_plus1
+            if use_fov_pix_plus1:
+                osamp_half = self.oversample // 2
+                si_mask = si_mask[:, :, :, osamp_half:-osamp_half, osamp_half:-osamp_half]
+
+            self._psf_coeff_mod['si_mask'] = si_mask
             self._psf_coeff_mod['si_mask_xgrid'] = out['arr_1']
             self._psf_coeff_mod['si_mask_ygrid'] = out['arr_2']
             self._psf_coeff_mod['si_mask_apname'] = out['arr_3'].flatten()[0]
@@ -3537,36 +3633,48 @@ def _gen_wfemask_coeff(self, force=False, save=True, large_grid=None,
             iwa = 0.1
             ind_sgd = (np.abs(yoff)<=iwa) & ~ind_zero
 
-    # Get PSF coefficients for each specified position
     log_prev = conf.logging_level
     setup_logging('WARN', verbose=False)
+
+    # Get PSF coefficients for each specified position
     npos = len(xoff)
     fov_pix_over = self.fov_pix * self.oversample
-    cf_all = np.zeros([npos, self.ndeg+1, fov_pix_over, fov_pix_over], dtype='float')
-    # Create progress bar object
-    pbar = trange(npos, leave=False, desc="Mask Offsets")
-    for i in pbar:
-        xv, yv = (xoff[i], yoff[i])
-        # Update descriptive label
-        pbar.set_description(f"xoff, yoff = ({xv:.2f}, {yv:.2f})")
+    try:
+        cf_all = np.zeros([npos, self.ndeg+1, fov_pix_over, fov_pix_over], dtype='float')
+        # Create progress bar object
+        pbar = trange(npos, leave=False, desc="Mask Offsets")
+        for i in pbar:
+            xv, yv = (xoff[i], yoff[i])
+            # Update descriptive label
+            pbar.set_description(f"xoff, yoff = ({xv:.2f}, {yv:.2f})")
 
-        self.options['coron_shift_x'] = xv
-        self.options['coron_shift_y'] = yv
+            self.options['coron_shift_x'] = xv
+            self.options['coron_shift_y'] = yv
 
-        # Pixel offset information
-        field_rot = 0 if self._rotation is None else self._rotation
-        xyoff_pix = np.array(xy_rot(-1*xv, -1*yv, -1*field_rot)) / self.pixelscale
-        self.detector_position = np.array(detector_position_orig) + xyoff_pix
+            # Pixel offset information
+            field_rot = 0 if self._rotation is None else self._rotation
+            xyoff_pix = np.array(xy_rot(-1*xv, -1*yv, -1*field_rot)) / self.pixelscale
+            self.detector_position = np.array(detector_position_orig) + xyoff_pix
 
-        # Skip SGD locations until later
-        if ind_sgd[i]==False:
-            cf, _ = self.gen_psf_coeff(return_results=True, force=True, save=False, **kwargs)
-            cf_all[i] = cf
-            # Save central coefficient to it's own variable
-            if (xv==0) and (yv==0):
-                coeff0 = cf
+            # Skip SGD locations until later
+            if ind_sgd[i]==False:
+                cf, _ = self.gen_psf_coeff(return_results=True, force=True, save=False, **kwargs)
+                cf_all[i] = cf
+                # Save central coefficient to it's own variable
+                if (xv==0) and (yv==0):
+                    coeff0 = cf
+    except Exception as e:
+        # Return to previous values
+        self.options['coron_shift_x'] = coron_shift_x_orig
+        self.options['coron_shift_y'] = coron_shift_y_orig
+        self.detector_position = detector_position_orig
+        self.fov_pix = fov_pix_orig
+        if self.name=='NIRCam':
+            self.options['nd_squares'] = nd_squares_orig
 
-    setup_logging(log_prev, verbose=False)
+        raise e
+    finally:
+        setup_logging(log_prev, verbose=False)
 
     # Return raw results for further analysis
     # Excludes concatenation of symmetric PSFs and SGD calculations
@@ -3584,8 +3692,6 @@ def _gen_wfemask_coeff(self, force=False, save=True, large_grid=None,
     # Get residuals
     cf_all -= coeff0
     cf_resid = cf_all
-    # cf_resid = cf_all - coeff0
-    # del cf_all
 
     # Reshape into cf_resid into [nypos, nxpos, ncf, nypix, nxpix]
     nxpos = len(x_offsets)
@@ -3787,34 +3893,36 @@ def _gen_wfemask_coeff(self, force=False, save=True, large_grid=None,
     # Set to fov calculation size
     xsgd, ysgd = (xoff_all[ind_sgd], yoff_all[ind_sgd])
     nsgd = len(xsgd)
-    if nsgd>0:
-        # Create progress bar object
-        pbar = tqdm(zip(xsgd, ysgd), total=nsgd, desc='SGD', leave=False)
-        for xv, yv in pbar:
-            # Update descriptive label
-            pbar.set_description(f"xsgd, ysgd = ({xv:.2f}, {yv:.2f})")
+    try:
+        if nsgd>0:
+            # Create progress bar object
+            pbar = tqdm(zip(xsgd, ysgd), total=nsgd, desc='SGD', leave=False)
+            for xv, yv in pbar:
+                # Update descriptive label
+                pbar.set_description(f"xsgd, ysgd = ({xv:.2f}, {yv:.2f})")
 
-            self.options['coron_shift_x'] = xv
-            self.options['coron_shift_y'] = yv
+                self.options['coron_shift_x'] = xv
+                self.options['coron_shift_y'] = yv
 
-            # Pixel offset information
-            field_rot = 0 if self._rotation is None else self._rotation
-            xyoff_pix = np.array(xy_rot(-1*xv, -1*yv, -field_rot)) / self.pixelscale
-            self.detector_position = np.array(detector_position_orig) + xyoff_pix
+                # Pixel offset information
+                field_rot = 0 if self._rotation is None else self._rotation
+                xyoff_pix = np.array(xy_rot(-1*xv, -1*yv, -field_rot)) / self.pixelscale
+                self.detector_position = np.array(detector_position_orig) + xyoff_pix
 
-            cf, _ = self.gen_psf_coeff(return_results=True, force=True, save=False, **kwargs)
-            ind = (xoff_all==xv) & (yoff_all==yv)
-            cf_resid_all[ind] = cf - coeff0
-
-    setup_logging(log_prev, verbose=False)
-
-    # Return to previous values
-    self.options['coron_shift_x'] = coron_shift_x_orig
-    self.options['coron_shift_y'] = coron_shift_y_orig
-    self.detector_position = detector_position_orig
-    self.fov_pix = fov_pix_orig
-    if self.name=='NIRCam':
-        self.options['nd_squares'] = nd_squares_orig
+                cf, _ = self.gen_psf_coeff(return_results=True, force=True, save=False, **kwargs)
+                ind = (xoff_all==xv) & (yoff_all==yv)
+                cf_resid_all[ind] = cf - coeff0
+    except:
+        raise e
+    finally:
+        setup_logging(log_prev, verbose=False)
+        # Return to previous values
+        self.options['coron_shift_x'] = coron_shift_x_orig
+        self.options['coron_shift_y'] = coron_shift_y_orig
+        self.detector_position = detector_position_orig
+        self.fov_pix = fov_pix_orig
+        if self.name=='NIRCam':
+            self.options['nd_squares'] = nd_squares_orig
 
     # x and y grid values to return
     xvals = xoff_all[0]
@@ -3832,6 +3940,12 @@ def _gen_wfemask_coeff(self, force=False, save=True, large_grid=None,
     if return_results:
         return cf_resid_all, xvals, yvals
     else:
+        # Crop by oversampling amount if use_fov_pix_plus1
+        if use_fov_pix_plus1:
+            osamp_half = self.oversample // 2
+            cf_resid_all = cf_resid_all[:, :, :, osamp_half:-osamp_half, osamp_half:-osamp_half]
+
+
         self._psf_coeff_mod['si_mask'] = cf_resid_all
         self._psf_coeff_mod['si_mask_xgrid'] = xvals
         self._psf_coeff_mod['si_mask_ygrid'] = yvals
