@@ -947,7 +947,7 @@ class NIRCam_ext(webbpsf_NIRCam):
             Coordinates (in arcsec or pixels) to calculate field-dependent PSF.
             If multiple values, then this should be an array ([xvals], [yvals]).
         coord_frame : str
-            Type of input coordinates relative to `self.siaf_ap` aperture.
+            Type of input coordinates relative to `self.siaf_ap` aperture:
 
                 * 'tel': arcsecs V2,V3
                 * 'sci': pixels, in DMS axes orientation; aperture-dependent
