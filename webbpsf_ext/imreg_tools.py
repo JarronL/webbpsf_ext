@@ -228,7 +228,7 @@ def get_files(indir, pid, obsid=None, sca=None, filt=None, file_type='uncal.fits
             if hdr.get('VISITGRP', 'none')==vst_grp_act[0:2].upper() and \
                hdr.get('SEQ_ID', 'none')==vst_grp_act[2].upper() and \
                hdr.get('ACT_ID', 'none')==vst_grp_act[3:].upper():
-                print(f)
+                # print(f)
                 files2.append(f)
         allfiles = np.array(files2)
 
@@ -1420,6 +1420,13 @@ def apply_pixel_diffusion(im, pixel_sigma):
     """Apply charge diffusion kernel to image
     
     Approximates the effect of charge diffusion as a Gaussian.
+
+    Parameters
+    ----------
+    im : ndarray
+        Input image.
+    pixel_sigma : float
+        Sigma of Gaussian kernel in units of image pixels.
     """
     from scipy.ndimage import gaussian_filter
     return gaussian_filter(im, pixel_sigma)
