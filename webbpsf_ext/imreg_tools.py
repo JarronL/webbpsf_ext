@@ -919,7 +919,7 @@ def get_expected_loc(input, return_indices=True, add_sroffset=None):
     else:
         return xsci_exp, ysci_exp
 
-def get_gfit_cen(im, xysub=11, return_sci=False):
+def get_gfit_cen(im, xysub=11, return_sci=False, find_max=True):
     """Gaussion fit to get centroid position"""
     
     from astropy.modeling import models, fitting
@@ -928,7 +928,13 @@ def get_gfit_cen(im, xysub=11, return_sci=False):
     ind_nan = np.isnan(im)
     im[ind_nan] = 0
 
-    im_sub, (x1, x2, y1, y2) = crop_image(im, xysub, return_xy=True)
+    # Crop around max value?
+    if find_max:
+        yind, xind = np.unravel_index(np.argmax(im), im.shape)
+        xyloc = (xind, yind)
+    else:
+        xyloc = None
+    im_sub, (x1, x2, y1, y2) = crop_image(im, xysub, return_xy=True, xyloc=xyloc)
 
     # Add crop indices create grid in terms of full image indices
     xv = np.arange(x1, x2)
@@ -1023,7 +1029,8 @@ def get_loc_all(files, indir, find_func=get_com,
         
     return np.array(star_locs)
 
-def recenter_psf(psfs_over, niter=3, halfwidth=7, gfit=True):
+def recenter_psf(psfs_over, niter=3, halfwidth=7, 
+                 gfit=True, in_place=False, **kwargs):
     """Use center of mass algorithm to relocate PSF to center of image.
     
     Returns recentered PSFs and shift values used.
@@ -1037,6 +1044,11 @@ def recenter_psf(psfs_over, niter=3, halfwidth=7, gfit=True):
     halfwidth : int or None
         Halfwidth of box to use for center of mass algorithm.
         Default is 7, which is a 15x15 box.
+    gfit : bool
+        If True, use Gaussian fitting instead of center of mass.
+    in_place : bool
+        If True, then perform the shift in place, overwriting the input
+        PSF array.
     """
 
     from .image_manip import fourier_imshift
@@ -1045,6 +1057,9 @@ def recenter_psf(psfs_over, niter=3, halfwidth=7, gfit=True):
     if ndim==2:
         psfs_over = [psfs_over]
 
+    if not in_place:
+        psfs_over = psfs_over.copy()
+
     # Reposition oversampled PSF to center of array using center of mass algorithm
     xyoff_psfs_over = []
     for i, psf in enumerate(psfs_over):
@@ -1052,7 +1067,8 @@ def recenter_psf(psfs_over, niter=3, halfwidth=7, gfit=True):
         xsh_sum, ysh_sum = (0, 0)
         for j in range(niter):
             if gfit:
-                xc, yc = get_gfit_cen(psf, xysub=2*halfwidth+1, return_sci=False)
+                xc, yc = get_gfit_cen(psf, xysub=2*halfwidth+1, 
+                                      return_sci=False, **kwargs)
             else:
                 xc, yc = get_com(psf, halfwidth=halfwidth, return_sci=False)
             xsh, ysh = (xc_psf - xc, yc_psf - yc)
@@ -1838,3 +1854,340 @@ def find_pix_offsets(imsub_arr, psfs, psf_osamp=1, kipc=None, kppc=None,
         return xysh_pix[0]
     else:
         return np.asarray(xysh_pix)
+
+def download_file(filename, outdir=None, timeout=None, mast_api_token=None, 
+                  overwrite=False, verbose=False):
+    """ Download a MAST file
+    
+    Modified from M. Perrin's tools: https://github.com/mperrin/misc_jwst/blob/main/misc_jwst/guiding_analyses.py
+
+    Parameters
+    ----------
+    filename : str
+        Name of file to download
+    outdir : str
+        Output directory
+    timeout : float
+        Timeout in seconds to wait for download to start
+    mast_api_token : str
+        MAST API token
+    overwrite : bool
+        Overwrite existing file?
+    verbose : bool
+        Print extra info?
+    """
+    import requests, io
+
+    from astropy.utils.console import ProgressBarOrSpinner
+    from astropy.utils.data import conf
+    blocksize = conf.download_block_size
+
+    mast_api_token = os.environ.get('MAST_API_TOKEN') if mast_api_token is None else mast_api_token
+    if mast_api_token is not None:
+        headers=dict(Authorization=f"token {mast_api_token}")
+    else:
+        headers=None
+
+    outpath = os.path.join(outdir, filename) if outdir is not None else filename
+
+    if os.path.isfile(outpath) and (not overwrite):
+        if verbose:
+            print("ALREADY DOWNLOADED: ", outpath)
+        return
+
+    mast_url='https://mast.stsci.edu/api/v0.1/Download/file'
+    uri_prefix = 'mast:JWST/product/'
+    uri = uri_prefix + filename
+    response = requests.get(mast_url, params=dict(uri=uri), timeout=timeout, stream=True, headers=headers)
+
+    # Full URL of data product
+    url = mast_url + uri
+
+    response.raise_for_status()
+    if 'content-length' in response.headers:
+        length = int(response.headers['content-length'])
+        if length == 0:
+            _log.warn(f'URL {url} has length=0')
+    else:
+        length = None
+
+    # Only show progress bar if logging level is INFO or lower.
+    if _log.getEffectiveLevel() <= 20:
+        progress_stream = None  # Astropy default
+    else:
+        progress_stream = io.StringIO()
+
+    bytes_read = 0
+    msg = f'Downloading URL {url} to {outpath} ...'
+    with ProgressBarOrSpinner(length, msg, file=progress_stream) as pb:
+        with open(outpath, 'wb') as fd:
+            for data in response.iter_content(chunk_size=blocksize):
+                fd.write(data)
+                bytes_read += len(data)
+                if length is not None:
+                    pb.update(bytes_read if bytes_read <= length else length)
+                else:
+                    pb.update(bytes_read)
+
+    response.close()
+    return response
+
+def retrieve_mast_files(filenames, outdir=None, verbose=False, **kwargs):
+    """Download one or more guiding data products from MAST
+
+    Modified from M. Perrin's tools: https://github.com/mperrin/misc_jwst/blob/main/misc_jwst/guiding_analyses.py
+
+    """
+
+    outputs = []
+    for f in filenames:
+        download_file(f, outdir=outdir, **kwargs)
+
+        # Check if files exist and append to outputs
+        outfile = os.path.join(outdir, f) if outdir is not None else f
+        if not os.path.isfile(outfile):
+            print("ERROR: " + outfile + " failed to download.")
+        else:
+            if verbose:
+                print("COMPLETE: ", outfile)
+            outputs.append(outfile)
+
+    return outputs
+
+def set_params(parameters):
+    """Utility function for making dicts used in MAST queries"""
+    return [{"paramName":p, "values":v} for p,v in parameters.items()]
+
+
+import functools
+@functools.lru_cache
+def find_relevant_guiding_file(sci_filename, outdir=None, verbose=False, uncals=False, **kwargs):
+    """ Download fine guide file for a given science data proejct
+    
+    Given a filename of a JWST science file, retrieve the relevant guiding data product.
+    This uses FITS keywords in the science header to determine the time period and guide mode,
+    and then retrieves the file from MAST
+
+    Modified from M. Perrin's tools: https://github.com/mperrin/misc_jwst/blob/main/misc_jwst/guiding_analyses.py
+
+
+    """
+
+    import astropy
+    from astroquery.mast import Mast
+
+    sci_hdul = fits.open(sci_filename)
+
+    progid = sci_hdul[0].header['PROGRAM']
+    obs = sci_hdul[0].header['OBSERVTN']
+    guidemode = sci_hdul[0].header['PCS_MODE']
+
+    # Set output directory if it doesn't exist
+    if outdir is None:
+        mast_dir = os.getenv('JWSTDOWNLOAD_OUTDIR', None)
+        if mast_dir is not None:
+            outdir = os.path.join(mast_dir, f'{progid:05}', 'fgs')
+            # Create directory if it doesn't exist
+            if not os.path.isdir(outdir):
+                os.makedirs(outdir)
+
+    # Set up the query
+    keywords = {
+        'program': [progid],
+        'observtn': [obs],
+        'exp_type': ['FGS_'+guidemode],
+    }
+
+    params = {
+        'columns': '*',
+        'filters': set_params(keywords),
+    }
+
+    # Run the web service query. This uses the specialized, lower-level webservice for the
+    # guidestar queries: https://mast.stsci.edu/api/v0/_services.html#MastScienceInstrumentKeywordsGuideStar
+
+    service = 'Mast.Jwst.Filtered.GuideStar'
+    t = Mast.service_request(service, params)
+
+    if len(t) > 0:
+        # Ensure unique file names, should any be repeated over multiple observations (e.g. if parallels):
+        fn = list(set(t['fileName']))
+        # Set of derived Observation IDs:
+
+        products = list(set(fn))
+        # If you want the uncals
+        if uncals:
+            products = list(set([x.replace('_cal','_uncal') for x in fn]))
+    products.sort()
+
+    if verbose:
+        print(f"For science data file: {sci_filename}")
+        print("Found guiding telemetry files:")
+        for p in products:
+            print("   ", p)
+
+    # Some guide files are split into multiple segments, which we have to deal with.
+    guide_timestamp_parts = [fn.split('_')[2] for fn in products]
+    is_segmented = ['seg' in part for part in guide_timestamp_parts]
+    for i in range(len(guide_timestamp_parts)):
+        if is_segmented[i]:
+            guide_timestamp_parts[i] = guide_timestamp_parts[i].split('-')[0]
+    guide_timestamps = np.asarray(guide_timestamp_parts, int)
+    t_beg = astropy.time.Time(sci_hdul[0].header['DATE-BEG'])
+    t_end = astropy.time.Time(sci_hdul[0].header['DATE-END'])
+    obs_end_time = int(t_end.strftime('%Y%j%H%M%S'))
+
+    delta_times = np.array(guide_timestamps-obs_end_time, float)
+    # want to find the minimum delta which is at least positive
+    # print(delta_times)
+    delta_times[delta_times<0] = np.nan
+    # print(delta_times)
+
+    wmatch = np.argmin(np.abs(delta_times))
+    wmatch = np.where(delta_times ==np.nanmin(delta_times))[0][0]
+    delta_min = (guide_timestamps-obs_end_time)[wmatch]
+
+    if verbose:
+        print("Based on science DATE-END keyword and guiding timestamps, the matching GS file is: ")
+        print("   ", products[wmatch])
+        print(f"    t_end = {obs_end_time}\t delta = {delta_min}")
+
+    if is_segmented[wmatch]:
+        # We ought to fetch all the segmented GS files for that guide period
+        products_to_fetch = [fn for fn in products if fn.startswith(products[wmatch][0:33])]
+        if verbose:
+            print("   That GS data is divided into multiple segment files:")
+            print("   ".join(products_to_fetch))
+    else:
+        products_to_fetch = [products[wmatch],]
+
+    outfiles = retrieve_mast_files(products_to_fetch, outdir=outdir, verbose=verbose)
+
+    return outfiles
+
+
+def get_jitter_balls(files_sci, indir, outdir=None, verbose=False):
+    """ Get jitter ball positions from guiding files
+    
+    Find the jitter ball positions from the guiding files associated with a science file.
+    By default, downloads FGS fine guide files to MAST ouput directory if it exists and
+    places into 'fgs' subdirectory. Otherwise, downloads to current working directory.
+
+    Returns `(xoff_all, yoff_all)` lists of x and y positions for each science file. 
+    Values are in units of arcsec.
+    """
+
+    from astropy.table import Table, vstack
+    from astropy.time import Time
+
+    xidl_all = []
+    yidl_all = []
+    for sci_filename in files_sci:
+        fpath = os.path.join(indir, sci_filename)
+
+        # Find guidestar files and read in centroid data as astropy Table
+        gs_files = find_relevant_guiding_file(fpath, outdir=outdir, verbose=verbose)
+        for i, gs_fn in enumerate(gs_files):
+            if i==0:
+                centroid_table = Table.read(gs_fn, hdu=5)
+            else: 
+                centroid_table = vstack([centroid_table, Table.read(gs_fn, hdu=5)], 
+                                        metadata_conflicts='silent')
+
+        # Determine start and end times for the exposure
+        with fits.open(fpath) as sci_hdul:
+            t_beg = Time(sci_hdul[0].header['DATE-BEG'])
+            t_end = Time(sci_hdul[0].header['DATE-END'])
+
+        # Find the subset of centroid data during exposure
+        ctimes = Time(centroid_table['observatory_time'])
+        mask_good = centroid_table['bad_centroid_dq_flag'] == 'GOOD'
+        ctimes_during_exposure = (t_beg < ctimes ) & (ctimes < t_end) & mask_good
+
+        xpos = centroid_table[ctimes_during_exposure]['guide_star_position_x']
+        ypos = centroid_table[ctimes_during_exposure]['guide_star_position_y']
+
+        xidl_all.append(xpos)
+        yidl_all.append(ypos)
+
+    # Subtract nominal position
+    xmean0 = np.mean(xidl_all[0])
+    ymean0 = np.mean(yidl_all[0])
+    xoff_all = [(x - xmean0) for x in xidl_all]
+    yoff_all = [(y - ymean0) for y in yidl_all]
+
+    return xoff_all, yoff_all
+
+def plot_jitter_balls(xoff_all, yoff_all, sci_filename=None, fov_size=50, 
+                      save=False, save_dir=None, return_fixaxes=False):
+    """ Plot jitter ball positions"""
+
+    import matplotlib.pyplot as plt
+
+    # Check that xoff_all and yoff_all are lists
+    if not isinstance(xoff_all, list) or not isinstance(yoff_all, list):
+        raise ValueError("xoff_all and yoff_all must be a list of arrays")
+    
+    # Convert to mas
+    xoff_all = [x*1000 for x in xoff_all]
+    yoff_all = [y*1000 for y in yoff_all]
+
+    xoff_mean = np.array([np.mean(x) for x in xoff_all])
+    yoff_mean = np.array([np.mean(y) for y in yoff_all])
+
+    # Create Plots
+    fig = plt.figure(figsize=(8,8), layout='constrained')
+
+    # Create axes for scatter plot
+    ax = fig.add_gridspec(top=0.75, right=0.75).subplots()
+    ax.set_aspect('equal')
+
+    # Create axes for histograms
+    ax_histx = ax.inset_axes([0, 1.01, 1, 0.25], sharex=ax)
+    ax_histy = ax.inset_axes([1.01, 0, 0.25, 1], sharey=ax)
+
+    for i in range(len(xoff_all)):
+        xoffsets = xoff_all[i]
+        yoffsets = yoff_all[i]
+        ax.scatter(xoffsets, yoffsets, alpha=0.1, marker='.', s=1)
+
+    ax.set_xlim(-fov_size/2, fov_size/2)
+    ax.set_ylim(-fov_size/2, fov_size/2)
+    ax.set_xlabel("FGS Centroid Offset XIDL [mas]")#, fontsize=18)
+    ax.set_ylabel("FGS Centroid Offset YIDL [mas]")#, fontsize=18)
+
+    if sci_filename is not None:
+        sci_filename_act = '_'.join(os.path.basename(sci_filename).split('_')[0:2])
+        fig.suptitle(f"Guiding during {sci_filename_act}_*", fontsize=14)
+    else:
+        fig.suptitle("Guiding during science exposures", fontsize=14)
+
+    for i in range(len(xoff_all)):
+        xc, yc = (xoff_mean[i], yoff_mean[i])
+        for j, rad in enumerate([1,2,3]):
+            ax.add_artist(plt.Circle( (xc, yc), rad, fill=False, color='gray', ls='--'))
+            if rad<fov_size/2 and i==0:
+                ax.text(j*0.5, rad+0.1, f"{rad} mas", color='gray')
+
+    # Draw histograms
+    ax_histx.tick_params(axis="x", labelbottom=False)
+    ax_histy.tick_params(axis="y", labelleft=False)
+
+    bsize = 0.2
+    nbins = int(fov_size / bsize)
+    bins = np.linspace(-fov_size/2, fov_size/2, nbins)
+    for i in range(len(xoff_all)):
+        xoffsets = xoff_all[i]
+        yoffsets = yoff_all[i]
+        ax_histx.hist(xoffsets, bins=bins, alpha=0.8)
+        ax_histy.hist(yoffsets, bins=bins, orientation='horizontal', alpha=0.8)
+
+    if save:
+        figname = f'guiding_{sci_filename_act}.pdf'
+        if save_dir is not None:
+            figname = os.path.join(save_dir, figname)
+        fig.savefig(figname, bbox_inches='tight')
+        print(f"Saved {figname}")
+
+    if return_fixaxes:
+        return fig, (ax, ax_histx, ax_histy)
