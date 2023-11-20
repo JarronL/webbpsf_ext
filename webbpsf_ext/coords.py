@@ -571,6 +571,9 @@ def gen_sgd_offsets(sgd_type, slew_std=5, fsm_std=2.5, rand_seed=None):
         '9circle', '5box', '5diamond', '3bar', '5bar', '5miri', and '9miri'
         where the first four refer to NIRCam coronagraphic dither
         positions and the last two are for MIRI coronagraphy.
+        Can also use the APT names for the patterns:
+        '9-POINT-CIRCLE', '5-POINT-DIAMOND', '5-POINT-BOX', '3-POINT-BAR',
+        '5-POINT-BAR', '5-POINT-SMALL-GRID', '9-POINT-SMALL-GRID'.
     fsm_std : float
         One-sigma accuracy per axis of fine steering mirror positions.
         This provides randomness to each position relative to the nominal 
