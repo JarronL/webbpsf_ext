@@ -1861,6 +1861,12 @@ def find_pix_offsets(imsub_arr, psfs, psf_osamp=1, kipc=None, kppc=None,
         return xysh_pix[0]
     else:
         return np.asarray(xysh_pix)
+    
+
+
+###########################################################################
+#    MAST and Guidestar Catalog Retrieval
+###########################################################################
 
 def download_file(filename, outdir=None, timeout=None, mast_api_token=None, 
                   overwrite=False, verbose=False):
