@@ -435,7 +435,7 @@ def get_ictm_event_log(startdate, enddate, hdr=None, mast_api_token=None, verbos
             # log the error
             retries += 1
             if retries == retry_limit:
-                _log.error(f'Failed to retreieve url after {retry_limit}')
+                _log.error(f'Failed to retreieve url after {retry_limit} tries')
                 raise e
 
     lines = response.content.decode('utf-8').splitlines()
@@ -1999,7 +1999,7 @@ def find_relevant_guiding_file(sci_filename, outdir=None, verbose=False, uncals=
     if outdir is None:
         mast_dir = os.getenv('JWSTDOWNLOAD_OUTDIR', None)
         if mast_dir is not None:
-            outdir = os.path.join(mast_dir, f'{progid:05}', 'fgs')
+            outdir = os.path.join(mast_dir, progid, 'fgs')
             # Create directory if it doesn't exist
             if not os.path.isdir(outdir):
                 os.makedirs(outdir)
@@ -2079,7 +2079,7 @@ def find_relevant_guiding_file(sci_filename, outdir=None, verbose=False, uncals=
     return outfiles
 
 
-def get_jitter_balls(files_sci, indir, outdir=None, verbose=False):
+def get_jitter_balls(files_sci, indir, outdir=None, verbose=False, return_raw=False):
     """ Get jitter ball positions from guiding files
     
     Find the jitter ball positions from the guiding files associated with a science file.
@@ -2087,7 +2087,21 @@ def get_jitter_balls(files_sci, indir, outdir=None, verbose=False):
     places into 'fgs' subdirectory. Otherwise, downloads to current working directory.
 
     Returns `(xoff_all, yoff_all)` lists of x and y positions for each science file. 
-    Values are in units of arcsec.
+    Values are in units of arcsec relative to the first science file.
+
+    Parameters
+    ----------
+    files_sci : list
+        List of science file names
+    indir : str
+        Input directory of science files
+    outdir : str
+        Output directory for downloaded guiding files
+    verbose : bool
+        Print extra info during download?
+    return_raw : bool
+        Return raw xidl and yidl values instead of relative offsets?
+        Default is False
     """
 
     from astropy.table import Table, vstack
@@ -2123,13 +2137,16 @@ def get_jitter_balls(files_sci, indir, outdir=None, verbose=False):
         xidl_all.append(xpos)
         yidl_all.append(ypos)
 
-    # Subtract nominal position
-    xmean0 = np.mean(xidl_all[0])
-    ymean0 = np.mean(yidl_all[0])
-    xoff_all = [(x - xmean0) for x in xidl_all]
-    yoff_all = [(y - ymean0) for y in yidl_all]
+    if return_raw:
+        return xidl_all, yidl_all
+    else:
+        # Subtract nominal position
+        xmean0 = np.mean(xidl_all[0])
+        ymean0 = np.mean(yidl_all[0])
+        xoff_all = [(x - xmean0) for x in xidl_all]
+        yoff_all = [(y - ymean0) for y in yidl_all]
 
-    return xoff_all, yoff_all
+        return xoff_all, yoff_all
 
 def plot_jitter_balls(xoff_all, yoff_all, sci_filename=None, fov_size=50, 
                       save=False, save_dir=None, return_fixaxes=False):
@@ -2164,8 +2181,9 @@ def plot_jitter_balls(xoff_all, yoff_all, sci_filename=None, fov_size=50,
         yoffsets = yoff_all[i]
         ax.scatter(xoffsets, yoffsets, alpha=0.1, marker='.', s=1)
 
-    ax.set_xlim(-fov_size/2, fov_size/2)
-    ax.set_ylim(-fov_size/2, fov_size/2)
+    xylim = np.array([-1,1]) * fov_size/2
+    ax.set_xlim(xylim + xoff_mean[0])
+    ax.set_ylim(xylim + yoff_mean[0])
     ax.set_xlabel("FGS Centroid Offset XIDL [mas]")#, fontsize=18)
     ax.set_ylabel("FGS Centroid Offset YIDL [mas]")#, fontsize=18)
 
@@ -2188,12 +2206,13 @@ def plot_jitter_balls(xoff_all, yoff_all, sci_filename=None, fov_size=50,
 
     bsize = 0.2
     nbins = int(fov_size / bsize)
-    bins = np.linspace(-fov_size/2, fov_size/2, nbins)
+    xbins = np.linspace(xoff_mean[0]-fov_size/2, xoff_mean[0]+fov_size/2, nbins)
+    ybins = np.linspace(yoff_mean[0]-fov_size/2, yoff_mean[0]+fov_size/2, nbins)
     for i in range(len(xoff_all)):
         xoffsets = xoff_all[i]
         yoffsets = yoff_all[i]
-        ax_histx.hist(xoffsets, bins=bins, alpha=0.8)
-        ax_histy.hist(yoffsets, bins=bins, orientation='horizontal', alpha=0.8)
+        ax_histx.hist(xoffsets, bins=xbins, alpha=0.8)
+        ax_histy.hist(yoffsets, bins=ybins, orientation='horizontal', alpha=0.8)
 
     if save:
         figname = f'guiding_{sci_filename_act}.pdf'
