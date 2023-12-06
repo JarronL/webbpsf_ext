@@ -10,6 +10,8 @@ from setuptools import setup, find_packages
 from codecs import open
 from os import path
 
+from git_helpers import get_git_devstr
+
 # root = path.abspath(path.dirname(__file__))
 
 # Rather than importing (which will fail due to __init__.py)
@@ -17,9 +19,9 @@ from os import path
 exec(open('webbpsf_ext/version.py').read())
 version = __version__
 
-# RELEASE = 'dev' not in version
-# if not RELEASE:
-#     version += get_git_devstr(False)
+RELEASE = 'dev' not in version
+if not RELEASE:
+    version += get_git_devstr(False)
 
 ################################################################
 # shortcuts for publishing, tagging, testing
