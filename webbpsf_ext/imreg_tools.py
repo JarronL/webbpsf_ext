@@ -132,8 +132,8 @@ def get_coron_apname(input):
 
     # print(apname_new)
 
-    # If apname_new doesn't exit, we need to fall back to apname
-    # even if it may not fully make sense.
+    # If apname_new doesn't exist, we need to fall back to apname
+    # even if it may not completely make sense.
     if apname_new in nrc_siaf.apernames:
         return apname_new
     else:
