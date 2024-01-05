@@ -2538,9 +2538,10 @@ def _calc_psf_webbpsf(self, calc_psf_func, add_distortion=None, fov_pixels=None,
             # Mask shift relative to the webbpsf aperture reference location
 
             # Include bar offsets
-            bar_offset = self.get_bar_offset(ignore_options=True)
-            bar_offset = 0 if bar_offset is None else bar_offset
-            xidl += bar_offset
+            if self.name == 'NIRCam':
+                bar_offset = self.get_bar_offset(ignore_options=True)
+                bar_offset = 0 if bar_offset is None else bar_offset
+                xidl += bar_offset
 
             field_rot = 0 if self._rotation is None else self._rotation
 
