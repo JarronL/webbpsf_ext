@@ -1895,12 +1895,6 @@ def download_file(filename, outdir=None, timeout=None, mast_api_token=None,
     from astropy.utils.data import conf
     blocksize = conf.download_block_size
 
-    mast_api_token = os.environ.get('MAST_API_TOKEN') if mast_api_token is None else mast_api_token
-    if mast_api_token is not None:
-        headers=dict(Authorization=f"token {mast_api_token}")
-    else:
-        headers=None
-
     outpath = os.path.join(outdir, filename) if outdir is not None else filename
 
     if os.path.isfile(outpath) and (not overwrite):
@@ -1911,12 +1905,34 @@ def download_file(filename, outdir=None, timeout=None, mast_api_token=None,
     mast_url='https://mast.stsci.edu/api/v0.1/Download/file'
     uri_prefix = 'mast:JWST/product/'
     uri = uri_prefix + filename
+
+    # Include MAST API token
+    mast_api_token = os.environ.get('MAST_API_TOKEN') if mast_api_token is None else mast_api_token
+    headers = None if mast_api_token is None else dict(Authorization=f"token {mast_api_token}")
+
     response = requests.get(mast_url, params=dict(uri=uri), timeout=timeout, stream=True, headers=headers)
+    try:
+        response.raise_for_status()
+    except requests.exceptions.HTTPError as exc:
+        token1 = os.environ.get('MAST_API_TOKEN')
+        token2 = os.environ.get('MAST_API_TOKEN2')
+        token_list = [token1, token2]
+        for i, token in enumerate(token_list):
+            if (token is not None) and (token != mast_api_token):
+                _log.info(f'Attempting alternate MAST_API_TOKEN...')
+                headers = dict(Authorization=f"token {token}")
+                response = requests.get(mast_url, params=dict(uri=uri), timeout=timeout, stream=True, headers=headers)
+                try:
+                    response.raise_for_status()
+                except:
+                    if i==len(token_list)-1:
+                        raise Exception(exc)
+                else:
+                    break
 
     # Full URL of data product
     url = mast_url + uri
 
-    response.raise_for_status()
     if 'content-length' in response.headers:
         length = int(response.headers['content-length'])
         if length == 0:
