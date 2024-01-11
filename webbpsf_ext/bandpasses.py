@@ -1,11 +1,12 @@
 # Import libraries
 from pathlib import Path
 import numpy as np
+
+import astropy.units as u
 from astropy.io import fits, ascii
 
-from webbpsf_ext.maths import jl_poly
-
 from .utils import S
+# from . import synphot_ext as S
 
 import logging
 _log = logging.getLogger('webbpsf_ext')
@@ -233,6 +234,7 @@ def nircam_grism_th(module, grism_order=1, wave_out=None, return_bp=False):
     """NIRCam grism throughput"""
 
     from scipy.interpolate import interp1d
+    from .maths import jl_poly
 
     # Si plus AR coating transmission
     wdata, tdata = nircam_grism_si_ar(module, return_bp=False)
@@ -566,6 +568,7 @@ def nircam_filter(filter, pupil=None, mask=None, module=None, sca=None, ND_acq=F
     """
 
     from .utils import get_detname
+    from .maths import jl_poly
 
     if sca is None and module is None:
         # Set default module
@@ -603,16 +606,17 @@ def nircam_filter(filter, pupil=None, mask=None, module=None, sca=None, ND_acq=F
         _log.debug(f'Reading file: {filt_file}')
         tbl = ascii.read(filt_path, format='basic')
         wave_ang, throughput = (tbl['Microns'].data * 1e4, tbl['Total_system_throughput'].data)
-        bp = S.ArrayBandpass(wave_ang, throughput)
-        bp_name = f"{filter}_Mod{module}"
     else:
         filt_dir = _bp_dir / 'NRC_preflight'
         filt_file = f'{filter}_nircam_plus_ote_throughput_mod{module.lower()}_sorted.txt'
         filt_path = str(filt_dir / filt_file)
 
         _log.debug(f'Reading file: {filt_file}')
-        bp = S.FileBandpass(filt_path)
-        bp_name = f"{filter}_{filt_file.split('_')[0]}"
+        tbl = ascii.read(filt_path, format='no_header')
+        wave_ang, throughput = (tbl['col1'].data, tbl['col2'].data)
+
+    bp = S.ArrayBandpass(wave_ang, throughput)
+    bp_name = f"{filter}_Mod{module}"
 
     
     # For narrowband/mediumband filters in pupil wheel, handle blocking filter throughput
@@ -639,7 +643,9 @@ def nircam_filter(filter, pupil=None, mask=None, module=None, sca=None, ND_acq=F
         bp = bp_new        
 
     # Select channel (SW or LW) for minor decisions later on
-    channel = 'SW' if bp.avgwave()/1e4 < 2.3 else 'LW'
+    wavg = bp.avgwave()
+    wavg = wavg.to_value(u.um)  if isinstance(wavg, u.Quantity) else wavg / 1e4
+    channel = 'SW' if wavg < 2.3 else 'LW'
 
     if apply_scale_factors and flight:
         if 'A5' in sca:
@@ -650,15 +656,6 @@ def nircam_filter(filter, pupil=None, mask=None, module=None, sca=None, ND_acq=F
         else:
             th_new = bp.throughput * _sca_throughput_scaling(sca, filter)
         bp = S.ArrayBandpass(bp.wave, th_new, name=bp.name)
-
-    # Fix QE
-    # if fix_lwqe and (channel=='LW'):
-    #     bp_qe_orig = qe_nircam(channel, module, wave=bp.wave/1e4)
-    #     bp_qe_new  = qe_nirspec(wave=bp.wave/1e4)
-    #     th_new = bp.throughput
-    #     indnz = bp_qe_orig.throughput>0
-    #     th_new[indnz] = th_new[indnz] * bp_qe_new.throughput[indnz] / bp_qe_orig.throughput[indnz]
-    #     bp = S.ArrayBandpass(bp.wave, th_new, name=bp.name)
 
     # Select which wavelengths to keep
     igood = bp_igood(bp, min_trans=0.005, fext=0.1)
@@ -853,11 +850,11 @@ def nircam_filter(filter, pupil=None, mask=None, module=None, sca=None, ND_acq=F
     #if not np.isclose(dw_arr.min(),dw_arr.max()):
     dw = np.median(dw_arr)
     warr = np.arange(w1,w2, dw)
-    bp = bp.resample(warr)
+    tarr = bp(warr)
 
     # Need to place zeros at either end so Pysynphot doesn't extrapolate
-    warr = np.concatenate(([bp.wave.min()-dw],bp.wave,[bp.wave.max()+dw]))
-    tarr = np.concatenate(([0],bp.throughput,[0]))
+    warr = np.concatenate(([bp.wave.min()-dw],warr,[bp.wave.max()+dw]))
+    tarr = np.concatenate(([0],tarr,[0]))
 
     # Check [0,1] limits
     tarr[tarr<0] = 0
@@ -1083,13 +1080,24 @@ def bp_gaia(filter, release='DR2'):
 
 
 def filter_width(bp):
-    """Return wavelength positions of filter edges at half max"""
+    """Return wavelength positions of filter edges at half max
+    
+    Output units will be in microns.
+    """
 
-    w, th = (bp.wave / 1e4, bp.throughput)
-    wavg = bp.avgwave() / 1e4
+    bp.convert('um')
+    w, th = (bp.wave, bp.throughput)
+    wavg = bp.avgwave()
+    if isinstance(wavg, u.quantity.Quantity):
+        wavg = bp.avgwave().to_value(u.um)
+
+    # Quick Gaussian smoothing of noisy data
+    from astropy.convolution import convolve
+    from astropy.convolution import Gaussian1DKernel
+    th_smooth = convolve(th, Gaussian1DKernel(3))
 
     # Throughput at the effective wavelength
-    th_mid = np.interp(wavg, w, th)
+    th_mid = np.interp(wavg, w, th_smooth)
     th_half = th_mid / 2
 
     ind1 = (w<wavg) & (th<(th_mid+th_half) / 2)  & (th>th_half / 2)
