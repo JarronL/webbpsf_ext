@@ -12,8 +12,8 @@ from scipy.interpolate import griddata, RegularGridInterpolator, interp1d
 
 from . import conf
 from .utils import S
+# from . import synphot_ext as S
 from .bandpasses import miri_filter, nircam_filter
-from .maths import jl_poly, jl_poly_fit, binned_statistic
 from .robust import medabsdev
 
 import logging
@@ -1492,7 +1492,9 @@ def linder_filter(table, filt, age, dist=10, cond_file=None,
     extrapolate : bool
         If True, extrapolate to higher masses using COND models
         as well as lower masses using a lower order polynomial fit.
-    """    
+    """
+
+    from .maths import jl_poly, jl_poly_fit
     
     # In the event of underscores within name
     filt = filt.split('_')[0]
@@ -1774,6 +1776,8 @@ def cond_filter(table, filt, module='A', dist=None, **kwargs):
     otherwise absolute magnitude at 10pc. Input table has already been filtered
     by age.
     """
+
+    from .maths import jl_poly, jl_poly_fit
 
     # Table Data
     try:
@@ -2174,6 +2178,8 @@ def bin_spectrum(sp, wave, waveunits='um'):
     :mod:`pysynphot.spectrum`
         Rebinned spectrum in same units as input spectrum.
     """
+
+    from .maths import binned_statistic
 
     waveunits0 = sp.waveunits
     fluxunits0 = sp.fluxunits
