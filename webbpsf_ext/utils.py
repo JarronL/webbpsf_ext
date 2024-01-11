@@ -38,6 +38,11 @@ from .logging_utils import setup_logging
 import logging
 _log = logging.getLogger('webbpsf_ext')
 
+# from . import synphot_ext as S
+from . import synphot_ext
+if not on_rtd:
+    synphot_ext.download_cdbs_data(verbose=True)
+
 import pysynphot as S
 # Extend default wavelength range to 35 um
 S.refs.set_default_waveset(minwave=500, maxwave=350000, num=10000.0, delta=None, log=False)
@@ -182,11 +187,23 @@ def get_detname(det_id, use_long=False):
         
     return detname
 
-def pix_ang_size(ap, sr=True, pixscale=None):
+def pix_ang_size(ap=None, sr=True, pixscale=None):
     """Angular area of pixel from aperture object
     
     If `sr=True` then return in sterradians,
     otherwise return in units of arcsec^2.
+
+    Parameters
+    ==========
+    ap : pysiaf.Aperture
+        Aperture object
+    sr : bool
+        Return in steradians? Default True.
+    pixscale : float, array-like, or None
+        Pixel scale in arcsec/pixel. If None, then
+        use `ap.XSciScale` and `ap.YSciScale` to
+        determine pixel scale. If `pixscale` is
+        array-like, then assume (xscale, yscale).
     """
     sr2asec2 = 42545170296.1522
     
@@ -197,6 +214,8 @@ def pix_ang_size(ap, sr=True, pixscale=None):
         else:
             xscale = yscale = pixscale
     else:
+        if ap is None:
+            raise ValueError("Must specify either `ap` or `pixscale`.")
         xscale = ap.XSciScale
         yscale = ap.YSciScale
     
