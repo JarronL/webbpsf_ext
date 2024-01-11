@@ -25,11 +25,10 @@ time to calculate . Since the change to the PSF coefficients varies smoothly
 with respect to WFE drift components, it's simple to parameterize the coefficient
 residuals.
 
-Developed by Jarron Leisenring at University of Arizona (2015-2022).
+Developed by Jarron Leisenring at University of Arizona (2015-2024).
 """
 
-import os
-import sys
+import os, sys
 # from warnings import warn
 import astropy
 from astropy import config as _config
