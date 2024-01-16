@@ -5,8 +5,8 @@ import numpy as np
 import astropy.units as u
 from astropy.io import fits, ascii
 
-from .utils import S
-# from . import synphot_ext as S
+# from .utils import S
+from . import synphot_ext as S
 
 import logging
 _log = logging.getLogger('webbpsf_ext')
@@ -15,23 +15,23 @@ _log = logging.getLogger('webbpsf_ext')
 from . import __path__
 _bp_dir = Path(__path__[0]) / 'throughputs'
 
-def read_filter(self, *args, **kwargs):
-    if self.inst_name=='MIRI':
-        return miri_filter(*args, **kwargs)
-    elif self.inst_name=='NIRCam':
-        return nircam_filter(*args, **kwargs)
-    else:
-        raise NotImplementedError(f"{self.inst_name} does not have a read bandpass function.")
-
-
 def bp_igood(bp, min_trans=0.001, fext=0.05):
     """
     Given a bandpass with transmission 0.0-1.0, return the indices that
     cover only the region of interest and ignore those wavelengths with
     very low transmission less than and greater than the bandpass width.
+
+    Parameters
+    ----------
+    bp : synphot bandpass object
+        Bandpass to use
+    min_trans : float
+        Minimum transmission value outside of band to keep
+    fext : float
+        Fractional extension of bandpass width to keep
     """
     # Select which wavelengths to use
-    igood = bp.throughput > min_trans
+    igood = bp.throughput >= min_trans
     # Select the "good" wavelengths
     wgood = (bp.wave)[igood]
     w1 = wgood.min()
@@ -80,7 +80,7 @@ def miri_filter(filter, **kwargs):
     hdulist.close()
 
     # Select which wavelengths to keep
-    igood = bp_igood(bp, min_trans=0.005, fext=0.1)
+    igood = bp_igood(bp, min_trans=0.001, fext=0.1)
     wgood = (bp.wave)[igood]
     w1 = wgood.min()
     w2 = wgood.max()
@@ -90,11 +90,11 @@ def miri_filter(filter, **kwargs):
     dw_arr = bp.wave[1:] - bp.wave[:-1]
     dw = np.median(dw_arr)
     warr = np.arange(w1,w2, dw)
-    bp = bp.resample(warr)
+    th = bp(warr)
 
     # Need to place zeros at either end so Pysynphot doesn't extrapolate
-    warr = np.concatenate(([bp.wave.min()-dw],bp.wave,[bp.wave.max()+dw]))
-    tarr = np.concatenate(([0],bp.throughput,[0]))
+    warr = np.concatenate(([warr.min()-dw],warr,[warr.max()+dw]))
+    tarr = np.concatenate(([0],th,[0]))
     bp   = S.ArrayBandpass(warr, tarr, name=bp_name)
         
     return bp
@@ -124,6 +124,8 @@ def nircam_com_th(wave_out=None, ND_acq=False):
     if wave_out is None:
         return wvals, tvals
     else:
+        if isinstance(wave_out, u.Quantity):
+            wave_out = wave_out.to_value(u.um)
         return np.interp(wave_out, wvals, tvals, left=0, right=0)
 
 
@@ -153,6 +155,8 @@ def nircam_com_nd(wave_out=None):
     if wave_out is None:
         return wdata, odata
     else:
+        if isinstance(wave_out, u.Quantity):
+            wave_out = wave_out.to_value(u.um)
         return np.interp(wave_out, wdata, odata, left=0, right=0)
 
 def nircam_lyot_th(channel, wave_out=None):
@@ -206,11 +210,27 @@ def nircam_lyot_th(channel, wave_out=None):
     if wave_out is None:
         return wtemp, ttemp
     else:
+        if isinstance(wave_out, u.Quantity):
+            wave_out = wave_out.to_value(u.um)
         return np.interp(wave_out, wtemp, ttemp, left=0, right=0)
 
 
 def nircam_grism_si_ar(module, return_bp=False):
-    """NIRCam grism Si and AR coating transmission data"""
+    """NIRCam grism Si and AR coating transmission data
+    
+    Parameters
+    ----------
+    module : str
+        NIRCam module 'A' or 'B'
+    return_bp : bool
+        Return synphot bandpass object instead of wavelength and throughput arrays.
+
+    Returns
+    -------
+    wdata, tdata : ndarray
+        Wavelength and throughput arrays.
+        Wave units are microns.
+    """
 
     from scipy.signal import savgol_filter
 
@@ -225,18 +245,32 @@ def nircam_grism_si_ar(module, return_bp=False):
     tdata = savgol_filter(tdata, 10, 3)
 
     if return_bp:
-        bp = S.ArrayBandpass(wave=1e4*wdata, throughput=tdata)
+        bp = S.ArrayBandpass(wdata, tdata, waveunits='um')
         return bp
     else:
         return wdata, tdata
 
 def nircam_grism_th(module, grism_order=1, wave_out=None, return_bp=False):
-    """NIRCam grism throughput"""
+    """NIRCam grism throughput
+    
+    Parameters
+    ----------
+    module : str
+        NIRCam module 'A' or 'B'
+    grism_order : int
+        Grism order 1 or 2
+    wave_out : ndarray
+        Optional wavelength array in units of microns.
+        Only returns throughput array if set.
+    return_bp : bool
+        Return synphot bandpass object instead of wavelength and throughput arrays.
+    """
 
     from scipy.interpolate import interp1d
     from .maths import jl_poly
 
     # Si plus AR coating transmission
+    # wdata is in units of microns
     wdata, tdata = nircam_grism_si_ar(module, return_bp=False)
 
     # coefficients are only valid for 2.3-5.1 um
@@ -291,14 +325,27 @@ def nircam_grism_th(module, grism_order=1, wave_out=None, return_bp=False):
 
 
 def qe_nircam(sca, wave=None, flight=True):
-    """NIRCam QE Curves"""
+    """NIRCam QE Curves
+    
+    Parameters
+    ==========
+    sca : str
+        NIRCam SCA name, e.g. 'NRCA5'
+    wave : ndarray
+        Wavelength array in units of microns.
+    flight : bool
+        Use flight or pre-flight QE curves?
+    """
 
     from .utils import get_detname
+
+    sca = get_detname(sca, use_long=False)
+    if wave is not None:
+        wave = np.atleast_1d(wave)
 
     if flight:
         return qe_nircam_flight(sca, wave=wave)
     else:
-        sca = get_detname(sca)
         module = sca[3]
         channel = 'LW' if sca[-1]=='5' else 'SW'
         return qe_nircam_preflight(channel, module, wave=wave)
@@ -324,7 +371,12 @@ def qe_nircam_flight(sca, wave=None):
     }
 
     # Select coefficient
-    cf = np.array(cf_dict.get(sca))
+    cf_list = cf_dict.get(sca)
+    if cf_list is None:
+        raise ValueError(f'Invalid SCA: {sca}')
+    cf = np.asarray(cf_list)
+
+    set_edges_to_zero = True if wave is None else False
 
     channel = 'LW' if sca[-1]=='5' else 'SW'
     if channel=='SW':
@@ -346,9 +398,12 @@ def qe_nircam_flight(sca, wave=None):
         qe = jl_poly(wave, cf)
         qe[qe<0] = 0
 
-    qe[0] = 0
-    qe[-1] = 0
-    bp_qe = S.ArrayBandpass(wave=1e4*wave, throughput=qe)
+    if set_edges_to_zero:
+        qe[0] = 0
+        qe[-1] = 0
+
+    name = f'NIRCam {sca} Flight QE'
+    bp_qe = S.ArrayBandpass(wave=1e4*wave, throughput=qe, name=name)
 
     return bp_qe
 
@@ -415,6 +470,9 @@ def qe_nircam_preflight(channel, module, wave=None):
         lw_qe[lw_qe<0] = 0
         bp_qe = S.ArrayBandpass(wave=1e4*lw_wavelength, throughput=lw_qe)
 
+    name = f'NIRCam {channel} {module} pre-flight QE'
+    bp_qe.name = name
+
     return bp_qe
 
 def qe_nirspec(wave=None):
@@ -441,7 +499,7 @@ def qe_nirspec(wave=None):
     th[red] = th[red] * np.exp((lw_wavecut-wave[red])*lw_exponential)
 
     th[th<0] = 0
-    bp = S.ArrayBandpass(wave*1e4, th)
+    bp = S.ArrayBandpass(wave*1e4, th, name='NIRSpec QE')
 
     return bp
 
@@ -1079,11 +1137,14 @@ def bp_gaia(filter, release='DR2'):
     return bp
 
 
-def filter_width(bp):
+def filter_width(bp, gsmooth=3):
     """Return wavelength positions of filter edges at half max
     
     Output units will be in microns.
     """
+
+    from astropy.convolution import convolve
+    from astropy.convolution import Gaussian1DKernel
 
     bp.convert('um')
     w, th = (bp.wave, bp.throughput)
@@ -1092,12 +1153,13 @@ def filter_width(bp):
         wavg = bp.avgwave().to_value(u.um)
 
     # Quick Gaussian smoothing of noisy data
-    from astropy.convolution import convolve
-    from astropy.convolution import Gaussian1DKernel
-    th_smooth = convolve(th, Gaussian1DKernel(3))
+    if (gsmooth is not None) and (gsmooth > 0):
+        th_smooth = convolve(th, Gaussian1DKernel(gsmooth))
+        th_mid = np.interp(wavg, w, th_smooth)
+    else:
+        th_mid = np.interp(wavg, w, th)
 
     # Throughput at the effective wavelength
-    th_mid = np.interp(wavg, w, th_smooth)
     th_half = th_mid / 2
 
     ind1 = (w<wavg) & (th<(th_mid+th_half) / 2)  & (th>th_half / 2)
