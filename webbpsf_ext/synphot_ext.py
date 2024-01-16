@@ -8,6 +8,7 @@ from astropy.config import ConfigItem
 import stsynphot as stsyn
 import synphot
 from synphot.units import validate_wave_unit, convert_flux
+from synphot.models import get_waveset
 
 # Extend default wavelength range to 35 um
 _wave, _wave_str = synphot.generate_wavelengths(
@@ -101,14 +102,12 @@ class Bandpass(synphot.SpectralElement):
     @property
     def waveset(self):
         """Optimal wavelengths for sampling the spectrum or bandpass."""
-        from synphot.models import get_waveset
-        from synphot.utils import validate_wavelengths
 
         w = get_waveset(self.model)
         if w is None:
             # Get default waveset from stsynphot
             w = stsyn.conf.waveset_array
-        validate_wavelengths(w)
+        self._validate_wavelengths(w)
         return w * self._internal_wave_unit
 
     @property
@@ -161,7 +160,7 @@ class BoxFilter(Bandpass):
         Name of the bandpass. Will default to 'Box at {center} ({width} wide)'.
     """
 
-    def __init__(self, center, width, waveunits='angstrom', name=None, **kwargs):
+    def __init__(self, center, width, waveunits='angstrom', **kwargs):
 
         from synphot.models import Box1D
 
@@ -188,6 +187,59 @@ class BoxFilter(Bandpass):
         """ Calculate the width of the filter at half max """
         return self.model.width.value * self._internal_wave_unit
     
+    def taper(self, wavelengths=None):
+        """Taper the spectrum or bandpass.
+
+        The wavelengths to use for the first and last points are
+        calculated by using the same ratio as for the 2 interior points.
+
+        Parameters
+        ----------
+        wavelengths : array-like, `~astropy.units.quantity.Quantity`, or `None`
+            Wavelength values for tapering.
+            If not a Quantity, assumed to be in Angstrom.
+            If `None`, `waveset` is used.
+
+        Returns
+        -------
+        sp : `BaseSpectrum`
+            Tapered empirical spectrum or bandpass.
+            ``self`` is returned if already tapered (e.g., box model).
+
+        """
+        x = self._validate_wavelengths(wavelengths)
+
+        # Calculate new end points for tapering
+        w1 = x[0] ** 2 / x[1]
+        w2 = x[-1] ** 2 / x[-2]
+
+        # Special handling for empirical data.
+        # This is to be compatible with ASTROLIB PYSYNPHOT behavior.
+        if isinstance(self._model, synphot.Empirical1D):
+            y1 = self._model.lookup_table[0]
+            y2 = self._model.lookup_table[-1]
+        # Other models can just evaluate at new end points
+        else:
+            y1 = self(w1)
+            y2 = self(w2)
+
+        # Nothing to do
+        if y1 == 0 and y2 == 0:
+            return self  # Do we need a deepcopy here?
+
+        y = self(x)
+
+        if y1 != 0:
+            x = np.insert(x, 0, w1)
+            y = np.insert(y, 0, 0.0 * y.unit)
+        if y2 != 0:
+            x = np.insert(x, x.size, w2)
+            y = np.insert(y, y.size, 0.0 * y.unit)
+
+        name = f'{self.name} tapered'
+
+        return Bandpass(synphot.Empirical1D, points=x, lookup_table=y, name=name)
+    
 class UniformTransmission(Bandpass):
     
     def __init__(self, amplitude, waveunits='angstrom', name=None, **kwargs):
@@ -211,7 +263,14 @@ class UniformTransmission(Bandpass):
         """ Calculate the width of the filter at half max """
         return None
 
-# def ObsBandpass
+def ObsBandpass(filtername):
+
+    # check if 'bessel', 'johnson', or 'cousins' string exist in filtername
+    filtername_lower = filtername.lower()
+    if np.any([s in filtername_lower for s in ['bessel', 'johnson', 'cousins']]):
+        return Bandpass.from_filter(filtername_lower.replace(',', '_'))
+    else:
+        raise ValueError(f'{filtername} not a valid bandpass. If using HST filters, use stsynphot package.')
 
 def ArrayBandpass(wave, throughput, name="UnnamedArrayBandpass", keep_neg=False, **kwargs):
     """ Generate a synphot bandpass from arrays
@@ -240,7 +299,7 @@ def ArrayBandpass(wave, throughput, name="UnnamedArrayBandpass", keep_neg=False,
         waveunits = 'angstrom' if waveunits is None else waveunits
         wave = wave * validate_unit(waveunits)
 
-    return Bandpass(synphot.models.Empirical1D, points=wave, lookup_table=throughput, 
+    return Bandpass(synphot.Empirical1D, points=wave, lookup_table=throughput, 
                     name=name, waveunits=waveunits, keep_neg=keep_neg, **kwargs)
 
 
@@ -333,15 +392,13 @@ class Spectrum(synphot.SourceSpectrum):
 
     @property
     def waveset(self):
-        """Optimal wavelengths for sampling the spectrum or bandpass."""
-        from synphot.models import get_waveset
-        from synphot.utils import validate_wavelengths
+        """Optimal wavelengths for sampling the spectrum."""
 
         w = get_waveset(self.model)
         if w is None:
             # Get default waveset from stsynphot
             w = stsyn.conf.waveset_array
-        validate_wavelengths(w)
+        self._validate_wavelengths(w)
         return w * self._internal_wave_unit
 
     @property
@@ -386,9 +443,39 @@ class Spectrum(synphot.SourceSpectrum):
         except SynphotError:
             self._fluxunits = validate_unit(new_units)
 
+    def renorm(self, RNval, RNUnits, band, force=False):
+        """Renormalize the spectrum to the specified value, unit, and bandpass.
+
+        This wraps `normalize` attribute for convenience using the telescope
+        area defined in stsynphot configuration (defaulted to JWST collecting
+        area).
+
+        Parameters
+        ----------
+        RNval : float or astropy.units.Quantity
+            Flux value for renormalization.
+        RNUnits : str or astropy.units.Unit
+            Flux unit for renormalization. If ``RNval`` is a Quantity,
+            this is ignored.
+        band : `Bandpass`
+            Bandpass to renormalize in.
+        force : bool
+            Force renormalization regardless of overlap status with given
+            bandpass. If `True`, overlap check is skipped. Default is `False`.
+        """
+            
+        # Check if RNval is a Quantity
+        if not isinstance(RNval, u.Quantity):
+            RNUnits = validate_unit(RNUnits)
+            RNval = RNval * RNUnits
+
+        # Renormalize
+        return self.normalize(RNval, band, area=stsyn.conf.area, 
+                              vegaspec=stsyn.Vega, force=force)
+
 
 def ArraySpectrum(wave, flux, name="UnnamedArraySpectrum", keep_neg=False, **kwargs):
-    """ Generate a synphot bandpass from arrays
+    """ Generate a synphot spectrum from arrays
 
     Parameters
     ----------
@@ -428,7 +515,7 @@ def ArraySpectrum(wave, flux, name="UnnamedArraySpectrum", keep_neg=False, **kwa
                     keep_neg=keep_neg, **kwargs)
 
 def FileSpectrum(filename, keep_neg=False, **kwargs):
-    """ Create synphot bandpass from file.
+    """ Create synphot spectrum from file.
 
     If filename has 'fits' or 'fit' suffix, it is read as FITS.
     Otherwise, it is read as ASCII.
@@ -436,7 +523,7 @@ def FileSpectrum(filename, keep_neg=False, **kwargs):
     Parameters
     ----------
     filename : str
-        Name of file containing bandpass information. File must have
+        Name of file containing spectral information. File must have
         two columns: wavelength and throughput.
     keep_neg : bool, optional
         Whether to keep negative throughput values. Default is False.
@@ -479,7 +566,7 @@ def FileSpectrum(filename, keep_neg=False, **kwargs):
     header, wave, flux = specio.read_spec(filename, **kwargs)
     name = kwargs.get('name', os.path.basename(filename))
 
-    return ArrayBandpass(wave, flux, waveunits=waveunits, fluxunits=fluxunits,
+    return ArraySpectrum(wave, flux, waveunits=waveunits, fluxunits=fluxunits,
                          name=name, keep_neg=keep_neg, meta={'header': header})
 
 def Icat(gridname, t_eff, metallicity, log_g, name=None, **kwargs):
@@ -531,3 +618,273 @@ def FlatSpectrum(flux, name='UnnamedFlatSpectrum', **kwargs):
         flux = flux * validate_unit(fluxunits)
 
     return Spectrum(ConstFlux1D, amplitude=flux, fluxunits=fluxunits, name=name, **kwargs)
+
+
+##########################################################
+# Observation class
+##########################################################
+
+class Observation(synphot.Observation):
+
+    area = stsyn.conf.area
+
+    def __call__(self, wavelengths, flux_unit=None):
+        """Sample the spectrum.
+
+        Parameters
+        ----------
+        wavelengths : array-like or `~astropy.units.quantity.Quantity`
+            Wavelength values for sampling. If not a Quantity,
+            assumed to be in Angstrom.
+
+        flux_unit : str, `~astropy.units.Unit`, or `None`
+            Flux is converted to this unit.
+            If not given, internal unit is used.
+
+        kwargs : dict
+            Keywords acceptable by :func:`~synphot.units.convert_flux`.
+
+        Returns
+        -------
+        sampled_result : `~astropy.units.quantity.Quantity`
+            Sampled flux in the given unit.
+            Might have negative values.
+
+        """
+        kwargs = {'flux_unit': flux_unit, 'area': self.area, 'vegaspec': stsyn.Vega}
+        return super().__call__(wavelengths, **kwargs)
+
+
+    def __init__(self, spec, band, binset=None, force='none', waveunits='angstrom', fluxunits='photlam', name=None):
+
+        # Initialize parent class
+        super().__init__(spec, band, binset=binset, force=force)
+
+        # Set user wavelength and flux units
+        self._waveunits = validate_unit(waveunits)
+        self._fluxunits = validate_unit(fluxunits)
+
+        if name is not None:
+            self.name = name
+
+    @property
+    def name(self):
+        """ Spectrum name """
+        return self.meta.get('expr', 'UnnamedSpectrum')
+    @name.setter
+    def name(self, value):
+        self.meta['expr'] = value
+
+    @property
+    def waveset(self):
+        """Optimal wavelengths for sampling the spectrum."""
+
+        w = get_waveset(self.model)
+        if w is None:
+            # Get default waveset from stsynphot
+            w = stsyn.conf.waveset_array
+        self._validate_wavelengths(w)
+        return w * self._internal_wave_unit
+
+    @property
+    def waveunits(self):
+        """ User wavelength units """
+        return self._waveunits
+    
+    @property
+    def fluxunits(self):
+        """ User flux units """
+        return self._fluxunits
+    
+    @property
+    def wave(self):
+        """ User wavelength array """
+        return self.waveset.to_value(self.waveunits)
+    
+    @property
+    def flux(self):
+        """ User flux array """
+        flux_intrinsic = self(self.waveset)
+        if self._fluxunits == self._internal_flux_unit:
+            return flux_intrinsic.value
+        else:
+            flux_output = convert_flux(self.waveset, flux_intrinsic, self.fluxunits)
+            return flux_output.value
+    
+    @property
+    def name(self):
+        """ Spectrum name """
+        return self.meta.get('expr', 'UnnamedSpectrum')
+    @name.setter
+    def name(self, value):
+        self.meta['expr'] = value
+
+    def convert(self, new_units):
+        """ Convert wavelength or flux units """
+        from synphot.exceptions import SynphotError
+
+        try:
+            self._waveunits = validate_wave_unit(new_units)
+        except SynphotError:
+            self._fluxunits = validate_unit(new_units)
+
+
+    def sample_binned(self, wavelengths=None, flux_unit=None, **kwargs):
+        kwargs['area'] = self.area
+        kwargs['vegaspec'] = stsyn.Vega
+        return super().sample_binned(wavelengths, flux_unit, **kwargs)
+
+    def effstim(self, flux_unit=None, wavelengths=None):
+        """Calculate effective stimulus for given flux unit.
+
+        Area is set to the default value in stsynphot configuration (JWST).
+
+        Parameters
+        ----------
+        flux_unit : str or `~astropy.units.Unit` or `None`
+            The unit of effective stimulus.
+            COUNT gives result in count/s (see :meth:`countrate` for more
+            options).
+            If not given, internal unit is used.
+
+        wavelengths : array-like, `~astropy.units.quantity.Quantity`, or `None`
+            Wavelength values for sampling. This must be given if
+            ``self.waveset`` is undefined for the underlying spectrum model(s).
+            If not a Quantity, assumed to be in Angstrom.
+            If `None`, ``self.waveset`` is used.
+
+        Returns
+        -------
+        eff_stim : `~astropy.units.quantity.Quantity`
+            Observation effective stimulus based on given flux unit.
+        """
+        return super().effstim(flux_unit=flux_unit, wavelengths=wavelengths,
+                               area=self.area, vegaspec=stsyn.Vega)
+        
+    def countrate(self, binned=True, wavelengths=None, waverange=None,
+                  force=False):
+        """Calculate :ref:`effective stimulus <synphot-formula-effstim>`
+        in count/s.
+
+        Parameters
+        ----------
+        binned : bool
+            Sample data in native wavelengths if `False`.
+            Else, sample binned data (default).
+
+        wavelengths : array-like, `~astropy.units.quantity.Quantity`, or `None`
+            Wavelength values for sampling. This must be given if
+            ``self.waveset`` is undefined for the underlying spectrum model(s).
+            If not a Quantity, assumed to be in Angstrom.
+            If `None`, ``self.waveset`` or `binset` is used, depending
+            on ``binned``.
+
+        waverange : tuple of float, Quantity, or `None`
+            Lower and upper limits of the desired wavelength range.
+            If not a Quantity, assumed to be in Angstrom.
+            If `None`, the full range is used.
+
+        force : bool
+            If a wavelength range is given, partial overlap raises
+            an exception when this is `False` (default). Otherwise,
+            it returns calculation for the overlapping region.
+            Disjoint wavelength range raises an exception regardless.
+
+        Returns
+        -------
+        count_rate : `~astropy.units.quantity.Quantity`
+            Observation effective stimulus in count/s.
+
+        Raises
+        ------
+        synphot.exceptions.DisjointError
+            Wavelength range does not overlap with observation.
+
+        synphot.exceptions.PartialOverlap
+            Wavelength range only partially overlaps with observation.
+
+        synphot.exceptions.SynphotError
+            Calculation failed, including but not limited to NaNs in flux.
+
+        """
+
+        return super().countrate(self.area, binned=binned, wavelengths=wavelengths,
+                                 waverange=waverange, force=force)
+    
+    def plot(self, binned=True, wavelengths=None, flux_unit=None, **kwargs): 
+        """Plot the observation.
+
+        .. note:: Uses ``matplotlib``.
+
+        Parameters
+        ----------
+        binned : bool
+            Plot data in native wavelengths if `False`.
+            Else, plot binned data (default).
+
+        wavelengths : array-like, `~astropy.units.quantity.Quantity`, or `None`
+            Wavelength values for sampling.
+            If not a Quantity, assumed to be in Angstrom.
+            If `None`, ``self.waveset`` or `binset` is used, depending
+            on ``binned``.
+
+        flux_unit : str or `~astropy.units.Unit` or `None`
+            Flux is converted to this unit for plotting.
+            If not given, internal unit is used.
+
+        kwargs : dict
+            See :func:`synphot.spectrum.BaseSpectrum.plot`.
+
+        Raises
+        ------
+        synphot.exceptions.SynphotError
+            Invalid inputs.
+
+        """
+
+        kwargs['area'] = self.area
+        kwargs['vegaspec'] = stsyn.Vega
+        return super().plot(binned=binned, wavelengths=wavelengths, 
+                            flux_unit=flux_unit, **kwargs)
+
+    def as_spectrum(self, binned=True, wavelengths=None):
+        """Reduce the observation to an empirical source spectrum.
+
+        An observation is a complex object with some restrictions
+        on its capabilities. At times, it would be useful to work
+        with the observation as a simple object that is easier to
+        manipulate and takes up less memory.
+
+        This is also useful for writing an observation as sampled
+        spectrum out to a FITS file.
+
+        Parameters
+        ----------
+        binned : bool
+            Write out data in native wavelengths if `False`.
+            Else, write binned data (default).
+
+        wavelengths : array-like, `~astropy.units.quantity.Quantity`, or `None`
+            Wavelength values for sampling.
+            If not a Quantity, assumed to be in Angstrom.
+            If `None`, ``self.waveset`` or `binset` is used, depending
+            on ``binned``.
+
+        Returns
+        -------
+        sp : `~synphot.spectrum.SourceSpectrum`
+            Empirical source spectrum.
+
+        """
+        from synphot import Empirical1D
+
+        if binned:
+            w, y = self._get_binned_arrays(
+                wavelengths, self._internal_flux_unit)
+        else:
+            w, y = self._get_arrays(
+                wavelengths, flux_unit=self._internal_flux_unit)
+
+        header = {'observation': str(self), 'binned': binned}
+        return Spectrum(Empirical1D, points=w, lookup_table=y, name=self.name,
+                        meta={'header': header})
