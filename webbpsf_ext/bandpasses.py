@@ -621,8 +621,8 @@ def nircam_filter(filter, pupil=None, mask=None, module=None, sca=None, ND_acq=F
 
     Returns
     -------
-    :mod:`pysynphot.obsbandpass`
-        A Pysynphot bandpass object.
+    :class:`S.Bandpass`
+        A Synphot bandpass object.
     """
 
     from .utils import get_detname
@@ -1028,8 +1028,8 @@ def bp_2mass(filter):
 
     Returns
     -------
-    :mod:`pysynphot.obsbandpass`
-        A Pysynphot bandpass object.
+    :class:`S.Bandpass`
+        A Synphot bandpass object.
 
     """
 
@@ -1064,8 +1064,8 @@ def bp_wise(filter):
 
     Returns
     -------
-    :mod:`pysynphot.obsbandpass`
-        A Pysynphot bandpass object.
+    :class:`S.Bandpass`
+        A synphot bandpass object.
 
     """
 
