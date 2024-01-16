@@ -1,4 +1,3 @@
-import pytest
 import numpy as np
 
 import webbpsf_ext.utils as utils
@@ -31,3 +30,4 @@ def test_pix_ang_size():
 
     # Check that squaring 206265 arcsec/pixel outputs 1 radian
     assert np.allclose(utils.pix_ang_size(pixscale=206265), 1)
+
