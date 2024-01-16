@@ -411,8 +411,13 @@ class NIRCam_ext(webbpsf_NIRCam):
         try: kwargs['grism_order'] = self._grism_order
         except: pass
 
-        bp = nircam_filter(self.filter, pupil=self.pupil_mask, mask=self.image_mask,
-                            module=self.module, sca=self.detector, **kwargs)
+        # Mask, module, and detector keywords
+        kwargs['pupil'] = self.pupil_mask
+        kwargs['mask'] = self.image_mask
+        kwargs['module'] = self.module
+        kwargs['sca'] = self.detector
+
+        bp = nircam_filter(self.filter, **kwargs)
         
         return bp
 
@@ -1799,11 +1804,11 @@ def _init_inst(self, filter=None, pupil_mask=None, image_mask=None,
     kw_pupil = kwargs.get('pupil')
     kw_mask  = kwargs.get('mask')
     if (pupil_mask is None) and (kw_pupil is not None) and isinstance(kw_pupil, str):
-        _log.warn('Deprecation warning: Use `pupil_mask` keyword rather than `pupil` to set pupil mask.')
+        _log.warning('Deprecation warning: Use `pupil_mask` keyword rather than `pupil` to set pupil mask.')
         # pupil_mask = kwargs.get('pupil')
     # Option to use `mask` instead of `image_mask`
     if (image_mask is None) and (kw_mask is not None):
-        _log.warn('Deprecation warning: Use `image_mask` keyword rather than `mask` to set image mask.')
+        _log.warning('Deprecation warning: Use `image_mask` keyword rather than `mask` to set image mask.')
         # image_mask = kwargs.get('mask')
 
     # Ensure CIRCLYOT or WEDGELYOT in case coron masks were specified
@@ -1953,19 +1958,19 @@ def _clear_coeffs_dir(self):
         save_dir = Path(save_dir)
 
     if save_dir.exists() and save_dir.is_dir():
-        _log.warn(f"Remove contents from '{save_dir}/'?")
-        _log.warn("Type 'Y' to continue...")
+        _log.warning(f"Remove contents from '{save_dir}/'?")
+        _log.warning("Type 'Y' to continue...")
         response = input("")
         if response=="Y":
             # Delete directory and contents
             shutil.rmtree(save_dir)
             # Recreate empty directory
             os.makedirs(save_dir, exist_ok=True)
-            _log.warn("Directory emptied.")
+            _log.warning("Directory emptied.")
         else:
-            _log.warn("Process aborted.")
+            _log.warning("Process aborted.")
     else:
-        _log.warn(f"Directory '{save_dir}/' does not exist!")
+        _log.warning(f"Directory '{save_dir}/' does not exist!")
 
 
 def _gen_save_name(self, wfe_drift=0):
@@ -2491,7 +2496,7 @@ def _calc_psf_webbpsf(self, calc_psf_func, add_distortion=None, fov_pixels=None,
                 kwargs['detector_oversample'] = self.oversample
                 oversample = 4
         elif oversample<4: # no changes, but send informational message
-            _log.warn('oversample={oversample} may produce imprecise results for coronagraphy. Suggest >=4.')
+            _log.warning('oversample={oversample} may produce imprecise results for coronagraphy. Suggest >=4.')
     else:
         oversample = self.oversample if oversample is None else oversample
 
@@ -2764,7 +2769,7 @@ def _gen_psf_coeff(self, nproc=None, wfe_drift=0, force=False, save=True,
     # Load data from already saved FITS file
     if os.path.exists(outfile) and (not force):
         if return_extras:
-            _log.warn("return_extras only valid if coefficient files does not exist or force=True")
+            _log.warning("return_extras only valid if coefficient files does not exist or force=True")
 
         _log.info(f'Loading {outfile}')
         hdul = fits.open(outfile)
@@ -3135,7 +3140,7 @@ def _gen_wfedrift_coeff(self, force=False, save=True, wfe_list=[0,1,2,5,10,20,40
             self._psf_coeff_mod['wfe_drift_lxmap'] = wfe_drift_lxmap
             return
 
-    _log.warn('Generating WFE Drift coefficients. This may take some time...')
+    _log.warning('Generating WFE Drift coefficients. This may take some time...')
 
     # Cycle through WFE drifts for fitting
     wfe_list = np.array(wfe_list)
@@ -3145,7 +3150,7 @@ def _gen_wfedrift_coeff(self, force=False, save=True, wfe_list=[0,1,2,5,10,20,40
     for off_pos in ['coron_shift_x','coron_shift_y']:
         val = self.options.get(off_pos)
         if (self.image_mask is not None) and (val is not None) and (val != 0):
-            _log.warn(f'{off_pos} is set to {val:.3f} arcsec. Should this be 0?')
+            _log.warning(f'{off_pos} is set to {val:.3f} arcsec. Should this be 0?')
 
     log_prev = conf.logging_level
     setup_logging('WARN', verbose=False)
@@ -3320,7 +3325,7 @@ def _gen_wfefield_coeff(self, force=False, save=True, return_results=False, retu
             self._psf_coeff_mod['si_field_apname'] = out['arr_3'].flatten()[0]
             return
 
-    _log.warn('Generating field-dependent coefficients. This may take some time...')
+    _log.warning('Generating field-dependent coefficients. This may take some time...')
 
     # Cycle through a list of field points
     # These are the measured CV3 field positions
@@ -3523,9 +3528,9 @@ def _gen_wfemask_coeff(self, force=False, save=True, large_grid=None,
             return
 
     if large_grid:
-        _log.warn('Generating mask position-dependent coeffs (large grid). This may take some time...')
+        _log.warning('Generating mask position-dependent coeffs (large grid). This may take some time...')
     else:
-        _log.warn('Generating mask position-dependent coeffs (small grid). This may take some time...')
+        _log.warning('Generating mask position-dependent coeffs (small grid). This may take some time...')
 
     # Current mask positions to return to at end
     # Bar offset is set to 0 during psf_coeff calculation
@@ -4437,7 +4442,7 @@ def _coeff_mod_wfe_mask(self, coord_vals, coord_frame, siaf_ap=None):
         # print(xoff_asec, yoff_asec)
 
         if (self.name=='NIRCam') and (np.any(np.abs(xoff_asec)>12) or np.any(np.abs(yoff_asec)>12)):
-            _log.warn("Some values outside mask FoV (beyond 12 asec offset)!")
+            _log.warning("Some values outside mask FoV (beyond 12 asec offset)!")
             
         # print(xoff_asec, yoff_asec)
         xgrid  = self._psf_coeff_mod['si_mask_xgrid']  # arcsec
@@ -4653,7 +4658,7 @@ def _calc_psfs_sgd(self, xoff_asec, yoff_asec, use_coeff=True, return_oversample
     """Calculate small grid dithers PSFs"""
 
     if self.is_coron==False:
-        _log.warn("`calc_sgd` only valid for coronagraphic observations (set `image_mask` attribute).")
+        _log.warning("`calc_sgd` only valid for coronagraphic observations (set `image_mask` attribute).")
         return
 
     if use_coeff:
@@ -4905,7 +4910,7 @@ def _nrc_coron_psf_sums(self, coord_vals, coord_frame, siaf_ap=None, return_max=
         finterp = interp1d(xvals, psf_cen_max_arr, kind='linear', fill_value='extrapolate')
         psf_cen_max = finterp(cx_idl)
     else:
-        _log.warn(f"Image mask not recognized: {self.image_mask}")
+        _log.warning(f"Image mask not recognized: {self.image_mask}")
         return None
         
     if return_max:
@@ -4963,7 +4968,7 @@ def _nrc_coron_rescale(self, res, coord_vals, coord_frame, siaf_ap=None, sp=None
         sp_counts = 1
 
     if nspec>1 and nspec!=nfield:
-        _log.warn("Number of spectra should be 1 or equal number of field points")
+        _log.warning("Number of spectra should be 1 or equal number of field points")
 
     # Scale by count rate
     psf_sum *= sp_counts
