@@ -1,3 +1,4 @@
+from pathlib import Path
 import numpy as np
 import matplotlib
 import matplotlib.pyplot as plt
@@ -11,8 +12,8 @@ import astropy.units as u
 from scipy.interpolate import griddata, RegularGridInterpolator, interp1d
 
 from . import conf
-from .utils import S
-# from . import synphot_ext as S
+# from .utils import S
+from . import synphot_ext as S
 from .bandpasses import miri_filter, nircam_filter
 from .robust import medabsdev
 
@@ -20,16 +21,16 @@ import logging
 _log = logging.getLogger('webbpsf_ext')
 
 from . import __path__
-_spec_dir = __path__[0] + '/spectral_data/'
+_spec_dir = Path(__path__[0]) / 'spectral_data/'
 
 def BOSZ_filename(Teff, metallicity, log_g, res, carbon=0, alpha=0):
     """ Generate filename for BOSZ spectrum. """
 
     teff_str = f't{Teff:04.0f}'
     logg_str = 'g{:02.0f}'.format(int(log_g*10))
-    metal_str = 'mp{:02.0f}'.format(int(abs(metallicity*10)+0.5))
 
     # Metallicity [M/H]
+    metal_str = 'mp{:02.0f}'.format(int(abs(metallicity*10)+0.5))
     if metallicity<0:
         metal_str = metal_str.replace('p', 'm')
 
@@ -51,15 +52,18 @@ def BOSZ_filename(Teff, metallicity, log_g, res, carbon=0, alpha=0):
 
     return fname
 
-def download_BOSZ_spectrum(Teff, metallicity, log_g, res, carbon=0, alpha=0):
+def download_BOSZ_spectrum(Teff, metallicity, log_g, res, carbon=0, alpha=0,
+                           outdir=None):
 
     import requests
 
-    res_dir = os.path.join(_spec_dir, 'bosz_grids', 'R{}'.format(res))
+    if outdir is None:
+        res_dir = os.path.join(_spec_dir, 'bosz_grids', 'R{}'.format(res))
 
-    # Create resolution directory if it doesn't exists
-    if not os.path.isdir(res_dir):
-        os.makedirs(res_dir)
+        # Create resolution directory if it doesn't exists
+        if not os.path.isdir(res_dir):
+            os.makedirs(res_dir)
+        outdir = res_dir
 
     # Generate URL directory that file is saved in
     url_base = 'http://archive.stsci.edu/missions/hlsp/bosz/fits/'
@@ -84,7 +88,7 @@ def download_BOSZ_spectrum(Teff, metallicity, log_g, res, carbon=0, alpha=0):
         req.raise_for_status()
 
     # Save file to directory
-    outpath = os.path.join(res_dir, fname)
+    outpath = os.path.join(outdir, fname)
     _log.info(f'Saving file to: {outpath}')
     open(outpath, 'wb').write(req.content)
 
@@ -132,11 +136,11 @@ def BOSZ_spectrum(Teff, metallicity, log_g, res=2000, interpolate=True,
     https://archive.stsci.edu/prepds/bosz/
     """
 
-    model_dir = _spec_dir + 'bosz_grids/'
-    res_dir = model_dir + 'R{}/'.format(res)
+    model_dir = os.path.join(_spec_dir, 'bosz_grids/')
+    res_dir = os.path.join(model_dir, f'R{res:.0f}/')
 
     if not os.path.isdir(model_dir):
-        raise IOError('BOSZ model directory does not exist: {}'.format(model_dir))
+        raise IOError(f'BOSZ model directory does not exist: {model_dir}')
     if not os.path.isdir(res_dir):
         os.makedirs(res_dir)
         # raise IOError('Resolution directory does not exist: {}'.format(res_dir))
@@ -230,11 +234,12 @@ def BOSZ_spectrum(Teff, metallicity, log_g, res=2000, interpolate=True,
         flux_all = []
         for i, f in enumerate(fnames):
             # Download files that don't currently exist
-            if not os.path.isfile(res_dir+f):
+            fpath = os.path.join(res_dir, f)
+            if not os.path.isfile(fpath):
                 download_BOSZ_spectrum(teff_all[i], metal_all[i], logg_all[i], res,
                                        carbon=carbon, alpha=alpha)
 
-            d = fits.getdata(res_dir+f, 1)
+            d = fits.getdata(fpath, 1)
             wave_all.append(d['Wavelength'])
             flux_all.append(d['SpecificIntensity'] * weights[i])
 
@@ -248,11 +253,12 @@ def BOSZ_spectrum(Teff, metallicity, log_g, res=2000, interpolate=True,
         metallicity = metal_all[ind]
 
         # Download files if doesn't exist
-        if not os.path.isfile(res_dir+f):
+        fpath = os.path.join(res_dir, f)
+        if not os.path.isfile(fpath):
             download_BOSZ_spectrum(Teff, metallicity, log_g, res,
                                    carbon=carbon, alpha=alpha)
 
-        d = fits.getdata(res_dir+f, 1)
+        d = fits.getdata(fpath, 1)
         wfin = d['Wavelength']
         ffin = np.pi * d['SpecificIntensity'] # erg/s/cm^2/A
 
@@ -317,10 +323,10 @@ def stellar_spectrum(sptype, *renorm_args, **kwargs):
     def call_bosz(v0,v1,v2,**kwargs):
         if v0 > 35000:
             v0 = 35000
-            _log.warn("BOSZ models stop at 35000K. Setting Teff=35000.")
+            _log.warning("BOSZ models stop at 35000K. Setting Teff=35000.")
         if v0 < 3500:
             v0 = 3500
-            _log.warn("BOSZ models start at 3500K. Setting Teff=3500.")
+            _log.warning("BOSZ models start at 3500K. Setting Teff=3500.")
         return BOSZ_spectrum(v0, v1, v2, **kwargs)
 
 
@@ -1024,7 +1030,7 @@ class planets_sb12(object):
     """
 
 	# Define default self.base_dir
-    _base_dir = _spec_dir + 'spiegel/'
+    _base_dir = os.path.join(_spec_dir, 'spiegel/')
 
     def __init__(self, atmo='hy1s', mass=1, age=100, entropy=10.0, distance=10,
                  accr=False, mmdot=None, mdot=None, accr_rin=2.0, truncated=False,
@@ -1236,9 +1242,7 @@ class planets_sb12(object):
         return self._entropy
 
     def export_pysynphot(self, waveout='angstrom', fluxout='flam'):
-        """Output to :mod:`pysynphot.spectrum` object
-
-        Export object settings to a :mod:`pysynphot.spectrum`.
+        """Output to synphot spectrum object
 
         Parameters
         ----------
@@ -1305,7 +1309,7 @@ def sp_accr(mmdot, rin=2, dist=10, truncated=False,
     """
 
     base_dir = _spec_dir if base_dir is None else base_dir
-    fname = base_dir + 'zhu15_accr.txt'
+    fname = os.path.join(base_dir, 'zhu15_accr.txt')
 
     names = ('MMdot', 'Rin', 'Tmax', 'J', 'H', 'K', 'L', 'M', 'N', 'J2', 'H2', 'K2', 'L2', 'M2', 'N2')
     tbl = ascii.read(fname, guess=True, names=names)
@@ -1369,8 +1373,8 @@ def jupiter_spec(dist=10, waveout='angstrom', fluxout='flam', base_dir=None):
         Location of tabulated file irwin_2014_ref_spectra.txt.
     """
 
-    base_dir = _spec_dir + 'solar_system/' if base_dir is None else base_dir
-    fname = base_dir + 'irwin_2014_ref_spectra.txt'
+    base_dir = os.path.join(_spec_dir, 'solar_system/') if base_dir is None else base_dir
+    fname = os.path.join(base_dir, 'irwin_2014_ref_spectra.txt')
 
     # Column 1: Wavelength (in microns)
     # Column 2: 100*Ap/Astar (Earth-Sun Primary Transit)
@@ -1425,7 +1429,7 @@ def linder_table(file=None, **kwargs):
     """
 
     # Default input directory
-    indir = _spec_dir + 'linder/isochrones/'
+    indir = os.path.join(_spec_dir, 'linder', 'isochrones/')
     # Default file
     if file is None:
         file = 'BEX_evol_mags_-3_MH_0.00.dat'
@@ -1536,10 +1540,10 @@ def linder_filter(table, filt, age, dist=10, cond_file=None,
     #######################################################
     # Grab COND model data to fill in higher masses
     if extrapolate:
-        base_dir = _spec_dir + 'cond_models/'
+        base_dir = os.path.join(_spec_dir, 'cond_models/')
         if cond_file is None: 
-            cond_file = base_dir + 'model.AMES-Cond-2000.M-0.0.JWST.Vega'
-        npsave_file = cond_file + f'.{filt}.npy'
+            cond_file = os.path.join(base_dir, 'model.AMES-Cond-2000.M-0.0.JWST.Vega')
+        npsave_file = os.path.join(cond_file + f'.{filt}.npy')
     
         if os.path.exists(npsave_file):
             mag2, age2, mass2_mjup = np.load(npsave_file)
@@ -1877,7 +1881,7 @@ def mass_sensitivity_table(filt, dist=10, extrapolate=True, lfile=None, age_arr=
     bp = nircam_filter(filt)
     sp = stellar_spectrum('G2V', 0, 'vegamag', bp)
     obs = S.Observation(sp, bp, binset=bp.wave)
-    flux0 = obs.effstim('Jy')
+    flux0 = obs.effstim('Jy').value
     fluxJy_arr = 10**(-0.4*mag_arr)*flux0
 
     mass_arr = []
