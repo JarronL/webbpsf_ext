@@ -12,8 +12,7 @@ import astropy.units as u
 from scipy.interpolate import griddata, RegularGridInterpolator, interp1d
 
 from . import conf
-# from .utils import S
-from . import synphot_ext as S
+from . import synphot_ext as s_ext
 from .bandpasses import miri_filter, nircam_filter
 from .robust import medabsdev
 
@@ -98,7 +97,7 @@ def BOSZ_spectrum(Teff, metallicity, log_g, res=2000, interpolate=True,
     """BOSZ stellar atmospheres (Bohlin et al 2017).
 
     Read in a spectrum from the BOSZ stellar atmosphere models database.
-    Returns a Pysynphot spectral object. Wavelength values range between
+    Returns a synphot spectral object. Wavelength values range between
     1000 Angstroms to 32 microns. Teff range from 3500K to 36000K.
 
     This function interpolates the model grid by reading in those models
@@ -264,7 +263,7 @@ def BOSZ_spectrum(Teff, metallicity, log_g, res=2000, interpolate=True,
 
 
     name = 'BOSZ(Teff={},z={},logG={})'.format(Teff, metallicity, log_g)
-    sp = S.ArraySpectrum(wave=wfin[:-1], flux=ffin[:-1], 
+    sp = s_ext.ArraySpectrum(wave=wfin[:-1], flux=ffin[:-1], 
                          waveunits='angstrom', fluxunits='flam', name=name)
 
     return sp
@@ -298,7 +297,7 @@ def stellar_spectrum(sptype, *renorm_args, **kwargs):
     renorm_args : tuple
         Renormalization arguments to pass to ``sp.renorm()``.
         The order (after ``sptype``) should be (``value, units, bandpass``)
-        Bandpass should be a :mod:`pysynphot.obsbandpass` type.
+        Bandpass should be a :class:`s_ext.Bandpass` type.
 
     Keyword Args
     ------------
@@ -433,12 +432,12 @@ def stellar_spectrum(sptype, *renorm_args, **kwargs):
             if ('ck04models' in catname.lower()) and (v0<3500):
                 _log.warn("ck04 models stop at 3500K. Setting Teff=3500.")
                 v0 = 3500
-            sp = S.Icat(catname, v0, v1, v2)
+            sp = s_ext.Icat(catname, v0, v1, v2)
         sp.name = '({:.0f},{:0.1f},{:0.1f})'.format(v0,v1,v2)
     elif 'flat' in sptype.lower():
-        # waveset = S.refs._default_waveset
-        # sp = S.ArraySpectrum(waveset, 0*waveset + 10.)
-        sp = S.FlatSpectrum(10, fluxunits='photlam')
+        # waveset = s_ext.refs._default_waveset
+        # sp = s_ext.ArraySpectrum(waveset, 0*waveset + 10.)
+        sp = s_ext.FlatSpectrum(10, fluxunits='photlam')
         sp.name = 'Flat spectrum in photlam'
     elif sptype in sptype_list:
         v0, v1, v2 = lookuptable[sptype]
@@ -449,7 +448,7 @@ def stellar_spectrum(sptype, *renorm_args, **kwargs):
             if ('ck04models' in catname.lower()) and (v0<3500):
                 _log.warn("ck04 models start at 3500K. Setting Teff=3500.")
                 v0 = 3500
-            sp = S.Icat(catname, v0, v1, v2)
+            sp = s_ext.Icat(catname, v0, v1, v2)
         sp.name = sptype
     else: # Interpolate values for undefined sptype
         # Sort the list and return their rank values
@@ -471,7 +470,7 @@ def stellar_spectrum(sptype, *renorm_args, **kwargs):
             if ('ck04models' in catname.lower()) and (v0<3500):
                 _log.warn("ck04 models stop at 3500K. Setting Teff=3500.")
                 v0 = 3500
-            sp = S.Icat(catname, v0, v1, v2)
+            sp = s_ext.Icat(catname, v0, v1, v2)
         sp.name = sptype
 
     #print(int(v0),v1,v2)
@@ -516,7 +515,7 @@ class source_spectrum(object):
     """Model source spectrum
 
     The class ingests spectral information of a given target
-    and generates :mod:`pysynphot.spectrum` model fit to the
+    and generates :class:`s_ext.Spectrum` model fit to the
     known photometric SED. Two model routines can fit. The
     first is a very simple scale factor that is applied to the
     input spectrum, while the second takes the input spectrum
@@ -531,7 +530,7 @@ class source_spectrum(object):
         and log_g are specified.
     mag_val : float
         Magnitude of input bandpass for initial scaling of spectrum.
-    bp : :mod:`pysynphot.obsbandpass`
+    bp : :class:`s_ext.Bandpass`
         Bandpass to apply initial mag_val scaling.
     votable_input: string
         VOTable name that holds the source's photometry. The user can
@@ -576,7 +575,7 @@ class source_spectrum(object):
     >>> src = source_spectrum(name, 'F0V', 5.24, bp_k, vot,
     >>>                       Teff=7430, metallicity=-0.47, log_g=4.35)
     >>> # Fit model to photometry from 0.1 - 30 microns
-    >>> # Saves pysynphot spectral object at src.sp_model
+    >>> # Saves synphot spectral object at src.sp_model
     >>> src.fit_SED(wlim=[0.1,30])
     >>> sp_sci = src.sp_model
 
@@ -599,8 +598,8 @@ class source_spectrum(object):
 
         if Av is not None:
             Rv = 4
-            self.sp0 = self.sp0 * S.Extinction(Av/Rv,name='mwrv4')
-            self.sp_lowres = self.sp_lowres * S.Extinction(Av/Rv,name='mwrv4')
+            self.sp0 = self.sp0 * s_ext.Extinction(Av/Rv,name='mwrv4')
+            self.sp_lowres = self.sp_lowres * s_ext.Extinction(Av/Rv,name='mwrv4')
 
             self.sp0 = self.sp0.renorm(mag_val, 'vegamag', bp)
             self.sp_lowres = self.sp_lowres.renorm(mag_val, 'vegamag', bp)
@@ -694,13 +693,13 @@ class source_spectrum(object):
         uflux_e = np.array(uflux_e)
 
         # Photometric data points
-        sp_phot = S.ArraySpectrum(uwave, uflux,
+        sp_phot = s_ext.ArraySpectrum(uwave, uflux,
                                   waveunits=wave.unit.name,
                                   fluxunits=flux.unit.name)
         sp_phot.convert('Angstrom')
         sp_phot.convert('Flam')
 
-        sp_phot_e = S.ArraySpectrum(uwave, uflux_e,
+        sp_phot_e = s_ext.ArraySpectrum(uwave, uflux_e,
                                     waveunits=wave.unit.name,
                                     fluxunits=eflux.unit.name)
         sp_phot_e.convert('Angstrom')
@@ -765,7 +764,7 @@ class source_spectrum(object):
         wave = sp.wave
 
         bb_flux = x[0] * self.bb_jy(wave/1e4, x[1]) * (wave/1e4)**x[2] / 1e17
-        sp_bb = S.ArraySpectrum(wave, bb_flux, fluxunits='Jy')
+        sp_bb = s_ext.ArraySpectrum(wave, bb_flux, fluxunits='Jy')
         sp_bb.convert('Flam')
 
         return sp + sp_bb
@@ -1240,8 +1239,12 @@ class planets_sb12(object):
     def entropy(self):
         """Initial entropy (8.0-13.0)"""
         return self._entropy
+    
+    def export_pysynphot(self, **kwargs):
+        _log.warning("export_pysynphot() is deprecated. Use export_synphot() instead.")
+        return self.export_synphot(**kwargs)
 
-    def export_pysynphot(self, waveout='angstrom', fluxout='flam'):
+    def export_synphot(self, waveout='angstrom', fluxout='flam'):
         """Output to synphot spectrum object
 
         Parameters
@@ -1253,7 +1256,7 @@ class planets_sb12(object):
         """
         w = self.wave; f = self.flux
         name = (re.split('[\.]', self.file))[0]#[5:]
-        sp = S.ArraySpectrum(w, f, name=name, waveunits=self.waveunits, fluxunits=self.fluxunits)
+        sp = s_ext.ArraySpectrum(w, f, name=name, waveunits=self.waveunits, fluxunits=self.fluxunits)
 
         sp.convert(waveout)
         sp.convert(fluxout)
@@ -1265,7 +1268,7 @@ class planets_sb12(object):
             # Interpolate accretion spectrum at each wavelength
             # and create new composite spectrum
             fnew = np.interp(sp.wave, sp_mdot.wave, sp_mdot.flux)
-            sp_new = S.ArraySpectrum(sp.wave, sp.flux+fnew,
+            sp_new = s_ext.ArraySpectrum(sp.wave, sp.flux+fnew,
                                      waveunits=waveout, fluxunits=fluxout)
             return sp_new
         else:
@@ -1348,7 +1351,7 @@ def sp_accr(mmdot, rin=2, dist=10, truncated=False,
     mag_vals += 5*np.log10(dist/10)
     flux_Jy = 10**(-mag_vals/2.5) * zpt
 
-    sp = S.ArraySpectrum(wcen*1e4, flux_Jy, fluxunits='Jy')
+    sp = s_ext.ArraySpectrum(wcen*1e4, flux_Jy, fluxunits='Jy')
     sp.convert(waveout)
     sp.convert(fluxout)
 
@@ -1359,7 +1362,7 @@ def jupiter_spec(dist=10, waveout='angstrom', fluxout='flam', base_dir=None):
     """Jupiter as an Exoplanet
     
     Read in theoretical Jupiter spectrum from Irwin et al. 2014 and output
-    as a :mod:`pysynphot.spectrum`.
+    as a synphot spectrum.
     
     Parameters
     ===========
@@ -1408,7 +1411,7 @@ def jupiter_spec(dist=10, waveout='angstrom', fluxout='flam', base_dir=None):
     # flux in f_lambda
     fspec *= area        # erg s-1 cm^-2 A^-1
 
-    sp = S.ArraySpectrum(wspec, fspec, fluxunits='flam')
+    sp = s_ext.ArraySpectrum(wspec, fspec, fluxunits='flam')
     sp.convert(waveout)
     sp.convert(fluxout)
     
@@ -1880,8 +1883,8 @@ def mass_sensitivity_table(filt, dist=10, extrapolate=True, lfile=None, age_arr=
     # Get 0th magnitude flux density
     bp = nircam_filter(filt)
     sp = stellar_spectrum('G2V', 0, 'vegamag', bp)
-    obs = S.Observation(sp, bp, binset=bp.wave)
-    flux0 = obs.effstim('Jy').value
+    obs = s_ext.Observation(sp, bp, binset=bp.wave)
+    flux0 = obs.effstim('Jy')
     fluxJy_arr = 10**(-0.4*mag_arr)*flux0
 
     mass_arr = []
@@ -2011,8 +2014,8 @@ def companion_spec(bandpass, model='SB12', atmo='hy3s', mass=10, age=100, entrop
 
     Parameters
     ----------
-    bandpass : :mod:`pysynphot.obsbandpass`
-        A Pysynphot bandpass object.
+    bandpass : :class:`s_ext.Bandpass`
+        A synphot bandpass object.
     model : str
         Exoplanet model to use ('sb12', 'bex', 'cond') or
         stellar spectrum model ('bosz', 'ck04models', 'phoenix').
@@ -2029,7 +2032,7 @@ def companion_spec(bandpass, model='SB12', atmo='hy3s', mass=10, age=100, entrop
     sptype : str
         Instead of using a exoplanet spectrum, specify a stellar type.
     renorm_args : dict
-        Pysynphot renormalization arguments in case you want
+        Renormalization arguments in case you want
         very specific luminosity in some bandpass.
         Includes (value, units, bandpass).
 
@@ -2063,10 +2066,10 @@ def companion_spec(bandpass, model='SB12', atmo='hy3s', mass=10, age=100, entrop
             'accr_rin': accr_rin, 'truncated': truncated
         }
         planet = planets_sb12(**pl)
-        sp = planet.export_pysynphot()
+        sp = planet.export_synphot()
         
         # Check spectral overlap
-        sp_overlap = S.observation.check_overlap(bandpass, sp)
+        sp_overlap = bandpass.check_overlap(sp)
 
         # Ensure there is a data point at the edge of the input bandpass
         if sp_overlap != 'full':
@@ -2074,45 +2077,45 @@ def companion_spec(bandpass, model='SB12', atmo='hy3s', mass=10, age=100, entrop
             f_end = sp.sample(w_end)
             w_new = np.append(sp.wave, w_end)
             f_new = np.append(sp.flux, f_end)
-            sp = S.ArraySpectrum(w_new, f_new, waveunits=sp.waveunits, fluxunits=sp.fluxunits)
+            sp = s_ext.ArraySpectrum(w_new, f_new, waveunits=sp.waveunits, fluxunits=sp.fluxunits)
 
         del_mag = 0
         # Add accretion mag offsets for BEX and COND models
-        if (model.lower() in ['bex', 'cond']) and (accr==True):
+        if (model.lower() in ['bex', 'cond']) and (accr == True):
             if sp_overlap != 'full':
                 _log.warn(f"Overlap between spectrum and bandpass: {sp_overlap}.")
                 _log.warn("Accretion calculation may be unreliable.")
             pl = {
-                'atmo': atmo, 'mass': mass, 'age': age,  
+                'atmo': atmo, 'mass': mass, 'age': age,
                 'entropy': entropy, 'distance': dist,
-                'accr': True, 'mmdot': mmdot, 'mdot': mdot, 
+                'accr': True, 'mmdot': mmdot, 'mdot': mdot,
                 'accr_rin': accr_rin, 'truncated': truncated
             }
             planet = planets_sb12(**pl)
             # Get spectrum from accretion component
             sp_mdot = sp_accr(planet.mmdot, rin=planet.rin,
-                                dist=planet.distance, truncated=planet.truncated,
-                                waveout=sp.waveunits, fluxout=sp.fluxunits)
+                              dist=planet.distance, truncated=planet.truncated,
+                              waveout=sp.waveunits, fluxout=sp.fluxunits)
             # Interpolate accretion spectrum at each wavelength
             fnew = np.interp(sp.wave, sp_mdot.wave, sp_mdot.flux)
-            sp_new = S.ArraySpectrum(sp.wave, fnew, waveunits=sp.waveunits, 
-                                        fluxunits=sp.fluxunits)
-            obs_accr = S.Observation(sp_new, bandpass, binset=bandpass.wave)
+            sp_new = s_ext.ArraySpectrum(sp.wave, fnew, waveunits=sp.waveunits,
+                                     fluxunits=sp.fluxunits)
+            obs_accr = s_ext.Observation(sp_new, bandpass, binset=bandpass.wave)
             del_mag -= obs_accr.effstim('vegamag')
-            # Make new spectrum 
-            sp = planet.export_pysynphot()
+            # Make new spectrum
+            sp = planet.export_synphot()
 
         # Add extinction from the disk
         if Av>0: 
             Rv = 4.0  
-            sp_ext = sp * S.Extinction(Av/Rv, name='mwrv4')
+            sp_ext = sp * s_ext.Extinction(Av/Rv, name='mwrv4')
 
             if model.lower() in ['bex', 'cond']:
                 if sp_overlap != 'full':
                     _log.warn(f"Overlap between spectrum and bandpass: {sp_overlap}.")
                     _log.warn("Extinction calculation may be unreliable.")
-                obs = S.Observation(sp, bandpass, binset=bandpass.wave)
-                obs_ext = S.Observation(sp_ext, bandpass, binset=bandpass.wave)
+                obs = s_ext.Observation(sp, bandpass, binset=bandpass.wave)
+                obs_ext = s_ext.Observation(sp_ext, bandpass, binset=bandpass.wave)
                 del_mag += obs_ext.effstim('vegamag') - obs.effstim('vegamag')
             sp = sp_ext
                         
@@ -2147,7 +2150,7 @@ def companion_spec(bandpass, model='SB12', atmo='hy3s', mass=10, age=100, entrop
         sp = stellar_spectrum(sptype)
         if Av>0: 
             Rv = 4.0  
-            sp *= S.Extinction(Av/Rv, name='mwrv4')
+            sp *= s_ext.Extinction(Av/Rv, name='mwrv4')
         if (renorm_args is not None) and (len(renorm_args) > 0):
             sp_norm = sp.renorm(*renorm_args, force=True)
             sp = sp_norm
@@ -2161,7 +2164,7 @@ def companion_spec(bandpass, model='SB12', atmo='hy3s', mass=10, age=100, entrop
 def bin_spectrum(sp, wave, waveunits='um'):
     """Rebin spectrum
 
-    Rebin a :mod:`pysynphot.spectrum` to a different wavelength grid.
+    Rebin a synphot spectrum to a different wavelength grid.
     This function first converts the input spectrum to units
     of counts then combines the photon flux onto the
     specified wavelength grid.
@@ -2170,20 +2173,21 @@ def bin_spectrum(sp, wave, waveunits='um'):
 
     Parameters
     -----------
-    sp : :mod:`pysynphot.spectrum`
+    sp : :class:`s_ext.Spectrum`
         Spectrum to rebin.
     wave : array_like
         Wavelength grid to rebin onto.
     waveunits : str
-        Units of wave input. Must be recognizeable by Pysynphot.
+        Units of wave input. Must be recognizeable by synphot.
 
     Returns
     -------
-    :mod:`pysynphot.spectrum`
+    :class:`s_ext.Spectrum`
         Rebinned spectrum in same units as input spectrum.
     """
 
     from .maths import binned_statistic
+    from synphot.binning import calculate_bin_edges
 
     waveunits0 = sp.waveunits
     fluxunits0 = sp.fluxunits
@@ -2193,7 +2197,7 @@ def bin_spectrum(sp, wave, waveunits='um'):
     # We also want input to be in terms of counts to conserve flux
     sp.convert('flam')
 
-    edges = S.binning.calculate_bin_edges(wave)
+    edges = calculate_bin_edges(wave * u.um)
     ind = (sp.wave >= edges[0]) & (sp.wave <= edges[-1])
     binflux = binned_statistic(sp.wave[ind], sp.flux[ind], np.mean, bins=edges)
 
@@ -2202,7 +2206,7 @@ def bin_spectrum(sp, wave, waveunits='um'):
     finterp = interp1d(wave[~ind_nan], binflux[~ind_nan], kind='cubic')
     binflux[ind_nan] = finterp(wave[ind_nan])
 
-    sp2 = S.ArraySpectrum(wave, binflux, waveunits=waveunits, fluxunits='flam')
+    sp2 = s_ext.ArraySpectrum(wave, binflux, waveunits=waveunits, fluxunits='flam')
     sp2.convert(waveunits0)
     sp2.convert(fluxunits0)
 
@@ -2219,7 +2223,7 @@ def mag_to_counts(src_mag, bandpass, sp_type='G0V', mag_units='vegamag', **kwarg
         
         # Get flux of a 0 magnitude star (zero-point flux)
         sp = stellar_spectrum(sp_type, 0, mag_units, bandpass)
-        obs = S.Observation(sp, bandpass, binset=bandpass.wave)
+        obs = s_ext.Observation(sp, bandpass, binset=bandpass.wave)
         zp_counts = obs.effstim('counts') # Counts of a 0 mag star
         
         # Flux of each star e-/sec

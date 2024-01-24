@@ -42,7 +42,7 @@ _log = logging.getLogger('webbpsf_ext')
 from .version import __version__
 
 # WebbPSF and Poppy stuff
-from .utils import check_fitsgz, webbpsf, poppy, S
+from .utils import check_fitsgz, webbpsf, poppy
 from webbpsf import MIRI as webbpsf_MIRI
 from webbpsf import NIRCam as webbpsf_NIRCam
 from webbpsf.opds import OTE_Linear_Model_WSS
@@ -433,7 +433,7 @@ class NIRCam_ext(webbpsf_NIRCam):
         # For NIRCam, update detector depending mask and filter
         if self.is_coron and self.name=='NIRCam':
             bp = nircam_filter(self.filter)
-            avgwave = bp.avgwave() / 1e4
+            avgwave = bp.avgwave().to_value('um')
 
             # SW Observations
             if avgwave<2.4:
@@ -563,7 +563,7 @@ class NIRCam_ext(webbpsf_NIRCam):
                                            bar_offset=bar_offset, auto_offset=None, **shifts)
 
             # Create wavefront to pass through mask and obtain transmission image
-            wavelength = self.bandpass.avgwave() / 1e10
+            wavelength = self.bandpass.avgwave().value / 1e10
             wave = poppy.Wavefront(wavelength=wavelength, npix=npix, pixelscale=pixelscale)
             im = mask.get_transmission(wave)**2
         else:
@@ -856,7 +856,7 @@ class NIRCam_ext(webbpsf_NIRCam):
 
         Parameters
         ----------
-        sp : :mod:`pysynphot.spectrum`
+        sp : :class:`webbpsf_ext.synphot_ext.Spectrum`
             If not specified, the default is flat in phot lam 
             (equal number of photons per spectral bin).
             The default is normalized to produce 1 count/sec within that bandpass,
@@ -925,8 +925,6 @@ class NIRCam_ext(webbpsf_NIRCam):
         Parameters
         ----------
         source : synphot.spectrum.SourceSpectrum or dict
-            TODO: synphot not yet implemented in webbpsf_ext!!
-            Use ``sp`` keyword instead for pysynphot.
         nlambda : int
             How many wavelengths to model for broadband?
             The default depends on how wide the filter is: (5,3,1) for types (W,M,N) respectively
@@ -965,7 +963,7 @@ class NIRCam_ext(webbpsf_NIRCam):
 
         Keyword Args
         ------------
-        sp : :mod:`pysynphot.spectrum`
+        sp : :class:`webbpsf_ext.synphot_ext.Spectrum`
             Source input spectrum. If not specified, the default is flat in phot lam.
             (equal number of photons per spectral bin).
         coord_vals : tuple or None
@@ -1008,7 +1006,7 @@ class NIRCam_ext(webbpsf_NIRCam):
 
         Keyword Args
         ============
-        sp : :mod:`pysynphot.spectrum`
+        sp : :class:`webbpsf_ext.synphot_ext.Spectrum`
             If not specified, the default is flat in phot lam (equal number of photons 
             per wavelength bin). The default is normalized to produce 1 count/sec within 
             that bandpass, assuming the telescope collecting area and instrument bandpass. 
@@ -1578,7 +1576,7 @@ class MIRI_ext(webbpsf_MIRI):
 
         Parameters
         ----------
-        sp : :mod:`pysynphot.spectrum`
+        sp : :class:`webbpsf_ext.synphot_ext.Spectrum`
             If not specified, the default is flat in phot lam 
             (equal number of photons per spectral bin).
             The default is normalized to produce 1 count/sec within that bandpass,
@@ -1626,8 +1624,6 @@ class MIRI_ext(webbpsf_MIRI):
         Parameters
         ----------
         source : synphot.spectrum.SourceSpectrum or dict
-            TODO: synphot not yet implemented in webbpsf_ext!!
-            Use ``sp`` keyword instead for pysynphot.
         nlambda : int
             How many wavelengths to model for broadband?
             The default depends on how wide the filter is: (5,3,1) for types (W,M,N) respectively
@@ -1666,7 +1662,7 @@ class MIRI_ext(webbpsf_MIRI):
 
         Keyword Args
         ------------
-        sp : :mod:`pysynphot.spectrum`
+        sp : :class:`webbpsf_ext.synphot_ext.Spectrum`
             Source input spectrum. If not specified, the default is flat in phot lam.
             (equal number of photons per spectral bin).
         coord_vals : tuple or None
@@ -1710,7 +1706,7 @@ class MIRI_ext(webbpsf_MIRI):
 
         Keyword Args
         ============
-        sp : :mod:`pysynphot.spectrum`
+        sp : :class:`webbpsf_ext.synphot_ext.Spectrum`
             If not specified, the default is flat in phot lam (equal number of photons 
             per wavelength bin). The default is normalized to produce 1 count/sec within 
             that bandpass, assuming the telescope collecting area and instrument bandpass. 
@@ -2326,7 +2322,8 @@ def _calc_psf_with_shifts(self, calc_psf_func, **kwargs):
     that position using temporary source_offset_xsub/ysub keys in the options dict.
     """
 
-    from .utils import S
+    from .synphot_ext import Observation
+    import astropy.units as u
 
     # Only shift coronagraphic masks by pixel integers
     # sub-pixels shifts are handled by source offsetting
@@ -2344,12 +2341,14 @@ def _calc_psf_with_shifts(self, calc_psf_func, **kwargs):
         
     # Create source weights
     bp = self.bandpass
-    obs = S.Observation(sp, bp, binset=bp.wave)
+    obs = Observation(sp, bp, binset=bp.wave)
     obs.convert('photlam')
     # Decide on wavelengths and weights
+    binwave = obs.binset.to_value(u.um)
+    binflux = obs.sample_binned(flux_unit='photlam').value
     npsf = self.npsf
-    wave_um = np.linspace(obs.binwave.min(), obs.binwave.max(), npsf) / 1e4
-    weights = np.interp(wave_um, obs.binwave/1e4, obs.binflux)
+    wave_um = np.linspace(binwave.min(), binwave.max(), npsf)
+    weights = np.interp(wave_um, binwave, binflux)
     weights /= weights.sum()
     src = {'wavelengths': wave_um*1e-6, 'weights': weights}
 
@@ -2454,7 +2453,7 @@ def _calc_psf_webbpsf(self, calc_psf_func, add_distortion=None, fov_pixels=None,
 
     Keyword Args
     ------------
-    sp : :mod:`pysynphot.spectrum`
+    sp : :class:`webbpsf_ext.synphot_ext.Spectrum`
         Source input spectrum. If not specified, the default is flat in phot lam.
         (equal number of photons per spectral bin).
     return_hdul : bool
@@ -3978,7 +3977,7 @@ def _calc_psf_from_coeff(self, sp=None, return_oversample=True, return_hdul=True
 
     Parameters
     ----------
-    sp : :mod:`pysynphot.spectrum`
+    sp : :class:`webbpsf_ext.synphot_ext.Spectrum`
         If not specified, the default is flat in phot lam (equal number of photons 
         per wavelength bin). The default is normalized to produce 1 count/sec within 
         that bandpass, assuming the telescope collecting area and instrument bandpass. 
@@ -4540,7 +4539,7 @@ def _calc_psfs_grid(self, sp=None, wfe_drift=0, osamp=1, npsf_per_full_fov=15,
 
     Keyword Args
     ============
-    sp : :mod:`pysynphot.spectrum`
+    sp : :class:`webbpsf_ext.synphot_ext.Spectrum`
         If not specified, the default is flat in phot lam (equal number of photons 
         per wavelength bin). The default is normalized to produce 1 count/sec within 
         that bandpass, assuming the telescope collecting area and instrument bandpass. 
@@ -4939,6 +4938,8 @@ def _nrc_coron_rescale(self, res, coord_vals, coord_frame, siaf_ap=None, sp=None
         Frame of input coordinates ('tel', 'idl', 'sci', 'det')
     """
 
+    from .synphot_ext import Observation
+
     if coord_vals is None:
         return res
 
@@ -4950,17 +4951,17 @@ def _nrc_coron_rescale(self, res, coord_vals, coord_frame, siaf_ap=None, sp=None
     # Scale by countrate of observed spectrum
     if (sp is not None) and (not isinstance(sp, list)):
         nspec = 1
-        obs = S.Observation(sp, self.bandpass, binset=self.bandpass.wave)
+        obs = Observation(sp, self.bandpass, binset=self.bandpass.wave)
         sp_counts = obs.countrate()
     elif (sp is not None) and (isinstance(sp, list)):
         nspec = len(sp)
         if nspec==1:
-            obs = S.Observation(sp[0], self.bandpass, binset=self.bandpass.wave)
+            obs = Observation(sp[0], self.bandpass, binset=self.bandpass.wave)
             sp_counts = obs.countrate()
         else:
             sp_counts = []
             for i, sp_norm in enumerate(sp):
-                obs = S.Observation(sp_norm, self.bandpass, binset=self.bandpass.wave)
+                obs = Observation(sp_norm, self.bandpass, binset=self.bandpass.wave)
                 sp_counts.append(obs.countrate())
             sp_counts = np.array(sp_counts)
     else:

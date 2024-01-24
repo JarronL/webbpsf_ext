@@ -20,7 +20,6 @@ from astropy.io import fits
 
 from poppy.utils import krebin
 
-from .utils import S
 from .utils import siaf_nrc, siaf_nis, siaf_mir, siaf_fgs, siaf_nrs
 
 # Program bar
@@ -948,18 +947,21 @@ def model_to_hdulist(args_model, sp_star, bandpass):
             - dist0   : Assumed model distance
             - wave_um : Wavelength of observation
             - units0  : Assumed flux units (e.g., MJy/arcsec^2 or muJy/pixel)
-    sp_star : :mod:`pysynphot.spectrum`
-        A pysynphot spectrum of central star. Used to adjust observed
+    sp_star : :class:`webbpsf_ext.synphot_ext.Spectrum`
+        A synphot spectrum of central star. Used to adjust observed
         photon flux if filter differs from model input
-    bandpass : :mod:`pysynphot.obsbandpass`
-        Output `Pysynphot` bandpass from instrument class. This corresponds 
+    bandpass : :mod:`webbpsf_ext.synphot_ext.Bandpass`
+        Output synphot bandpass from instrument class. This corresponds 
         to the flux at the entrance pupil for the particular filter.
     """
+
+    from .synphot_ext import stsyn, validate_unit
+    from synphot.units import convert_flux, validate_wave_unit
+    import astropy.units as u
 
     #filt, mask, pupil = args_inst
     fname, scale0, dist0, wave_um, units0 = args_model
     wave0 = wave_um * 1e4
-
 
     #### Read in the image, then convert from mJy/arcsec^2 to photons/sec/pixel
 
@@ -980,23 +982,10 @@ def model_to_hdulist(args_model, sp_star, bandpass):
 
     # Break apart units0
     units_list = units0.split('/')
-    if 'mJy' in units_list[0]:
-        units_pysyn = S.units.mJy()
-    elif 'uJy' in units_list[0]:
-        units_pysyn = S.units.muJy()
-    elif 'nJy' in units_list[0]:
-        units_pysyn = S.units.nJy()
-    elif 'MJy' in units_list[0]:
-        hdulist[0].data *= 1000 # Convert to Jy
-        units_pysyn = S.units.Jy()
-    elif 'Jy' in units_list[0]: # Jy should be last
-        units_pysyn = S.units.Jy()
-    else:
-        errstr = "Do not recognize units0='{}'".format(units0)
-        raise ValueError(errstr)
-
-    # Convert from input units to photlam (photons/sec/cm^2/A/angular size)
-    im = units_pysyn.ToPhotlam(wave0, hdulist[0].data)
+    unit_type = validate_unit(units_list[0])
+    im = convert_flux(wave0, hdulist[0].data*unit_type, 'photlam',
+                      area=stsyn.conf.area, vegaspec=stsyn.Vega)
+    im = im.value
 
     # We assume scattering is flat in photons/sec/A
     # This means everything scales with stellar continuum
@@ -1012,7 +1001,7 @@ def model_to_hdulist(args_model, sp_star, bandpass):
     im *= np.mean(f_obs / f0)
 
     # Convert to photons/sec/pixel
-    im *= bandpass.equivwidth() * S.refs.PRIMARY_AREA
+    im *= bandpass.equivwidth().to_value(u.AA) * stsyn.conf.area
     # If input units are per arcsec^2 then scale by pixel scale
     # This will give ph/sec for each pixel
     if ('arcsec' in units_list[1]) or ('asec' in units_list[1]):
@@ -1575,8 +1564,8 @@ def make_disk_image(inst, disk_params, sp_star=None, pixscale_out=None, dist_out
 
     Keyword Args
     ============
-    sp_star : :mod:`pysynphot.spectrum`
-        A pysynphot spectrum of central star. Used to adjust observed
+    sp_star : :class:`webbpsf_ext.synphot_ext.Spectrum`
+        A synphot spectrum of central star. Used to adjust observed
         photon flux if filter differs from model input
     pixscale_out : float
         Desired pixelscale of returned image. If None, then use instrument's

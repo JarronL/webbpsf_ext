@@ -77,10 +77,10 @@ if sys.argv[-1] == 'test':
 
 install_requires = [
     'tqdm>4',
-    'pysynphot>=2.0.0',
-    'poppy>=1.0.3',
-    'webbpsf>=1.1.0',
-    'pysiaf>=0.18.0',
+    'synphot>=1.2.1',
+    'poppy>=1.1.0',
+    'webbpsf>=1.2.0',
+    'pysiaf>=0.21.0',
 ]
 
 setup_requirements = ['pytest-runner', ]

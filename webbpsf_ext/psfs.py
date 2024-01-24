@@ -3,7 +3,7 @@ import numpy as np
 import multiprocessing as mp
 
 from . import conf
-from .utils import poppy, S
+from .utils import poppy
 from .maths import jl_poly
 from .image_manip import krebin, fshift
 from .bandpasses import nircam_grism_res, niriss_grism_res
@@ -135,8 +135,8 @@ def gen_image_from_coeff(inst, coeff, coeff_hdr, sp_norm=None, nwaves=None,
         generally oversampled with a shape (fov_pix*oversamp, fov_pix*oversamp, deg).
     coeff_hdr : FITS header
         Header information saved while generating coefficients.
-    sp_norm : :mod:`pysynphot.spectrum`
-        A normalized Pysynphot spectrum to generate image. If not specified,
+    sp_norm : :class:`webbpsf_ext.synphot_ext.Spectrum`
+        A normalized synphot spectrum to generate image. If not specified,
         the default is flat in phot lam (equal number of photons per spectral bin).
         The default is normalized to produce 1 count/sec within that bandpass,
         assuming the telescope collecting area. Coronagraphic PSFs will further
@@ -186,8 +186,7 @@ def gen_image_from_coeff(inst, coeff, coeff_hdr, sp_norm=None, nwaves=None,
     nspec = len(obs_list)
 
     # Get wavelength range
-    waveset = obs_list[0].binwave
-    wgood = waveset / 1e4
+    wgood = obs_list[0].binset.to_value('um')
     w1 = wgood.min()
     w2 = wgood.max()
     wrange = w2 - w1
@@ -201,10 +200,14 @@ def gen_image_from_coeff(inst, coeff, coeff_hdr, sp_norm=None, nwaves=None,
     # Array broadcasting: [nx,ny,nwave] x [1,1,nwave]
     # Do this for each spectrum/observation
     if nspec==1:
-        psf_fit *= obs_list[0].binflux.reshape([-1,1,1])
+        binflux = obs_list[0].sample_binned(flux_unit='count').value
+        psf_fit *= binflux.reshape([-1,1,1])
         psf_list = [psf_fit]
     else:
-        psf_list = [psf_fit*obs.binflux.reshape([-1,1,1]) for obs in obs_list]
+        psf_list = []
+        for obs in obs_list:
+            binflux = obs.sample_binned(flux_unit='count').value
+            psf_list.append(psf_fit*binflux.reshape([-1,1,1]))
         del psf_fit
 
     # The number of pixels to span spatially
@@ -353,6 +356,9 @@ def create_waveset(bp, npix, nwaves=None, is_grism=False):
 
 def create_obslist(bp, npix, nwaves=None, is_grism=False,
                    sp_norm=None, use_sp_waveset=False):
+    """Create list of observations for each spectrum"""
+    
+    from .synphot_ext import ArraySpectrum, Observation
 
     waveset = create_waveset(bp, npix, nwaves=nwaves, is_grism=is_grism)
     wgood = waveset / 1e4
@@ -361,7 +367,7 @@ def create_obslist(bp, npix, nwaves=None, is_grism=False,
 
     # Flat spectrum with equal photon flux in each spectal bin
     if sp_norm is None:
-        sp_flat = S.ArraySpectrum(waveset, 0*waveset + 10.)
+        sp_flat = ArraySpectrum(waveset, 0*waveset + 10.)
         sp_flat.name = 'Flat spectrum in flam'
 
         # Bandpass unit response is the flux (in flam) of a star that
@@ -383,10 +389,10 @@ def create_obslist(bp, npix, nwaves=None, is_grism=False,
             # Select only wavelengths within bandpass
             waveset = sp.wave
             waveset = waveset[(waveset>=w1*1e4) and (waveset<=w2*1e4)]
-            obs_list.append(S.Observation(sp, bp, binset=waveset))
+            obs_list.append(Observation(sp, bp, binset=waveset))
     else:
         # Use the bandpass wavelength set to bin the fluxes
-        obs_list = [S.Observation(sp, bp, binset=waveset) for sp in sp_norm]
+        obs_list = [Observation(sp, bp, binset=waveset) for sp in sp_norm]
 
     # Convert to count rate
     for obs in obs_list: 

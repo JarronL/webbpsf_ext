@@ -43,13 +43,6 @@ from . import synphot_ext
 if not on_rtd:
     synphot_ext.download_cdbs_data(verbose=True)
 
-import pysynphot as S
-# Extend default wavelength range to 35 um
-S.refs.set_default_waveset(minwave=500, maxwave=350000, num=10000.0, delta=None, log=False)
-# JWST 25m^2 collecting area
-# Flux loss from masks and occulters are taken into account in WebbPSF
-# S.refs.setref(area = 25.4e4) # cm^2
-S.refs.setref(area = 25.78e4) # cm^2 according to jwst_pupil_RevW_npix1024.fits.gz
 
 # Progress bar
 from tqdm.auto import trange, tqdm
