@@ -49,7 +49,7 @@ def download_cdbs_data(cdbs_path=None, verbose=False):
 def validate_unit(input_unit):
     """Add lowercase jy to synphot units validation function"""
 
-    if isinstance(input_unit, str) and 'jy' in input_unit:
+    if isinstance(input_unit, str):
         if input_unit in ['njy', 'nanojy']:
             output_unit = u.nJy
         elif input_unit in ['ujy', 'mujy', 'microjy']:
@@ -60,6 +60,8 @@ def validate_unit(input_unit):
             output_unit = u.Jy
         elif input_unit=='Mjy':
             output_unit = u.MJy
+        elif input_unit=='counts':
+            output_unit = u.count
         else:
             output_unit = synphot.units.validate_unit(input_unit)
     else:
@@ -144,6 +146,9 @@ class Bandpass(synphot.SpectralElement):
         wmin, wmax = filter_width(self)
         dw = (wmax - wmin) * u.um
         return dw.to(self._internal_wave_unit)
+    
+    def unit_response(self, wavelengths=None):
+        return super().unit_response(stsyn.conf.area, wavelengths)
 
 class BoxFilter(Bandpass):
     """ Box filter with a given center and width
@@ -725,14 +730,13 @@ class Observation(synphot.Observation):
 
         try:
             self._waveunits = validate_wave_unit(new_units)
-        except SynphotError:
+        except:
             self._fluxunits = validate_unit(new_units)
-
 
     def sample_binned(self, wavelengths=None, flux_unit=None, **kwargs):
         kwargs['area'] = self.area
         kwargs['vegaspec'] = stsyn.Vega
-        return super().sample_binned(wavelengths, flux_unit, **kwargs)
+        return super().sample_binned(wavelengths=wavelengths, flux_unit=flux_unit, **kwargs)
 
     def effstim(self, flux_unit=None, wavelengths=None):
         """Calculate effective stimulus for given flux unit.
@@ -755,11 +759,12 @@ class Observation(synphot.Observation):
 
         Returns
         -------
-        eff_stim : `~astropy.units.quantity.Quantity`
+        eff_stim : float
             Observation effective stimulus based on given flux unit.
         """
-        return super().effstim(flux_unit=flux_unit, wavelengths=wavelengths,
-                               area=self.area, vegaspec=stsyn.Vega)
+        res = super().effstim(flux_unit=flux_unit, wavelengths=wavelengths,
+                              area=self.area, vegaspec=stsyn.Vega)
+        return res.value
         
     def countrate(self, binned=True, wavelengths=None, waverange=None,
                   force=False):
@@ -792,7 +797,7 @@ class Observation(synphot.Observation):
 
         Returns
         -------
-        count_rate : `~astropy.units.quantity.Quantity`
+        count_rate : float
             Observation effective stimulus in count/s.
 
         Raises
@@ -808,8 +813,9 @@ class Observation(synphot.Observation):
 
         """
 
-        return super().countrate(self.area, binned=binned, wavelengths=wavelengths,
-                                 waverange=waverange, force=force)
+        res = super().countrate(self.area, binned=binned, wavelengths=wavelengths,
+                                waverange=waverange, force=force)
+        return res.value
     
     def plot(self, binned=True, wavelengths=None, flux_unit=None, **kwargs): 
         """Plot the observation.
@@ -888,3 +894,25 @@ class Observation(synphot.Observation):
         header = {'observation': str(self), 'binned': binned}
         return Spectrum(Empirical1D, points=w, lookup_table=y, name=self.name,
                         meta={'header': header})
+    
+def Extinction(ebv, name):
+    """ Create a synphot extinction object
+
+    Parameters
+    ----------
+    ebv : float
+        E(B-V) value of extinction.
+    name : str
+        Extinction model name. Choose from: 'lmc30dor', 'lmcavg', 'mwavg',
+        'mwdense', 'mwrv21', 'mwrv40', 'smcbar', or 'xgalsb'.
+
+    Returns
+    -------
+    Extinction
+        Extinction object.
+    """
+
+    if name=='mwrv4':
+        name = 'mwrv40'
+
+    return stsyn.ebmvx(name, ebv)

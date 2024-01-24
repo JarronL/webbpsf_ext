@@ -123,3 +123,13 @@ def test_FlatSpectrum():
     w = [1, 1000, 1e6] * u.AA
     with u.add_enabled_equivalencies(u.spectral_density(w)):
         assert_quantity_allclose(sp(w), 1 * u.Jy)
+
+def test_Extinction():
+    sp = synphot_ext.Spectrum(BlackBodyNorm1D, temperature=5000)
+    ext = synphot_ext.Extinction(0.1, 'lmcavg')
+
+    sp_ext = sp * ext
+
+    wave = np.array([5000, 8000, 10000, 20000]) * u.AA
+    assert_quantity_allclose(ext(wave), sp_ext(wave) / sp(wave))
+
