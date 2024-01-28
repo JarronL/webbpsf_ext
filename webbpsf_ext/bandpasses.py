@@ -84,7 +84,6 @@ def miri_filter(filter, **kwargs):
     wgood = (bp.wave)[igood]
     w1 = wgood.min()
     w2 = wgood.max()
-    wrange = w2 - w1
 
     # Resample to common dw to ensure consistency
     dw_arr = bp.wave[1:] - bp.wave[:-1]
@@ -92,8 +91,8 @@ def miri_filter(filter, **kwargs):
     warr = np.arange(w1,w2, dw)
     th = bp(warr)
 
-    # Need to place zeros at either end so Pysynphot doesn't extrapolate
-    warr = np.concatenate(([warr.min()-dw],warr,[warr.max()+dw]))
+    # Need to place zeros at either end so synphot doesn't extrapolate
+    warr = np.concatenate(([warr.min()-dw], warr, [warr.max()+dw]))
     tarr = np.concatenate(([0],th,[0]))
     bp   = S.ArrayBandpass(warr, tarr, name=bp_name)
         
@@ -902,16 +901,17 @@ def nircam_filter(filter, pupil=None, mask=None, module=None, sca=None, ND_acq=F
         # Create new bandpass
         bp = S.ArrayBandpass(bp.wave, th_new)
 
-
     # Resample to common dw to ensure consistency
     dw_arr = bp.wave[1:] - bp.wave[:-1]
     #if not np.isclose(dw_arr.min(),dw_arr.max()):
     dw = np.median(dw_arr)
-    warr = np.arange(w1,w2, dw)
+    w1 = bp.wave.min()
+    w2 = bp.wave.max()
+    warr = np.arange(w1, w2+dw, dw)
     tarr = bp(warr)
 
-    # Need to place zeros at either end so Pysynphot doesn't extrapolate
-    warr = np.concatenate(([bp.wave.min()-dw],warr,[bp.wave.max()+dw]))
+    # Need to place zeros at either end so synphot won't extrapolate
+    warr = np.concatenate(([warr.min()-dw],warr,[warr.max()+dw]))
     tarr = np.concatenate(([0],tarr,[0]))
 
     # Check [0,1] limits
