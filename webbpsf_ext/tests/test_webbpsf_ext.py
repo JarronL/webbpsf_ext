@@ -102,64 +102,14 @@ def test_psfs_cached(nrc_f335m_webbpsf, nrc_f335m_wext, filter):
     assert np.allclose(arr1, arr3, atol=0.0001)
 
 
-def test_nircam_auto_pixelscale():
-    # This test now uses approximate equality in all the checks, to accomodate the fact that
-    # NIRCam pixel scales are drawn directly from SIAF for the aperture, and thus vary for each detector/
-    #
-    # 1.5% variance accommodates the differences between the various NRC detectors in each channel
-    close_enough = lambda a, b: np.isclose(a, b, rtol=0.015)
+def test_coron_psfs(nrc_f335m_coeffs_cached):
 
-    nc = webbpsf_ext.NIRCam_ext()
+    nrc = nrc_f335m_coeffs_cached
 
-    nc.filter='F200W'
-    assert close_enough(nc.pixelscale,  nc._pixelscale_short)
-    assert nc.channel == 'short'
+    psf1 = nrc.calc_psf(sp=sp_vega)
+    psf2 = nrc.calc_psf_from_coeff(sp=sp_vega, return_oversample=False)
 
-    # auto switch to long
-    nc.filter='F444W'
-    assert close_enough(nc.pixelscale,  nc._pixelscale_long)
-    assert nc.channel == 'long'
-
-    # and it can switch back to short:
-    nc.filter='F200W'
-    assert close_enough(nc.pixelscale,  nc._pixelscale_short)
-    assert nc.channel == 'short'
-
-    nc.pixelscale = 0.0123  # user is allowed to set something custom
-    nc.filter='F444W'
-    assert nc.pixelscale == 0.0123  # and that persists & overrides the default switching.
-
-
-    # back to standard scale
-    nc.pixelscale = nc._pixelscale_long
-    # switch short again
-    nc.filter='F212N'
-    assert close_enough(nc.pixelscale,  nc._pixelscale_short)
-    assert nc.channel == 'short'
-
-    # And test we can switch based on detector names too
-    nc.detector ='NRCA5'
-    assert close_enough(nc.pixelscale,  nc._pixelscale_long)
-    assert nc.channel == 'long'
-
-    nc.detector ='NRCB1'
-    assert close_enough(nc.pixelscale,  nc._pixelscale_short)
-    assert nc.channel == 'short'
-
-    nc.detector ='NRCA3'
-    assert close_enough(nc.pixelscale,  nc._pixelscale_short)
-    assert nc.channel == 'short'
-
-
-    nc.auto_channel = False
-    # now we can switch filters and nothing else should change:
-    nc.filter='F480M'
-    assert close_enough(nc.pixelscale,  nc._pixelscale_short)
-    assert nc.channel == 'short'
-
-    # but changing the detector explicitly always updates pixelscale, regardless
-    # of auto_channel being False
-
-    nc.detector = 'NRCA5'
-    assert close_enough(nc.pixelscale,  nc._pixelscale_long)
-    assert nc.channel == 'long'
+    # Compare PSFs
+    arr1 = normalize_psf(psf1[3].data)
+    arr2 = normalize_psf(psf2[0].data)
+    assert np.allclose(arr1, arr2, atol=0.0001)

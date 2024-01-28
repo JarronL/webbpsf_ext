@@ -114,8 +114,8 @@ def nrc_m335r_wext():
                                  image_mask='MASK335R')
     nrc.save_dir = DATA_PATH
 
-    nrc.fov_pix = 33
-    nrc.oversample = 2
+    nrc.fov_pix = 65
+    nrc.oversample = 1
 
     nrc.options['jitter'] = None
     nrc.options['charge_diffusion_sigma'] = 0
@@ -125,7 +125,7 @@ def nrc_m335r_wext():
     nrc.options['pupil_shift_y'] = 0
     nrc.options['pupilt_rotation'] = -0.5
 
-    nrc.detector_position = (1024,1024)
+    nrc.detector_position = (641.1, 1675.2)
     
     return nrc
 
