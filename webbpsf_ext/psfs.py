@@ -407,7 +407,7 @@ def make_coeff_resid_grid(xin, yin, cf_resid, xgrid, ygrid):
     xnew, ynew = np.meshgrid(xgrid,ygrid)
     nx, ny = len(xgrid), len(ygrid)
 
-    _log.warn("Interpolating coefficient residuals onto regular grid...")
+    _log.warning("Interpolating coefficient residuals onto regular grid...")
 
     sh = cf_resid.shape
     cf_resid_grid = np.zeros([ny,nx,sh[1],sh[2],sh[3]])
