@@ -1811,20 +1811,22 @@ def _init_inst(self, filter=None, pupil_mask=None, image_mask=None,
     elif self.name=='NIRISS':
         self.pupil_mask_list = self.pupil_mask_list + ['GR150C', 'GR150R']
 
-    # Option to use `pupil` instead of `pupil_mask`
-    kw_pupil = kwargs.get('pupil')
+    # Check if user was using old keywords `pupil` and `mask` 
+    # instead of `pupil_mask` and `image_mask`
     kw_mask  = kwargs.get('mask')
-    if (pupil_mask is None) and (kw_pupil is not None) and isinstance(kw_pupil, str):
-        _log.warning('Deprecation warning: Use `pupil_mask` keyword rather than `pupil` to set pupil mask.')
-        # pupil_mask = kwargs.get('pupil')
-    # Option to use `mask` instead of `image_mask`
-    if (image_mask is None) and (kw_mask is not None):
-        _log.warning('Deprecation warning: Use `image_mask` keyword rather than `mask` to set image mask.')
-        # image_mask = kwargs.get('mask')
+    if (image_mask is None) and (kw_mask is not None) and ('MASK' in kw_mask):
+        kw_pupil = kwargs.get('pupil')
+        if (pupil_mask is None) and (kw_pupil is not None) and isinstance(kw_pupil, str):
+            raise ValueError("The `mask` and `pupil` keywords are deprecated. Use `image_mask` and `pupil_mask` instead.")
 
-    # Ensure CIRCLYOT or WEDGELYOT in case coron masks were specified
+    # Ensure CIRCLYOT or WEDGELYOT in case occulting masks were specified for NIRCam coronagraphy
     if self.name=='NIRCam' and (pupil_mask is not None) and ('MASK' in pupil_mask):
-        pupil_mask = 'WEDGELYOT' if ('LWB' in pupil_mask) else 'CIRCLYOT'
+        if pupil_mask.upper() in ['MASK210R', 'MASK335R', 'MASK430R']:
+            pupil_mask = 'CIRCLYOT'
+        elif pupil_mask.upper() in ['MASKSWB', 'MASKLWB']:
+            pupil_mask = 'WEDGELYOT'
+        else:
+            raise ValueError(f"Unknown pupil mask: {pupil_mask}")
 
     if pupil_mask is not None:
         self.pupil_mask = pupil_mask
@@ -1864,7 +1866,6 @@ def _init_inst(self, filter=None, pupil_mask=None, image_mask=None,
     self._use_fov_pix_plus1 = None
 
     # Legendre polynomials are more stable
-    # self.use_legendre = True
     self.use_legendre = kwargs.get('use_legendre', True)    
 
     # Turning on quick perform fits over filter bandpasses independently
@@ -1895,11 +1896,6 @@ def _init_inst(self, filter=None, pupil_mask=None, image_mask=None,
     # Update telescope pupil and pupil OPD
     kw_pupil    = kwargs.get('pupil')
     kw_pupilopd = kwargs.get('pupilopd')
-    # if (kw_pupil is not None) or (kw_pupilopd is not None):
-    #     opd_dict = self.get_opd_info(opd=kw_pupilopd, pupil=kw_pupil)
-    #     otelm = opd_dict['pupilopd']
-    #     self.pupilopd = otelm
-    #     self.pupil    = otelm
     if kw_pupil is not None:
         self.pupil = kw_pupil
     if kw_pupilopd is not None:
