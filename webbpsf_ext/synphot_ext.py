@@ -625,6 +625,47 @@ def FlatSpectrum(flux, name='UnnamedFlatSpectrum', **kwargs):
     return Spectrum(ConstFlux1D, amplitude=flux, fluxunits=fluxunits, name=name, **kwargs)
 
 
+def load_vega(vegafile=None, **kwargs):
+    """Convenience function to load Vega spectrum
+
+    Parameters
+    ----------
+    vegafile : str or `None`, optional
+        Vega spectrum filename.
+        If `None`, use ``synphot.config.conf.vega_file``.
+
+    kwargs : dict
+        Keywords acceptable by :func:`synphot.specio.read_remote_spec`.
+
+    Returns
+    -------
+    sp : `synphot.spectrum.SourceSpectrum` or `None`
+        Vega spectrum. `None` if failed.
+
+    """
+    from synphot.config import conf as synconf
+    import warnings
+    from astropy.utils.exceptions import AstropyUserWarning
+
+    if vegafile is None:
+        vegafile = synconf.vega_file
+
+    with synconf.set_temp('vega_file', vegafile):
+        try:
+            Vega = Spectrum.from_vega(**kwargs)
+        except Exception as e:
+            Vega = None
+            warnings(
+                f'Failed to load Vega spectrum from {vegafile}; Functionality '
+                f'involving Vega will be cripped: {repr(e)}',
+                AstropyUserWarning)
+            
+    return Vega
+
+
+# Load default Vega
+Vega = load_vega(encoding='binary')
+
 ##########################################################
 # Observation class
 ##########################################################
@@ -916,3 +957,4 @@ def Extinction(ebv, name):
         name = 'mwrv40'
 
     return stsyn.ebmvx(name, ebv)
+
