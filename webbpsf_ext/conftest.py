@@ -76,11 +76,28 @@ def nrc_f335m_coeffs(nrc_f335m_wext):
     NIRCam object with PSF coefficients generated
     """
     nrc = nrc_f335m_wext
+
+    # Will regenerate coefficients
+    nrc.gen_psf_coeff(save=False, force=True)
+    nrc.gen_wfefield_coeff(save=False, force=True)
+    nrc.gen_wfedrift_coeff(save=False, force=True)
+    
+    return nrc
+
+
+@pytest.fixture(scope='session')
+def nrc_f335m_coeffs_cached(nrc_f335m_wext):
+    """
+    NIRCam object with PSF coefficients cached
+    """
+    nrc = nrc_f335m_wext
+
+    # Will load from test DATA directory
     nrc.gen_psf_coeff()
     nrc.gen_wfefield_coeff()
     nrc.gen_wfedrift_coeff()
-    return nrc
 
+    return nrc
 
 # @pytest.fixture(scope='session')
 # def nrc_m335r():

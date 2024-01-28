@@ -9,6 +9,12 @@ setup_logging(level='ERROR', verbose=False)
 
 sp_vega = synphot_ext.Vega
 
+def normalize_psf(arr, trim=3):
+    if (trim is None) or (trim == 0):
+        return arr / arr.sum()
+    else:
+        return arr[trim:-trim,trim:-trim] / arr[trim:-trim,trim:-trim].sum()
+
 def test_monochromatic(nrc_f335m_wext, nrc_f335m_webbpsf):
     """Test that webbpsf_ext and webbpsf give the same results for monochromatic PSFs"""
 
@@ -21,8 +27,25 @@ def test_monochromatic(nrc_f335m_wext, nrc_f335m_webbpsf):
 
     assert np.allclose(psf1[0].data, psf2[0].data)
 
+@pytest.mark.parametrize("filter", ['F323N', 'F335M', 'F356W'])
+def test_load_psf_coeffs(filter, nrc_f335m_wext):
+    """Test that PSF coefficients can be loaded"""
+
+    nrc = nrc_f335m_wext
+    nrc.filter = filter
+
+    nrc.gen_psf_coeff()
+    assert filter in nrc.save_name
+    assert nrc.psf_coeff is not None
+
+    nrc.gen_wfefield_coeff()
+    assert nrc._psf_coeff_mod['si_field'] is not None
+
+    nrc.gen_wfedrift_coeff()
+    assert nrc._psf_coeff_mod['wfe_drift'] is not None
+
 @pytest.mark.parametrize("xsci, ysci", [(1000,1000), (100,100), (2000,100), (100,2000), (2000,2000)])
-def test_field_dependent_psfs(xsci, ysci, nrc_f335m_coeffs, nrc_f335m_webbpsf):
+def test_field_dependent_psfs(xsci, ysci, nrc_f335m_coeffs_cached, nrc_f335m_webbpsf):
 
     # WebbPSF PSF at 'sci' coordinates
     nrc0 = nrc_f335m_webbpsf
@@ -30,23 +53,22 @@ def test_field_dependent_psfs(xsci, ysci, nrc_f335m_coeffs, nrc_f335m_webbpsf):
     psf0 = nrc0.calc_psf(source=sp_vega, fov_pixels=33, oversample=2)
 
     # WebbPSF Extended PSF at 'sci' coordinates, native and using coefficients
-    nrc = nrc_f335m_coeffs
+    nrc = nrc_f335m_coeffs_cached
     psf1 = nrc.calc_psf(sp=sp_vega, return_oversample=False,
                         coord_vals=(xsci, ysci), coord_frame='sci')
     psf2 = nrc.calc_psf_from_coeff(sp=sp_vega, return_oversample=False,
                                   coord_vals=(xsci, ysci), coord_frame='sci')
     
     # Compare PSFs
-    trim = 3
-    arr0 = psf0[3].data[trim:-trim,trim:-trim] / psf0[3].data[trim:-trim,trim:-trim].sum()
-    arr1 = psf1[3].data[trim:-trim,trim:-trim] / psf1[3].data[trim:-trim,trim:-trim].sum()
-    arr2 = psf2[0].data[trim:-trim,trim:-trim] / psf2[0].data[trim:-trim,trim:-trim].sum()
+    arr0 = normalize_psf(psf0[3].data)
+    arr1 = normalize_psf(psf1[3].data)
+    arr2 = normalize_psf(psf2[0].data)
 
     assert np.allclose(arr0, arr1, atol=0.001)
     assert np.allclose(arr1, arr2, atol=0.01)
 
 @pytest.mark.parametrize("filter", ['F323N', 'F335M', 'F356W'])
-def test_psfs(nrc_f335m_webbpsf, nrc_f335m_wext, filter):
+def test_psfs_cached(nrc_f335m_webbpsf, nrc_f335m_wext, filter):
 
     # Create webbpsf and webbpsf_ext objects
     nrc0 = nrc_f335m_webbpsf
@@ -57,7 +79,7 @@ def test_psfs(nrc_f335m_webbpsf, nrc_f335m_wext, filter):
     nrc1.filter = filter
 
     # Generate PSF coefficients
-    nrc1.gen_psf_coeff(save=False, force=True)
+    nrc1.gen_psf_coeff()
 
     # Calculate PSFs with distortion and detector sampling
     fov_pix = nrc1.fov_pix
@@ -68,17 +90,17 @@ def test_psfs(nrc_f335m_webbpsf, nrc_f335m_wext, filter):
     psf3 = nrc1.calc_psf_from_coeff(sp=sp_vega, return_oversample=False)
 
     # Compare PSFs
-    trim = 3
-    arr0 = psf0[3].data[trim:-trim,trim:-trim] / psf0[3].data[trim:-trim,trim:-trim].sum()
-    arr1 = psf1[3].data[trim:-trim,trim:-trim] / psf1[3].data[trim:-trim,trim:-trim].sum()
-    arr2 = psf2[3].data[trim:-trim,trim:-trim] / psf2[3].data[trim:-trim,trim:-trim].sum()
-    arr3 = psf3[0].data[trim:-trim,trim:-trim] / psf3[0].data[trim:-trim,trim:-trim].sum()
+    arr0 = normalize_psf(psf0[3].data)
+    arr1 = normalize_psf(psf1[3].data)
+    arr2 = normalize_psf(psf2[3].data)
+    arr3 = normalize_psf(psf3[0].data)
 
     # Test webbpsf and webbpsf_ext PSFs using source=sp_vega
     # There will be a slight difference because the weights are not exactly the same
     assert np.allclose(arr1, arr0, atol=0.001)
     assert np.allclose(arr1, arr2, atol=0.0001)
     assert np.allclose(arr1, arr3, atol=0.0001)
+
 
 def test_nircam_auto_pixelscale():
     # This test now uses approximate equality in all the checks, to accomodate the fact that
