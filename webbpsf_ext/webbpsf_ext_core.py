@@ -84,6 +84,10 @@ class NIRCam_ext(webbpsf_NIRCam):
 
         Keyword Args
         ============
+        pupil_rotation : float
+            Degrees to rotate the pupil wheel. Defaults to -0.5 for LW coronagraphy,
+            otherwise 0.0. Only occurs during init, so modifying the object will
+            require manual updates to `self.options['pupil_rotation']`.
         fovmax_wfedrift : int or None
             Maximum allowed size for coefficient modifications associated
             with WFE drift. Default is 256. Any pixels beyond this size will 
@@ -132,18 +136,24 @@ class NIRCam_ext(webbpsf_NIRCam):
         self._ote_scale = kwargs.get('ote_scale', None)
         self._nc_scale  = kwargs.get('nc_scale', None) 
 
-        # Option to calculate ND acquisition for coronagraphic obs
+        # Initialize option to calculate ND acquisition for coronagraphic obs
         self._ND_acq = False
-        # Option to specify that coronagraphic substrate materials is present.
+        # Initialize option to specify that coronagraphic substrate materials is present.
         self._coron_substrate = None
 
     @property
     def save_dir(self):
         """Coefficient save directory"""
-        return _gen_save_dir(self)
+        if self._save_dir is None:
+            return _gen_save_dir(self)
+        elif isinstance(self._save_dir, str):
+            return Path(self._save_dir)
+        else:
+            return self._save_dir
     @save_dir.setter
     def save_dir(self, value):
         self._save_dir = value
+
     def _erase_save_dir(self):
         """Erase all instrument coefficients"""
         _clear_coeffs_dir(self)
@@ -1119,7 +1129,12 @@ class MIRI_ext(webbpsf_MIRI):
     @property
     def save_dir(self):
         """Coefficient save directory"""
-        return _gen_save_dir(self)
+        if self._save_dir is None:
+            return _gen_save_dir(self)
+        elif isinstance(self._save_dir, str):
+            return Path(self._save_dir)
+        else:
+            return self._save_dir
     @save_dir.setter
     def save_dir(self, value):
         self._save_dir = value
@@ -1966,7 +1981,7 @@ def _clear_coeffs_dir(self):
         else:
             _log.warning("Process aborted.")
     else:
-        _log.warning(f"Directory '{save_dir}/' does not exist!")
+        _log.warning(f"Directory '{save_dir}' does not exist!")
 
 
 def _gen_save_name(self, wfe_drift=0):
@@ -2310,7 +2325,7 @@ def _update_mask_shifts(self):
     self.options['source_offset_ysub'] = yoff_sub # arcsec
 
 
-def _calc_psf_with_shifts(self, calc_psf_func, **kwargs):
+def _calc_psf_with_shifts(self, calc_psf_func, do_counts=None, **kwargs):
     """
     Mask shifting in webbpsf does not have as high of a precision as source offsetting
     for a given oversample setting.
@@ -2320,6 +2335,18 @@ def _calc_psf_with_shifts(self, calc_psf_func, **kwargs):
     the final images in the opposite direction in order to reposition the PSF at the
     proper source location. If the user already set _r/theta, the PSF is shifted to 
     that position using temporary source_offset_xsub/ysub keys in the options dict.
+
+    Parameters
+    ----------
+    calc_psf_func : function
+        WebbPSF's built-in `calc_psf` or `calc_psf_from_coeff` function.
+    do_counts : None or bool
+        If None, then auto-chooses True or False depending on whether a source
+        spectrum was specified. If True, then the PSF is scaled by the total
+        number of counts collected by telescope. If False, then the PSF is
+        normalized to 1 at infinity (times any pupil or image mask throughput losses).
+        Defaults to True if `sp` is specified, and False if `source` is specified
+        or neither are specified. `source` is native to webbpsf.
     """
 
     from .synphot_ext import Observation
@@ -2333,22 +2360,37 @@ def _calc_psf_with_shifts(self, calc_psf_func, **kwargs):
 
     # Get spectrum; flat in photlam if not specified
     sp = kwargs.pop('sp', None)
-    if sp is None:
+    source = kwargs.pop('source', None)
+    if (source is not None) and (sp is not None):
+        raise ValueError("Only one of `sp` or `source` can be specified.")
+    elif (sp is None) and (source is None):
         sp = stellar_spectrum('flat')
-        do_counts = False
+        do_counts = False if do_counts is None else do_counts
+    elif (sp is None) and (source is not None):
+        sp = source
+        do_counts = False if do_counts is None else do_counts
+    elif (sp is not None) and (source is None):
+        do_counts = True if do_counts is None else do_counts
     else:
-        do_counts = True
-        
+        # Should never get here
+        raise ValueError("Something went wrong with `sp` and `source`.")
+
+
     # Create source weights
     bp = self.bandpass
     obs = Observation(sp, bp, binset=bp.wave)
-    obs.convert('photlam')
     # Decide on wavelengths and weights
     binwave = obs.binset.to_value(u.um)
-    binflux = obs.sample_binned(flux_unit='photlam').value
     npsf = self.npsf
-    wave_um = np.linspace(binwave.min(), binwave.max(), npsf)
-    weights = np.interp(wave_um, binwave, binflux)
+    wave_lims_um = np.linspace(binwave.min(), binwave.max(), npsf+1)
+    weights = []
+    wave_um = []
+    for i in range(npsf):
+        w1, w2 = (wave_lims_um[i], wave_lims_um[i+1])
+        weights.append(obs.countrate(waverange=(w1,w2)*u.um, force=True))
+        wave_um.append((w1+w2)/2)
+    wave_um = np.array(wave_um)
+    weights = np.array(weights)
     weights /= weights.sum()
     src = {'wavelengths': wave_um*1e-6, 'weights': weights}
 
@@ -2401,6 +2443,8 @@ def _calc_psf_with_shifts(self, calc_psf_func, **kwargs):
 
     # Scale PSF by total incident source flux
     if do_counts:
+        # bp = self.bandpass
+        # obs = Observation(sp, bp, binset=bp.wave)
         for hdu in hdul:
             hdu.data *= obs.countrate()
 
@@ -3367,6 +3411,16 @@ def _gen_wfefield_coeff(self, force=False, save=True, return_results=False, retu
         v2_all = np.append(v2_all[igood], [v2_min, v2_max, v2_min, v2_max])
         v3_all = np.append(v3_all[igood], [v3_min, v3_min, v3_max, v3_max])
         npos = len(v2_all)
+
+        # WebbPSF includes some strict NIRCam V2/V3 limits for OTE field position
+        #   V2: -2.6 to 2.6
+        #   V3: -9.4 to -6.2
+        # Make sure we don't violate those limits
+        v2_all[v2_all<-2.6] = -2.58
+        v2_all[v2_all>2.6]  = +2.58
+        v3_all[v3_all<-9.4] = -9.38
+        v3_all[v3_all>-6.2] = -6.22
+
     else: # Other instrument detector fields are perhaps a little simpler
         # Specify the full frame apertures for grabbing corners of FoV
         if self.name=='MIRI':
@@ -3388,15 +3442,6 @@ def _gen_wfefield_coeff(self, force=False, save=True, return_results=False, retu
         v2_all = np.append(v2_all, [v2_min, v2_max, v2_min, v2_max])
         v3_all = np.append(v3_all, [v3_min, v3_min, v3_max, v3_max])
         npos = len(v2_all)
-
-    # WebbPSF includes some strict NIRCam V2/V3 limits for OTE field position
-    #   V2: -2.6 to 2.6
-    #   V3: -9.4 to -6.2
-    # Make sure we don't violate those limits
-    v2_all[v2_all<-2.6] = -2.58
-    v2_all[v2_all>2.6]  = +2.58
-    v3_all[v3_all<-9.4] = -9.38
-    v3_all[v3_all>-6.2] = -6.22
 
     # Convert V2/V3 positions to sci coords for specified aperture
     apname = self.aperturename
@@ -4138,10 +4183,12 @@ def _calc_psf_from_coeff(self, sp=None, return_oversample=True, return_hdul=True
             for ii, psf in enumerate(psf_all):
                 hdr = psf_coeff_hdr.copy()
                 if return_oversample:
-                    hdr['EXTNAME'] = ('OVERDIST', 'This extension is oversampled')
+                    extname = 'OVERDIST' if self.include_distortions else 'OVERSAMP'
+                    hdr['EXTNAME'] = (extname, 'This extension is oversampled')
                     hdr['OSAMP'] = (self.oversample, 'Image oversampling rel to det')
                 else:
-                    hdr['EXTNAME'] = ('DET_DIST', 'This extension is detector sampled')
+                    extname = 'DET_DIST' if self.include_distortions else 'DET_SAMP'
+                    hdr['EXTNAME'] = (extname, 'This extension is detector sampled')
                     hdr['OSAMP'] = (1, 'Image oversampling rel to det')
                     hdr['PIXELSCL'] = self.pixelscale
 
@@ -4168,10 +4215,12 @@ def _calc_psf_from_coeff(self, sp=None, return_oversample=True, return_hdul=True
 
             hdr = psf_coeff_hdr.copy()
             if return_oversample:
-                hdr['EXTNAME'] = ('OVERDIST', 'This extension is oversampled')
+                extname = 'OVERDIST' if self.include_distortions else 'OVERSAMP'
+                hdr['EXTNAME'] = (extname, 'This extension is oversampled')
                 hdr['OSAMP'] = (self.oversample, 'Image oversampling rel to det')
             else:
-                hdr['EXTNAME'] = ('DET_DIST', 'This extension is detector sampled')
+                extname = 'DET_DIST' if self.include_distortions else 'DET_SAMP'
+                hdr['EXTNAME'] = (extname, 'This extension is detector sampled')
                 hdr['OSAMP'] = (1, 'Image oversampling rel to det')
                 hdr['PIXELSCL'] = self.pixelscale
                 
@@ -4739,14 +4788,14 @@ def nrc_mask_trans(image_mask, x, y):
         # Working out the sigma parameter vs. wavelength to get that wedge pattern is non trivial
         # This is NOT a linear relationship. See calc_blc_wedge helper fn below.
 
-        if image_mask == 'MASKSWB':  
+        if image_mask == 'MASKSWB':
             polyfitcoeffs = np.array([2.01210737e-04, -7.18758337e-03, 1.12381516e-01,
-                                        -1.00877701e+00, 5.72538509e+00, -2.12943497e+01,
-                                        5.18745152e+01, -7.97815606e+01, 7.02728734e+01])
-        elif image_mask == 'MASKLWB':  
+                                      -1.00877701e+00, 5.72538509e+00, -2.12943497e+01,
+                                      5.18745152e+01, -7.97815606e+01, 7.02728734e+01])
+        elif image_mask == 'MASKLWB':
             polyfitcoeffs = np.array([9.16195583e-05, -3.27354831e-03, 5.11960734e-02,
-                                        -4.59674047e-01, 2.60963397e+00, -9.70881273e+00,
-                                        2.36585911e+01, -3.63978587e+01, 3.20703511e+01])
+                                      -4.59674047e-01, 2.60963397e+00, -9.70881273e+00,
+                                      2.36585911e+01, -3.63978587e+01, 3.20703511e+01])
         else:
             raise NotImplementedError(f"{image_mask} not a valid name for NIRCam wedge occulter")
 
@@ -4808,7 +4857,7 @@ def _transmission_map(self, coord_vals, coord_frame, siaf_ap=None):
     cx_idl += bar_offset
 
     # Get mask transmission (amplitude)
-    # Square this number to get photon attenuation (intesnity transmission)
+    # Square this number to get photon attenuation (intensity transmission)
     trans = nrc_mask_trans(self.image_mask, cx_idl, cy_idl)
 
     # print(trans**2, cx_idl, cy_idl)
