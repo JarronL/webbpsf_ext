@@ -30,6 +30,8 @@ def pytest_configure():
     TESTED_VERSIONS['webbpsf_ext'] = version
 
 
+####################################################
+# Direct Imaging Fixtures
 
 @pytest.fixture(scope='session')
 def nrc_f335m_webbpsf():
@@ -84,7 +86,6 @@ def nrc_f335m_coeffs(nrc_f335m_wext):
     
     return nrc
 
-
 @pytest.fixture(scope='session')
 def nrc_f335m_coeffs_cached(nrc_f335m_wext):
     """
@@ -95,6 +96,49 @@ def nrc_f335m_coeffs_cached(nrc_f335m_wext):
     # Will load from test DATA directory
     nrc.gen_psf_coeff()
     nrc.gen_wfefield_coeff()
+    nrc.gen_wfedrift_coeff()
+
+    return nrc
+
+
+####################################################
+# Coronagraph Fixtures
+
+@pytest.fixture(scope='session')
+def nrc_m335r_wext():
+    """
+    Return NIRCam LW direct imaging object
+    """
+    nrc = webbpsf_ext.NIRCam_ext(filter='F335M', 
+                                 pupil_mask='CIRCLYOT', 
+                                 image_mask='MASK335R')
+    nrc.save_dir = DATA_PATH
+
+    nrc.fov_pix = 33
+    nrc.oversample = 2
+
+    nrc.options['jitter'] = None
+    nrc.options['charge_diffusion_sigma'] = 0
+    nrc.options['add_ipc'] = False
+
+    nrc.options['pupil_shift_x'] = 0
+    nrc.options['pupil_shift_y'] = 0
+    nrc.options['pupilt_rotation'] = -0.5
+
+    nrc.detector_position = (1024,1024)
+    
+    return nrc
+
+@pytest.fixture(scope='session')
+def nrc_f335m_coeffs_cached(nrc_m335r_wext):
+    """
+    NIRCam object with PSF coefficients cached
+    """
+    nrc = nrc_m335r_wext
+
+    # Will load from test DATA directory
+    nrc.gen_psf_coeff()
+    nrc.gen_wfemask_coeff(large_grid=False)
     nrc.gen_wfedrift_coeff()
 
     return nrc
