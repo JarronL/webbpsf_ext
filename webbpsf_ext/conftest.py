@@ -77,35 +77,33 @@ def nrc_f335m_coeffs(nrc_f335m_wext):
     """
     NIRCam object with PSF coefficients generated
     """
-    nrc = nrc_f335m_wext
 
     # Will regenerate coefficients
-    nrc.gen_psf_coeff(save=False, force=True)
-    nrc.gen_wfefield_coeff(save=False, force=True)
-    nrc.gen_wfedrift_coeff(save=False, force=True)
+    nrc_f335m_wext.gen_psf_coeff(save=False, force=True)
+    nrc_f335m_wext.gen_wfefield_coeff(save=False, force=True)
+    nrc_f335m_wext.gen_wfedrift_coeff(save=False, force=True)
     
-    return nrc
+    return nrc_f335m_wext
 
 @pytest.fixture(scope='session')
 def nrc_f335m_coeffs_cached(nrc_f335m_wext):
     """
     NIRCam object with PSF coefficients cached
     """
-    nrc = nrc_f335m_wext
 
     # Will load from test DATA directory
-    nrc.gen_psf_coeff()
-    nrc.gen_wfefield_coeff()
-    nrc.gen_wfedrift_coeff()
+    nrc_f335m_wext.gen_psf_coeff()
+    nrc_f335m_wext.gen_wfefield_coeff()
+    nrc_f335m_wext.gen_wfedrift_coeff()
 
-    return nrc
+    return nrc_f335m_wext
 
 
 ####################################################
 # Coronagraph Fixtures
 
 @pytest.fixture(scope='session')
-def nrc_m335r_wext():
+def nrc_coron_wext():
     """
     Return NIRCam LW direct imaging object
     """
@@ -130,11 +128,11 @@ def nrc_m335r_wext():
     return nrc
 
 @pytest.fixture(scope='session')
-def nrc_f335m_coeffs_cached(nrc_m335r_wext):
+def nrc_coron_coeffs_cached(nrc_coron_wext):
     """
     NIRCam object with PSF coefficients cached
     """
-    nrc = nrc_m335r_wext
+    nrc = nrc_coron_wext
 
     # Will load from test DATA directory
     nrc.gen_psf_coeff()
@@ -142,23 +140,3 @@ def nrc_f335m_coeffs_cached(nrc_m335r_wext):
     nrc.gen_wfedrift_coeff()
 
     return nrc
-
-# @pytest.fixture(scope='session')
-# def nrc_m335r():
-#     """
-#     Return NIRCam LW coronagraphy object
-#     """
-#     nrc = webbpsf_ext.NIRCam_ext(filter='F335M', pupil_mask='CIRCLYOT', image_mask='MASKM335R')
-#     nrc.options['jitter'] = 'gaussian'
-#     nrc.options['jitter_sigma'] = 0.001
-#     nrc.options['charge_diffusion_sigma'] = 0
-#     nrc.options['add_ipc'] = False
-
-#     return 
-
-# @pytest.fixture(scope='session')
-# def miri_fqpm1140():
-#     """
-#     Return NIRCam long wavelength coronagraphy SIAF.
-#     """    
-#     return MIRI_ext(filter='F1140C', pupil_mask='MASKFQPM', image_mask='FQPM1140')
