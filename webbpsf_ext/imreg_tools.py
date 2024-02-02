@@ -1,5 +1,7 @@
 import numpy as np
 import os
+
+import matplotlib.pyplot as plt
 from tqdm.auto import tqdm
 
 from .image_manip import fourier_imshift, fshift, frebin
@@ -2164,11 +2166,10 @@ def get_jitter_balls(files_sci, indir, outdir=None, verbose=False, return_raw=Fa
 
         return xoff_all, yoff_all
 
+@plt.style.context('webbpsf_ext.wext_style')
 def plot_jitter_balls(xoff_all, yoff_all, sci_filename=None, fov_size=50, 
                       save=False, save_dir=None, return_fixaxes=False):
     """ Plot jitter ball positions"""
-
-    import matplotlib.pyplot as plt
 
     # Check that xoff_all and yoff_all are lists
     if not isinstance(xoff_all, list) or not isinstance(yoff_all, list):
