@@ -1,6 +1,7 @@
 # Import libraries
 from operator import add
 import numpy as np
+import matplotlib.pyplot as plt
 
 import time
 import os, six
@@ -430,6 +431,29 @@ class NIRCam_ext(webbpsf_NIRCam):
         bp = nircam_filter(self.filter, **kwargs)
         
         return bp
+    
+    def plot_bandpass(self, ax=None, color=None, title=None, 
+                      return_ax=False, **kwargs):
+        """
+        Plot the instrument bandpass on a selected axis.
+        Can pass various keywords to ``matplotlib.plot`` function.
+        
+        Parameters
+        ----------
+        ax : matplotlib.axes, optional
+            Axes on which to plot bandpass.
+        color : 
+            Color of bandpass curve.
+        title : str
+            Update plot title.
+        
+        Returns
+        -------
+        matplotlib.axes
+            Updated axes
+        """
+        return _plot_bandpass(self, ax=ax, color=color, title=title,
+                              return_ax=return_ax, **kwargs)
 
     def _update_coron_detector(self):
         """Depending on filter and image_mask setting, get correct detector
@@ -1311,6 +1335,29 @@ class MIRI_ext(webbpsf_MIRI):
     def bandpass(self):
         return miri_filter(self.filter)
 
+    def plot_bandpass(self, ax=None, color=None, title=None, 
+                      return_ax=False, **kwargs):
+        """
+        Plot the instrument bandpass on a selected axis.
+        Can pass various keywords to ``matplotlib.plot`` function.
+        
+        Parameters
+        ----------
+        ax : matplotlib.axes, optional
+            Axes on which to plot bandpass.
+        color : 
+            Color of bandpass curve.
+        title : str
+            Update plot title.
+        
+        Returns
+        -------
+        matplotlib.axes
+            Updated axes
+        """
+        return _plot_bandpass(self, ax=ax, color=color, title=title,
+                              return_ax=return_ax, **kwargs)
+
     def gen_mask_image(self, npix=None, pixelscale=None, detector_orientation=True):
         """
         Return an image representation of the focal plane mask.
@@ -1927,6 +1974,51 @@ def _init_inst(self, filter=None, pupil_mask=None, image_mask=None,
     # Flight performance is about 1 mas / axis
     self.options['jitter'] = 'gaussian'
     self.options['jitter_sigma'] = 0.001
+
+
+@plt.style.context('webbpsf_ext.wext_style')
+def _plot_bandpass(self, ax=None, color=None, title=None, 
+                   return_ax=False, **kwargs):
+    """
+    Plot the instrument bandpass on a selected axis.
+    Can pass various keywords to ``matplotlib.plot`` function.
+    
+    Parameters
+    ----------
+    ax : matplotlib.axes, optional
+        Axes on which to plot bandpass.
+    color : 
+        Color of bandpass curve.
+    title : str
+        Update plot title.
+    
+    Returns
+    -------
+    matplotlib.axes
+        Updated axes
+    """
+
+    if ax is None:
+        fig, ax = plt.subplots(**kwargs)
+    else:
+        fig = None
+
+    bp = self.bandpass
+    w = bp.waveset.to_value('um')
+    f = bp.throughput
+    ax.plot(w, f, color=color, label=bp.name, **kwargs)
+    ax.set_xlabel('Wavelength ($\mathdefault{\mu m}$)')
+    ax.set_ylabel('Throughput')
+
+    if title is None:
+        title = bp.name
+    ax.set_title(title)
+
+    if fig is not None:
+        fig.tight_layout()
+
+    if return_ax:
+        return ax
 
 def _gen_save_dir(self):
     """
@@ -4735,7 +4827,6 @@ def nrc_mask_trans(image_mask, x, y):
     Based on the Krist et al. SPIE paper on NIRCam coronagraph design
 
     *NOTE* : To get the actual intensity transmission, these values should be squared.
-
     """
 
     import scipy
