@@ -1,0 +1,24 @@
+### Ticks
+xtick.minor.visible: True
+ytick.minor.visible: True
+xtick.direction: in
+ytick.direction: in
+xtick.top: True
+ytick.right: True 
+
+xtick.major.size: 6
+ytick.major.size: 6
+xtick.minor.size: 3
+ytick.minor.size: 3
+
+### Image orientation and aliasing
+image.interpolation: nearest
+image.origin: lower
+
+### Figure size
+figure.figsize: 8, 6
+
+### Fonts
+mathtext.fontset : cm
+font.family: serif
+# font.serif: cmr10
