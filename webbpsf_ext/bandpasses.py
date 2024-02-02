@@ -700,8 +700,7 @@ def nircam_filter(filter, pupil=None, mask=None, module=None, sca=None, ND_acq=F
         bp = bp_new        
 
     # Select channel (SW or LW) for minor decisions later on
-    wavg = bp.avgwave()
-    wavg = wavg.to_value(u.um)  if isinstance(wavg, u.Quantity) else wavg / 1e4
+    wavg = bp.avgwave().to_value(u.um)
     channel = 'SW' if wavg < 2.3 else 'LW'
 
     if apply_scale_factors and flight:
@@ -740,6 +739,8 @@ def nircam_filter(filter, pupil=None, mask=None, module=None, sca=None, ND_acq=F
         warr = np.linspace(w1, w1+dw*npts, npts)
         bp = bp.resample(warr)
 
+        bp_name = f"{bp_name}_{pupil}"
+
     # Read in DHS throughput and multiply filter bandpass
     elif (pupil is not None) and ('DHS' in pupil):
         # DHS transmission curve follows a 3rd-order polynomial
@@ -763,9 +764,11 @@ def nircam_filter(filter, pupil=None, mask=None, module=None, sca=None, ND_acq=F
         warr = np.linspace(w1, w1+dw*npts, npts)
         bp = bp.resample(warr)
 
+        bp_name = f"{bp_name}_{pupil}"
+
     # Coronagraphic throughput modifications
     # Substrate transmission (off-axis substrate with occulting masks)
-    if ((mask  is not None) and ('MASK' in mask)) or coron_substrate or ND_acq:
+    if ((mask is not None) and ('MASK' in mask)) or coron_substrate or ND_acq:
         # Sapphire mask transmission values for coronagraphic substrate
         # Did we explicitly set the ND acquisition square?
         #   This is a special case and doesn't necessarily need to be set.
@@ -775,12 +778,16 @@ def nircam_filter(filter, pupil=None, mask=None, module=None, sca=None, ND_acq=F
         th_new = th_coron_sub * bp.throughput
         bp = S.ArrayBandpass(bp.wave, th_new)
 
+        bp_name = f"{bp_name}_{mask}"
+
     # Lyot stop wedge modifications 
     if (pupil is not None) and ('LYOT' in pupil):
         # Substrate transmission (located in pupil wheel to deflect beam)
         th_wedge = nircam_lyot_th(channel, wave_out=bp.wave/1e4)
         th_new = th_wedge * bp.throughput
         bp = S.ArrayBandpass(bp.wave, th_new, name=bp.name)
+
+        bp_name = f"{bp_name}_{pupil}"
 
     # Weak Lens substrate transmission
     # TODO: Update WLP4 with newer flight version
@@ -814,13 +821,13 @@ def nircam_filter(filter, pupil=None, mask=None, module=None, sca=None, ND_acq=F
         wl48_list = ['WEAK LENS +12 (=4+8)', 'WEAK LENS -4 (=4-8)']
         if (wl_name in wl48_list):
             th_wl = th_wl4 * th_wl8
-            bp_name = 'F212N' # F212N2?
+            bp_name.replace(filter, 'F212N') # F212N2?
             # Remove F200W contributions
             if filter=='F200W':
                 th_wl /= 0.97
         elif 'WEAK LENS +4' in wl_name:
             th_wl = th_wl4
-            bp_name = 'F212N' # F212N2?
+            bp_name.replace(filter, 'F212N') # F212N2?
             # Remove F200W contributions
             if filter=='F200W':
                 th_wl /= 0.97
@@ -830,12 +837,23 @@ def nircam_filter(filter, pupil=None, mask=None, module=None, sca=None, ND_acq=F
         th_new = th_wl * bp.throughput
         bp = S.ArrayBandpass(bp.wave, th_new)
 
-        # Select which wavelengths to keep
-        igood = bp_igood(bp, min_trans=0.005, fext=0.1)
-        wgood = (bp.wave)[igood]
-        w1 = wgood.min()
-        w2 = wgood.max()
-        wrange = w2 - w1
+        if '+4' in wl_name:
+            bp_name = f"{bp_name}_WLP4"
+        elif '-4' in wl_name:
+            bp_name = f"{bp_name}_WLM4"
+        elif '+8' in wl_name:
+            bp_name = f"{bp_name}_WLP8"
+        elif '-8' in wl_name:
+            bp_name = f"{bp_name}_WLM8"
+        elif '+12' in wl_name:
+            bp_name = f"{bp_name}_WLP12"
+
+    # Select which wavelengths to keep
+    igood = bp_igood(bp, min_trans=0.005, fext=0.1)
+    wgood = (bp.wave)[igood]
+    w1 = wgood.min()
+    w2 = wgood.max()
+    wrange = w2 - w1
 
     # OTE scaling (use ice_scale keyword)
     if ote_scale is not None:
@@ -1148,9 +1166,7 @@ def filter_width(bp, gsmooth=3):
 
     bp.convert('um')
     w, th = (bp.wave, bp.throughput)
-    wavg = bp.avgwave()
-    if isinstance(wavg, u.quantity.Quantity):
-        wavg = bp.avgwave().to_value(u.um)
+    wavg = bp.avgwave().to_value(u.um)
 
     # Quick Gaussian smoothing of noisy data
     if (gsmooth is not None) and (gsmooth > 0):
