@@ -993,7 +993,7 @@ def model_to_hdulist(args_model, sp_star, bandpass):
     wstar, fstar = (sp_star.wave/1e4, sp_star.flux)
 
     # Compare observed wavelength to image wavelength
-    wobs_um = bandpass.avgwave() / 1e4 # Current bandpass wavelength
+    wobs_um = bandpass.avgwave().to_value('um') # Current bandpass wavelength
 
     wdel = np.linspace(-0.1,0.1)
     f_obs = np.interp(wobs_um+wdel, wstar, fstar)

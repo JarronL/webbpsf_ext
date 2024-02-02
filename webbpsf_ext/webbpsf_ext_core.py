@@ -573,7 +573,7 @@ class NIRCam_ext(webbpsf_NIRCam):
                                            bar_offset=bar_offset, auto_offset=None, **shifts)
 
             # Create wavefront to pass through mask and obtain transmission image
-            wavelength = self.bandpass.avgwave().value / 1e10
+            wavelength = self.bandpass.avgwave().to('m')
             wave = poppy.Wavefront(wavelength=wavelength, npix=npix, pixelscale=pixelscale)
             im = mask.get_transmission(wave)**2
         else:
@@ -988,7 +988,7 @@ class NIRCam_ext(webbpsf_NIRCam):
                 * 'idl': arcsecs relative to aperture reference location.
 
         return_hdul : bool
-            Return PSFs in an HDUList rather than set of arrays (default: True).
+            Return PSFs in an HDUList rather than set of arrays. Default: True.
         return_oversample : bool
             Returns the oversampled version of the PSF instead of detector-sampled PSF.
             Only valid for `reaturn_hdul=False`, otherwise full HDUList returned. Default: True.
@@ -2371,23 +2371,15 @@ def _calc_psf_with_shifts(self, calc_psf_func, do_counts=None, **kwargs):
         # Should never get here
         raise ValueError("Something went wrong with `sp` and `source`.")
 
-
     # Create source weights
     bp = self.bandpass
-    obs = Observation(sp, bp, binset=bp.wave)
-    # Decide on wavelengths and weights
-    binwave = obs.binset.to_value(u.um)
-    npsf = self.npsf
-    wave_lims_um = np.linspace(binwave.min(), binwave.max(), npsf+1)
-    weights = []
-    wave_um = []
-    for i in range(npsf):
-        w1, w2 = (wave_lims_um[i], wave_lims_um[i+1])
-        weights.append(obs.countrate(waverange=(w1,w2)*u.um, force=True))
-        wave_um.append((w1+w2)/2)
-    wave_um = np.array(wave_um)
-    weights = np.array(weights)
-    weights /= weights.sum()
+    w1 = bp.waveset.to_value('um').min()
+    w2 = bp.waveset.to_value('um').max()
+    dw = (w2 - w1) / self.npsf
+    wave_um = np.linspace(w1+dw/2, w2-dw/2, self.npsf)
+    obs = Observation(sp, bp, binset=wave_um*u.um)
+    binflux = obs.sample_binned(flux_unit='counts').value
+    weights = binflux / binflux.sum()
     src = {'wavelengths': wave_um*1e-6, 'weights': weights}
 
     # NIRCam grism pupils aren't recognized by WebbPSF

@@ -140,7 +140,7 @@ def coron_trans(name, module='A', pixelscale=None, npix=None, oversample=1,
 
     # Create wavefront to pass through mask and obtain transmission image
     bandpass = nircam_filter(filter)
-    wavelength = bandpass.avgwave() / 1e10
+    wavelength = bandpass.avgwave().to('m')
     wave = poppy.Wavefront(wavelength=wavelength, npix=npix, pixelscale=pixelscale)
     
     # Square the amplitude transmission to get intensity transmission
@@ -174,7 +174,7 @@ def build_mask(module='A', pixscale=None, filter=None, nd_squares=True):
     # Multiply COM throughputs sampled at filter wavelength
     if filter is not None:
         bandpass = nircam_filter(filter)
-        w_um = bandpass.avgwave() / 1e4
+        w_um = bandpass.avgwave().to_value('um')
         com_th = nircam_com_th(wave_out=w_um)
         com_nd = 10**(-1*nircam_com_nd(wave_out=w_um))
 
@@ -289,7 +289,7 @@ def build_mask_detid(detid, oversample=1, ref_mask=None, pupil=None, filter=None
     # Multiply COM throughputs sampled at filter wavelength
     if filter is not None:
         bandpass = nircam_filter(filter)
-        w_um = bandpass.avgwave() / 1e4
+        w_um = bandpass.avgwave().to_value('um')
         com_th = nircam_com_th(wave_out=w_um)
         com_nd = 10**(-1*nircam_com_nd(wave_out=w_um))
 
@@ -712,7 +712,7 @@ def gen_coron_mask_ndonly(apname, **kwargs):
         com_th = 1
     else:
         bandpass = nircam_filter(filter)
-        w_um = bandpass.avgwave() / 1e4
+        w_um = bandpass.avgwave().to_value('um')
         com_th = nircam_com_th(wave_out=w_um)
 
     cmask[ind] = com_th

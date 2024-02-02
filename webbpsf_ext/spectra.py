@@ -1533,7 +1533,7 @@ def linder_filter(table, filt, age, dist=10, cond_file=None,
             bp = nircam_filter(filt)
         except:
             bp = miri_filter(filt)
-        wint = bp.avgwave() / 1e4
+        wint = bp.avgwave().to_value('um')
         x = np.array([np.interp(wint, wvals, row) for row in tbl_arr])
         
     y = table['log(Age/yr)'].data
