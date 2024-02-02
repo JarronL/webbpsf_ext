@@ -7,30 +7,16 @@ import matplotlib.pyplot as plt
 import os, sys
 import six
 
-import webbpsf, poppy, pysiaf
+import webbpsf, poppy
 
 # Define these here rather than calling multiple times
 # since it takes some time to generate these.
+import pysiaf
 siaf_nrc = pysiaf.Siaf('NIRCam')
 siaf_nis = pysiaf.Siaf('NIRISS')
 siaf_mir = pysiaf.Siaf('MIRI')
 siaf_nrs = pysiaf.Siaf('NIRSpec')
 siaf_fgs = pysiaf.Siaf('FGS')
-
-on_rtd = os.environ.get('READTHEDOCS') == 'True'
-# Preferred matplotlib settings
-rcvals = {'xtick.minor.visible': True, 'ytick.minor.visible': True,
-          'xtick.direction': 'in', 'ytick.direction': 'in',
-          'xtick.top': True, 'ytick.right': True, 'font.family': ['serif'],
-          'xtick.major.size': 6, 'ytick.major.size': 6,
-          'xtick.minor.size': 3, 'ytick.minor.size': 3,
-          'image.interpolation': 'nearest', 'image.origin': 'lower',
-          'figure.figsize': [8,6], 'mathtext.fontset':'cm'}#,
-          #'text.usetex': True, 'text.latex.preamble': ['\usepackage{gensymb}']}
-if not on_rtd:
-    matplotlib.rcParams.update(rcvals)
-    cmap_pri, cmap_alt = ('viridis', 'gist_heat')
-    matplotlib.rcParams['image.cmap'] = cmap_pri if cmap_pri in plt.colormaps() else cmap_alt
 
 from . import conf
 from .logging_utils import setup_logging
