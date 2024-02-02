@@ -1,6 +1,9 @@
 import numpy as  np
 import os
 
+import matplotlib
+from matplotlib import pyplot as plt
+
 import astropy.units as u
 from astropy.io import fits, ascii
 from astropy.config import ConfigItem
@@ -251,6 +254,11 @@ class BoxFilter(Bandpass):
         name = f'{self.name} tapered'
 
         return Bandpass(synphot.Empirical1D, points=x, lookup_table=y, name=name)
+    
+    @plt.style.context('webbpsf_ext.wext_style')
+    def plot(self, wavelengths, **kwargs):
+
+        super().plot(wavelengths, **kwargs)
     
 class UniformTransmission(Bandpass):
     
@@ -888,6 +896,7 @@ class Observation(synphot.Observation):
                                 waverange=waverange, force=force)
         return res.value
     
+    @plt.style.context('webbpsf_ext.wext_style')
     def plot(self, binned=True, wavelengths=None, flux_unit=None, **kwargs): 
         """Plot the observation.
 

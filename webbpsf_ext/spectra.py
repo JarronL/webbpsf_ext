@@ -867,6 +867,7 @@ class source_spectrum(object):
 
         self.sp_model = sp_model
 
+    @plt.style.context('webbpsf_ext.wext_style')
     def plot_SED(self, ax=None, return_figax=False, xr=[0.3,30], yr=None,
                      units='Jy', **kwargs):
 
