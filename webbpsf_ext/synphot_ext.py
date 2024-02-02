@@ -147,8 +147,15 @@ class Bandpass(synphot.SpectralElement):
         dw = (wmax - wmin) * u.um
         return dw.to(self._internal_wave_unit)
     
-    def unit_response(self, wavelengths=None):
-        return super().unit_response(stsyn.conf.area, wavelengths)
+    def unit_response(self, area=None, wavelengths=None):
+        if area is None:
+            area = stsyn.conf.area
+        return super().unit_response(area, wavelengths=wavelengths)
+    
+    def resample(self, new_wave):
+        """ Resample the bandpass to a new wavelength array """
+        throughput = self(new_wave).value
+        return ArrayBandpass(new_wave, throughput, name=self.name)
 
 class BoxFilter(Bandpass):
     """ Box filter with a given center and width
@@ -662,6 +669,9 @@ def load_vega(vegafile=None, **kwargs):
             
     return Vega
 
+def BlackBody(temperature):
+    """Reproduces pysynphot blackbody function"""
+    return Spectrum(synphot.models.BlackBodyNorm1D, temperature=temperature)
 
 # Load default Vega
 Vega = load_vega(encoding='binary')
@@ -738,6 +748,11 @@ class Observation(synphot.Observation):
         return self._waveunits
     
     @property
+    def binwave(self):
+        """ User binned wavelength array """
+        return self.binset.to_value(self.waveunits)
+    
+    @property
     def fluxunits(self):
         """ User flux units """
         return self._fluxunits
@@ -754,7 +769,8 @@ class Observation(synphot.Observation):
         if self._fluxunits == self._internal_flux_unit:
             return flux_intrinsic.value
         else:
-            flux_output = convert_flux(self.waveset, flux_intrinsic, self.fluxunits)
+            flux_output = convert_flux(self.waveset, flux_intrinsic, self.fluxunits,
+                                       area=self.area, vegaspec=stsyn.Vega)
             return flux_output.value
     
     @property
@@ -775,11 +791,18 @@ class Observation(synphot.Observation):
             self._fluxunits = validate_unit(new_units)
 
     def sample_binned(self, wavelengths=None, flux_unit=None, **kwargs):
-        kwargs['area'] = self.area
-        kwargs['vegaspec'] = stsyn.Vega
+        kwargs['area'] = kwargs.get('area', self.area)
+        kwargs['vegaspec'] = kwargs.get('vegaspec', stsyn.Vega)
+        if flux_unit == 'counts':
+            flux_unit = 'count'
         return super().sample_binned(wavelengths=wavelengths, flux_unit=flux_unit, **kwargs)
 
-    def effstim(self, flux_unit=None, wavelengths=None):
+    def efflam(self):
+        """ Effective wavelength """
+        return self.effective_wavelength().to_value(self.waveunits)
+
+    def effstim(self, flux_unit=None, wavelengths=None, 
+                area=None, vegaspec=stsyn.Vega):
         """Calculate effective stimulus for given flux unit.
 
         Area is set to the default value in stsynphot configuration (JWST).
@@ -803,11 +826,18 @@ class Observation(synphot.Observation):
         eff_stim : float
             Observation effective stimulus based on given flux unit.
         """
+        area = self.area if area is None else area
+        if flux_unit == 'counts':
+            flux_unit = 'count'
         res = super().effstim(flux_unit=flux_unit, wavelengths=wavelengths,
-                              area=self.area, vegaspec=stsyn.Vega)
-        return res.value
+                              area=area, vegaspec=vegaspec)
         
-    def countrate(self, binned=True, wavelengths=None, waverange=None,
+        try:
+            return res.value
+        except AttributeError:
+            return res
+        
+    def countrate(self, area=None, binned=True, wavelengths=None, waverange=None,
                   force=False):
         """Calculate :ref:`effective stimulus <synphot-formula-effstim>`
         in count/s.
@@ -853,8 +883,8 @@ class Observation(synphot.Observation):
             Calculation failed, including but not limited to NaNs in flux.
 
         """
-
-        res = super().countrate(self.area, binned=binned, wavelengths=wavelengths,
+        area = self.area if area is None else area
+        res = super().countrate(area, binned=binned, wavelengths=wavelengths,
                                 waverange=waverange, force=force)
         return res.value
     
@@ -889,8 +919,10 @@ class Observation(synphot.Observation):
 
         """
 
-        kwargs['area'] = self.area
-        kwargs['vegaspec'] = stsyn.Vega
+        kwargs['area'] = kwargs.get('area', self.area)
+        kwargs['vegaspec'] = kwargs.get('vegaspec', stsyn.Vega)        
+        if flux_unit == 'counts':
+            flux_unit = 'count'
         return super().plot(binned=binned, wavelengths=wavelengths, 
                             flux_unit=flux_unit, **kwargs)
 
