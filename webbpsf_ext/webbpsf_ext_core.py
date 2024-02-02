@@ -3769,7 +3769,8 @@ def _gen_wfemask_coeff(self, force=False, save=True, large_grid=None,
 
     # Get PSF coefficients for each specified position
     npos = len(xoff)
-    fov_pix_over = self.fov_pix * self.oversample
+    fov_pix = self.fov_pix + 1 if use_fov_pix_plus1 else self.fov_pix
+    fov_pix_over = fov_pix * self.oversample
     try:
         cf_all = np.zeros([npos, self.ndeg+1, fov_pix_over, fov_pix_over], dtype='float')
         # Create progress bar object

@@ -1,8 +1,12 @@
 # Import libraries
 from copy import deepcopy
 import numpy as np
+import matplotlib
+import matplotlib.pyplot as plt
 
-import os
+import os, sys
+import six
+
 import webbpsf, poppy
 
 # Define these here rather than calling multiple times
@@ -203,3 +207,11 @@ def pix_ang_size(ap=None, sr=True, pixscale=None):
     else:
         return area_asec2
     
+def load_plt_style(style='webbpsf_ext.wext_style'):
+    """
+    Load the matplotlib style for spaceKLIP plots.
+    
+    Load the style sheet in `sk_style.mplstyle`, which is a modified version of the
+    style sheet from the `webbpsf_ext` package.
+    """
+    plt.style.use(style)
