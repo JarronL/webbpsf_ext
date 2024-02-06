@@ -474,6 +474,50 @@ def tasub_to_apname(tasub):
     return apname_dict[tasub]
 
 
+def print_ta_visit_times(eventlog, verbose=True):
+    """Get centroid position of TA as reported in JWST event logs"""
+
+    from csv import reader
+    from datetime import datetime
+
+    # parse response (ignoring header line) and print new event messages
+    vid = ''
+    ta_only = True
+    in_ta = False
+
+    # Search through event log for TA visit and get visit ids
+    vid_list = []
+    vstart_list = []
+    vend_list = []
+    for value in reader(eventlog, delimiter=',', quotechar='"'):
+        val_str = value[2]
+
+        if val_str[:6] == 'VISIT ':
+            if val_str[-7:] == 'STARTED':
+                vstart = 'T'.join(value[0].split())[:-3]
+                vid = val_str.split()[1]
+                # Add to lists
+                vid_list.append(vid)
+                vstart_list.append(vstart)
+
+            elif val_str[-5:] == 'ENDED':
+                vend = 'T'.join(value[0].split())[:-3]
+                vend_list.append(vend)
+
+    # Grab unique visit ids
+    vid_list, ivid = np.unique(vid_list, return_index=True)
+    vstart_list    = np.array(vstart_list)[ivid]
+    vend_list      = np.array(vend_list)[ivid]
+
+    for i, vid in enumerate(vid_list):
+        if verbose:
+            print(f"VISIT {vid} STARTED at {vstart_list[i]}")
+        find_centroid_det(eventlog, vid)
+        if verbose:
+            print(f"VISIT {vid} ENDED at {vend_list[i]}")
+        if i+1 < len(vid_list):
+            print('')
+
 
 def find_centroid_det(eventlog, selected_visit_id):
     """Get centroid position of TA as reported in JWST event logs"""
