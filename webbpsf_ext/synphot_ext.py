@@ -671,6 +671,9 @@ def load_vega(vegafile=None, **kwargs):
     if vegafile is None:
         vegafile = synconf.vega_file
 
+    if not os.path.exists(vegafile):
+        download_cdbs_data()
+
     with synconf.set_temp('vega_file', vegafile):
         try:
             Vega = Spectrum.from_vega(**kwargs)
