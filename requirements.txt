@@ -1,0 +1,11 @@
+astropy
+astroquery
+matplotlib
+numpy
+synphot
+stsynphot
+scipy
+tqdm
+pysiaf
+poppy
+webbpsf
