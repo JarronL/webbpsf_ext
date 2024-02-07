@@ -45,14 +45,11 @@ jobs:
 
     - name: WebbPSF Extensions Data
       run: | # Set up webbpsf_ext data environment variable
-        echo "WEBBPSF_EXT_PATH=${{github.workspace}}/webbpsf_ext_data" >> $GITHUB_ENV
-        mkdir -p $WEBBPSF_EXT_PATH
-      # echo "WEBBPSF_EXT_PATH=$(mktemp -d)" >> $GITHUB_ENV
+        echo "WEBBPSF_EXT_PATH=$(mktemp -d)" >> $GITHUB_ENV
 
     - name: CDBS Data Path
       run: | # Set up pycdbs environment variable
-        echo "PYSYN_CDBS=${{github.workspace}}/cdbs" >> $GITHUB_ENV
-        mkdir -p $PYSYN_CDBS
+        echo "PYSYN_CDBS=$(mktemp -d)" >> $GITHUB_ENV
 
     - name: Check conda info
       run: conda info
