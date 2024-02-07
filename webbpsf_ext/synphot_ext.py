@@ -35,7 +35,13 @@ def download_cdbs_data(cdbs_path=None, verbose=False):
     if cdbs_path is None:
         cdbs_path = os.environ.get('PYSYN_CDBS', None)
         if cdbs_path is None:
-            raise ValueError("Environment variable PYSYN_CDBS is not set.")
+            # Set default path
+            cdbs_path = os.path.join(os.environ.get('WEBBPSF_EXT_PATH'), 'cdbs')
+            os.environ['PYSYN_CDBS'] = cdbs_path
+            cdbs_path = os.environ.get('PYSYN_CDBS', None)
+            if not os.path.exists(cdbs_path):
+                os.makedirs(cdbs_path, exist_ok=True)
+            # raise ValueError("Environment variable PYSYN_CDBS is not set.")
 
     # Download synphot data files
     res = download_data(cdbs_path, verbose=False)
