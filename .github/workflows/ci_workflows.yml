@@ -1,0 +1,72 @@
+# This workflow will install Python dependencies, run tests and lint with a variety of Python versions
+# For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-python
+
+name: CI
+
+on: [push, pull_request]
+
+jobs:
+  tests:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+
+          - name: Try latest versions of all dependencies
+            os: ubuntu-latest
+            python: '3.11'
+            toxenv: py311-latest-test
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Set up Python ${{ matrix.python }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python }}
+
+    - name: Install Python dependencies
+      run: | 
+          python -m pip install --upgrade pip
+          pip install tox tox-conda>=0.2
+          pip install pytest pytest-cov>=4.0
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+
+    - name: Get WebbPSF Data
+      run: | # Get WebbPSF data files (just a subset of the full dataset!) and set up environment variable
+           wget https://stsci.box.com/shared/static/0ojjfg3cieqdpd18vl1bjnpe63r82dx8.gz -O /tmp/minimal-webbpsf-data.tar.gz
+           tar -xzvf /tmp/minimal-webbpsf-data.tar.gz
+           echo "WEBBPSF_PATH=${{github.workspace}}/webbpsf-data" >> $GITHUB_ENV
+
+    - name: Check conda info
+      run: conda info
+
+    # - name: Test with pytest
+    #   run: |
+    #     pytest
+
+    - name: Test with pytest  
+      run: |  
+        coverage run -m pytest  -v -s  
+    - name: Generate Coverage Report  
+      run: |  
+        coverage report -m
+
+    # - name: Run tests via tox
+    #   if: ${{ contains(matrix.toxenv,'test') }}
+    #   run: |
+    #     tox -e ${{ matrix.toxenv }}
+    
+    # - name: Run tests
+    #   if: ${{ matrix.continue-on-error == null && contains(matrix.toxenv,'-latest') != true }}
+    #   run: tox -e ${{ matrix.toxenv }}
+
+    # - name: Run tests and allow failures
+    #   if: matrix.continue-on-error
+    #   continue-on-error: true
+    #   run: tox -e ${{ matrix.toxenv }}
