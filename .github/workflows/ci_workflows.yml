@@ -37,16 +37,23 @@ jobs:
           pip install pytest pytest-cov>=4.0
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
+          
     - name: WebbPSF Data
       run: | # Get WebbPSF data files (just a subset of the full dataset!) and set up environment variable
         wget https://stsci.box.com/shared/static/0ojjfg3cieqdpd18vl1bjnpe63r82dx8.gz -O /tmp/minimal-webbpsf-data.tar.gz
         tar -xzvf /tmp/minimal-webbpsf-data.tar.gz
         echo "WEBBPSF_PATH=${{github.workspace}}/webbpsf-data" >> $GITHUB_ENV
 
-    - name: Set webbpsf_ext and CDBS Data Paths
+    - name: Get CDBS Data
+      run: | # Get subset of CDBS data files and set up environment variable
+        wget https://arizona.box.com/s/wgq7ymqsp8e7jfno8yk6o2igbnqlad8z -O /tmp/cdbs_min_tests.zip
+        unzip /tmp/cdbs_min_tests.zip
+        echo "PYSYN_CDBS=${{github.workspace}}/cdbs_min_tests" >> $GITHUB_ENV
+
+    - name: Set webbpsf_ext Data Path
       run: | # Set up webbpsf_ext data environment variable
         echo "WEBBPSF_EXT_PATH=$(mktemp -d)" >> $GITHUB_ENV
-        echo "PYSYN_CDBS=$(mktemp -d)" >> $GITHUB_ENV
+        
 
     - name: Check conda info
       run: conda info

@@ -29,8 +29,8 @@ def test_download_votable():
     # Test the download_votable function
     tbl = download_votable('Vega')
 
-# @pytest.mark.parametrize('sptype', ['A0V', 'F0V', 'G0V', 'K0V', 'M0V'])
-# def test_stellar_spectrum(sptype):
-#     # Test the stellar_spectrum function
-#     sp = stellar_spectrum(sptype, catname='ck04models')
-#     sp = stellar_spectrum(sptype, catname='phoenix')
+@pytest.mark.parametrize('sptype', ['A0V', 'F0V', 'G0V', 'K0V', 'M0V'])
+def test_stellar_spectrum(sptype):
+    # Test the stellar_spectrum function
+    sp = stellar_spectrum(sptype, catname='ck04models')
+    sp = stellar_spectrum(sptype, catname='phoenix')
