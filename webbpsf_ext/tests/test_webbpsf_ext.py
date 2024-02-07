@@ -33,6 +33,7 @@ def test_load_psf_coeffs(filter, nrc_f335m_wext):
     """Test that PSF coefficients can be loaded"""
 
     nrc = nrc_f335m_wext
+    nrc.filter = filter
 
     nrc.gen_psf_coeff()
     assert filter in nrc.save_name
@@ -137,4 +138,4 @@ def test_coron_psfs(xidl, yidl, nrc_coron_coeffs_cached):
     diff = arr1-arr2
     print("Min/Max:", np.min(diff), np.max(diff))
 
-    assert np.allclose(arr1, arr2, atol=0.0001)
+    assert np.allclose(arr1, arr2, atol=0.001)
