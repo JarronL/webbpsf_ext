@@ -46,7 +46,7 @@ jobs:
 
     - name: Get CDBS Data
       run: | # Get subset of CDBS data files and set up environment variable
-        wget https://arizona.box.com/s/wgq7ymqsp8e7jfno8yk6o2igbnqlad8z -O /tmp/cdbs_min_tests.zip
+        wget https://arizona.box.com/shared/static/wgq7ymqsp8e7jfno8yk6o2igbnqlad8z.zip -O /tmp/cdbs_min_tests.zip
         unzip /tmp/cdbs_min_tests.zip
         echo "PYSYN_CDBS=${{github.workspace}}/cdbs_min_tests" >> $GITHUB_ENV
 
