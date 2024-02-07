@@ -96,18 +96,29 @@ def test_psfs_cached(nrc_f335m_webbpsf, nrc_f335m_wext, filter):
     arr2 = normalize_psf(psf2[3].data)
     arr3 = normalize_psf(psf3[0].data)
 
+    diff0 = psf0[3].data - psf1[3].data
     diff1 = arr0-arr1
     diff2 = arr1-arr2
-    diff3 = arr1-arr3
+
+    print("Min/Max:", np.min(diff0), np.max(diff0))
     print("Min/Max:", np.min(diff1), np.max(diff1))
     print("Min/Max:", np.min(diff2), np.max(diff2))
-    print("Min/Max:", np.min(diff3), np.max(diff3))
-
+    
     # Test webbpsf and webbpsf_ext PSFs using source=sp_vega
-    # There will be a slight difference because the weights are not exactly the same
     assert np.allclose(arr1, arr0, atol=0.001)
+    assert np.allclose(psf0[3].data, psf1[3].data, atol=0.001)
+
+    # Test that setting source= and sp= produce same normalized PSFs
     assert np.allclose(arr1, arr2)
-    assert np.allclose(arr1, arr3, atol=0.001)
+
+    # Test that using coefficients produces same normalized PSFs
+    # Divide by sum to normalize
+    psf_sum = psf2[3].data.sum()
+    arr2 = psf2[3].data / psf_sum
+    arr3 = psf3[0].data / psf_sum
+    diff3 = arr2-arr3
+    print("Min/Max:", np.min(diff3), np.max(diff3))
+    assert np.allclose(arr2, arr3, atol=0.001)
 
 @pytest.mark.parametrize("xidl, yidl", [(0,0), (0.1,0.1), (1,1)])
 def test_coron_psfs(xidl, yidl, nrc_coron_coeffs_cached):
