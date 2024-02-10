@@ -1,6 +1,6 @@
 astropy
 astroquery
-matplotlib
+matplotlib >= 3.7.1
 numpy
 synphot
 stsynphot
