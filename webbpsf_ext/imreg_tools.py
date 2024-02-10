@@ -278,13 +278,14 @@ def filter_files(files, save_dir):
 
     return files[ind_keep]
 
-def get_save_dir(pid):
+def get_save_dir(pid, mast_dir=None):
     """Return save directory for processed files
     
     Takes the MAST directory for a given PID and adds
     '_proc' to the end. If it doesn't exist, it will be created.
     """
-    mast_dir = os.getenv('JWSTDOWNLOAD_OUTDIR')
+    if mast_dir is None:
+        mast_dir = os.getenv('JWSTDOWNLOAD_OUTDIR')
 
     # Output directory
     if mast_dir[-1]=='/':
@@ -297,59 +298,6 @@ def get_save_dir(pid):
     os.makedirs(save_dir, exist_ok=True)
 
     return save_dir
-
-def load_cropped_files(save_dir, files, xysub=65, bgsub=False, 
-                       fix_bad_pixels=True, **kwargs):
-
-    from jwst.datamodels import dqflags
-
-    # Get index location and 'sci' position
-    halfwidth = kwargs.get('halfwidth', 15)
-    com_ind = get_loc_all(files, save_dir, find_func=get_com,
-                          fix_bad_pixels=fix_bad_pixels, 
-                          halfwidth=halfwidth)
-
-    imsub_arr = []
-    dqsub_arr = []
-    xyind_arr = []
-    for i, f in enumerate(files):
-        fpath = os.path.join(save_dir, f)
-        hdul = fits.open(fpath)
-
-        # Crop and roughly center image
-        data, xy = crop_image(hdul['SCI'].data, xysub, xyloc=com_ind[i], return_xy=True)
-        try:
-            dqmask = crop_image(hdul['DQ'].data, xysub, xyloc=com_ind[i])
-        except KeyError:
-            dqmask = np.zeros_like(data).astype(np.uint64)
-        
-        # For arrays padded with 0s, flag those pixels as DO_NOT_USE
-        indz = (data==0)
-        dqmask[indz] = dqmask[indz] | dqflags.pixel['DO_NOT_USE']
-        
-        imsub_arr.append(data)
-        dqsub_arr.append(dqmask)
-        xyind_arr.append(xy)
-        
-        hdul.close()
-
-    imsub_arr = np.array(imsub_arr)
-    dqsub_arr = np.array(dqsub_arr)
-    xyind_arr = np.array(xyind_arr)
-    bp_masks1 = (dqsub_arr & dqflags.pixel['OTHER_BAD_PIXEL']) > 0
-    bp_masks2 = (dqsub_arr & dqflags.pixel['DO_NOT_USE']) > 0
-    bp_masks = bp_masks1 | bp_masks2 | np.isnan(imsub_arr)
-
-    # Do bg subtraction from r>bg_rad and only include good pixels
-    if bgsub:
-        # Radial position to set background
-        bg_rad = int(0.7 * xysub / 2)
-        ind_bg = dist_image(np.zeros([xysub,xysub])) > bg_rad
-        for i in range(len(files)):
-            indgood = (~bp_masks[i]) & ind_bg
-            imsub_arr[i] -= np.nanmedian(data[indgood])
-
-    return imsub_arr, dqsub_arr, xyind_arr, bp_masks
 
 ###########################################################################
 #    Target Acquisition
@@ -965,7 +913,7 @@ def get_expected_loc(input, return_indices=True, add_sroffset=None):
     else:
         return xsci_exp, ysci_exp
 
-def get_gfit_cen(im, xysub=11, return_sci=False, find_max=True):
+def get_gfit_cen(im, xysub=11, return_sci=False, find_max=True, **kwargs):
     """Gaussion fit to get centroid position"""
     
     from astropy.modeling import models, fitting
@@ -1029,6 +977,21 @@ def get_com(im, halfwidth=7, return_sci=False, **kwargs):
     else:
         return xind_com, yind_com
 
+def get_peak(im, nsig_threshold=50, box_size=15, return_sci=False, **kwargs):
+    
+    from photutils.detection import find_peaks
+
+    #  Find peak position
+    std = robust.medabsdev(im)
+    threshold = nsig_threshold * std
+    tbl = find_peaks(im, threshold, box_size=box_size, npeaks=1)
+    xind_peak, yind_peak = (tbl[0]['x_peak'], tbl[0]['y_peak'])
+    
+    if return_sci:
+        return xind_peak+1, yind_peak+1
+    else:
+        return xind_peak, yind_peak
+
 def get_loc_all(files, indir, find_func=get_com, 
                 fix_bad_pixels=True, **kwargs):
 
@@ -1049,14 +1012,20 @@ def get_loc_all(files, indir, find_func=get_com,
         except KeyError:
             dqmask = np.zeros_like(data).astype(np.uint64)
 
+        # If data is 3D, then get median image
+        if len(data.shape) > 2:
+            bpmask = (dqmask & dqflags.pixel['DO_NOT_USE']) > 0
+            data[bpmask] = np.nan
+            data = np.nanmedian(data, axis=0)
+            # Bitwise AND of DQ mask
+            dqmask = np.bitwise_and.reduce(dqmask, axis=0)
+
         # Get rough stellar position
         if find_func is get_expected_loc:
             xy = get_expected_loc(hdul[0].header, **kwargs)
         elif find_func is get_com:
             # Fix bad pixels
-            bp_mask1 = (dqmask & dqflags.pixel['OTHER_BAD_PIXEL']) > 0
-            bp_mask2 = (dqmask & dqflags.pixel['DO_NOT_USE']) > 0
-            bpmask = bp_mask1 | bp_mask2
+            bpmask = (dqmask & dqflags.pixel['DO_NOT_USE']) > 0
 
             if fix_bad_pixels:
                 data = bp_fix(data, sigclip=20, in_place=False)
@@ -1074,6 +1043,84 @@ def get_loc_all(files, indir, find_func=get_com,
         hdul.close()
         
     return np.array(star_locs)
+
+
+def load_cropped_files(save_dir, files, xysub=65, bgsub=False, 
+                       fix_bad_pixels=True, find_func=get_com, **kwargs):
+
+    from jwst.datamodels import dqflags
+
+    # Get index location and 'sci' position
+    if find_func is get_com:
+        kwargs['halfwidth'] = kwargs.get('halfwidth', 15)
+    com_ind = get_loc_all(files, save_dir, find_func=find_func,
+                          fix_bad_pixels=fix_bad_pixels, **kwargs)
+
+    imsub_arr = []
+    dqsub_arr = []
+    xyind_arr = []
+    for i, f in enumerate(files):
+        fpath = os.path.join(save_dir, f)
+        hdul = fits.open(fpath)
+
+        ndim = len(hdul['SCI'].data.shape)
+        data = hdul['SCI'].data[0] if ndim==3 else hdul['SCI'].data
+        try:
+            dqmask = hdul['DQ'].data[0] if ndim==3 else hdul['DQ'].data
+        except KeyError:
+            dqmask = np.zeros_like(data).astype(np.uint64)
+
+        # Crop and roughly center image
+        data, xy = crop_image(data, xysub, xyloc=com_ind[i], return_xy=True)
+        x1, x2, y1, y2 = xy
+        if ndim==3:
+            data = hdul['SCI'].data[:,y1:y2,x1:x2]
+            try:
+                dqmask = hdul['DQ'].data[:,y1:y2,x1:x2]
+            except KeyError:
+                dqmask = np.zeros_like(data).astype(np.uint64)
+        else:
+            try:
+                dqmask = hdul['DQ'].data[y1:y2,x1:x2]
+            except KeyError:
+                dqmask = np.zeros_like(data).astype(np.uint64)
+        
+        # For arrays padded with 0s, flag those pixels as DO_NOT_USE
+        indz = (data==0)
+        dqmask[indz] = dqmask[indz] | dqflags.pixel['DO_NOT_USE']
+        
+        imsub_arr.append(data)
+        dqsub_arr.append(dqmask)
+        xyind_arr.append(xy)
+        
+        hdul.close()
+
+    imsub_arr = np.asarray(imsub_arr)
+    dqsub_arr = np.asarray(dqsub_arr)
+    xyind_arr = np.asarray(xyind_arr)
+    bp_masks1 = (dqsub_arr & dqflags.pixel['OTHER_BAD_PIXEL']) > 0
+    bp_masks = bp_masks1 | np.isnan(imsub_arr)
+
+    # Do bg subtraction from r>bg_rad and only include good pixels
+    if bgsub:
+        # Radial position to set background
+        bg_rad = int(0.7 * xysub / 2)
+        ind_bg = dist_image(np.zeros([xysub,xysub])) > bg_rad
+        for i in range(len(files)):
+            imsub_arr_i = imsub_arr[i]
+            bp_masks_i = bp_masks[i]
+            ndim = len(imsub_arr_i.shape)
+            if ndim==3:
+                for j in range(imsub_arr_i.shape[0]):
+                    indgood = (~bp_masks_i[j]) & ind_bg
+                    imsub_arr_i[j] -= np.nanmedian(data[j][indgood])
+            else:
+                indgood = (~bp_masks_i) & ind_bg
+                imsub_arr_i -= np.nanmedian(data[indgood])
+
+    return imsub_arr, dqsub_arr, xyind_arr, bp_masks
+
+
 
 def recenter_psf(psfs_over, niter=3, halfwidth=7, 
                  gfit=True, in_place=False, **kwargs):
@@ -1475,7 +1522,10 @@ def apply_pixel_diffusion(im, pixel_sigma):
         Sigma of Gaussian kernel in units of image pixels.
     """
     from scipy.ndimage import gaussian_filter
-    return gaussian_filter(im, pixel_sigma)
+    if pixel_sigma > 0:
+        return gaussian_filter(im, pixel_sigma)
+    else:
+        return im
 
 def gen_psf_offsets(psf, crop=65, xlim_pix=(-3,3), ylim_pix=(-3,3), dxy=0.05,
     psf_osamp=1, shift_func=fourier_imshift, ipc_vals=None, kipc=None,
@@ -1835,12 +1885,16 @@ def find_pix_offsets(imsub_arr, psfs, psf_osamp=1, kipc=None, kppc=None,
     # from webbpsf_ext.imreg_tools import find_offsets_phase
     # from webbpsf_ext.imreg_tools import gen_psf_offsets, find_offsets2
     from .image_manip import add_ipc, add_ppc
+    from tqdm import trange
 
     sh_orig = imsub_arr.shape
+    sh_orig_psfs = psfs.shape
     if len(sh_orig)==2:
         imsub_arr = [imsub_arr]
-        psfs = [psfs]
         bpmask_arr = [bpmask_arr]
+        psfs = [psfs]
+    elif len(sh_orig_psfs)==2:
+        psfs = [psfs]
 
     def find_pix_phase(im, psf, psf_osamp, kipc=None, kppc=None, diffusion_sigma=None, crop=15):
         # Rebin to detector sampling
@@ -1861,7 +1915,7 @@ def find_pix_offsets(imsub_arr, psfs, psf_osamp=1, kipc=None, kppc=None,
         return res
 
     def find_pix_cc(im, psf, psf_osamp, kipc=None, kppc=None, diffusion_sigma=None,
-                    crop=33, bpmask=None, **kwargs):
+                    crop=33, bpmask=None, return_grids=False, **kwargs):
         """Cross correlate by shifting PSF in fine steps"""
 
         # Create a series of coarse offset PSFs to find initial estimate
@@ -1870,10 +1924,13 @@ def find_pix_offsets(imsub_arr, psfs, psf_osamp=1, kipc=None, kppc=None,
             xlim_pix = ylim_pix = xylim_pix
         else:
             xlim_pix = ylim_pix = (-10,10)
-        res = gen_psf_offsets(psf, crop=crop, xlim_pix=xlim_pix, ylim_pix=xlim_pix, dxy=1,
-                              psf_osamp=psf_osamp, kipc=None, kppc=None, diffusion_sigma=None,
-                              prog_leave=False, shift_func=fshift, **kwargs)
-        xoff_pix, yoff_pix, psf_sh_all = res
+        res1 = kwargs.get('res1', None)
+        if res1 is None:
+            res1 = gen_psf_offsets(psf, crop=crop, xlim_pix=xlim_pix, ylim_pix=xlim_pix, dxy=1,
+                                  psf_osamp=psf_osamp, kipc=None, kppc=None, diffusion_sigma=None,
+                                  prog_leave=False, shift_func=fshift, **kwargs)
+        xoff_pix, yoff_pix, psf_sh_all = res1
+
         # psf_sh_all are cropped to `crop`` value, whereas im is still input size
         xsh_coarse, ysh_coarse = find_offsets2(im, xoff_pix, yoff_pix, psf_sh_all, crop=crop,
                                                dxy_fine=0.5, bpmasks=bpmask, prog_leave=False, **kwargs)
@@ -1881,30 +1938,56 @@ def find_pix_offsets(imsub_arr, psfs, psf_osamp=1, kipc=None, kppc=None,
         # Create finer grid off offset PSFs
         xlim_pix = (xsh_coarse-1.5, xsh_coarse+1.5)
         ylim_pix = (ysh_coarse-1.5, ysh_coarse+1.5)
-        res = gen_psf_offsets(psf, crop=crop, xlim_pix=xlim_pix, ylim_pix=ylim_pix, dxy=0.05,
-                              psf_osamp=psf_osamp, kipc=kipc, kppc=kppc, diffusion_sigma=diffusion_sigma,
-                              prog_leave=False, **kwargs)
+        res2 = kwargs.get('res2', None)
+        if res2 is None:
+            res2 = gen_psf_offsets(psf, crop=crop, xlim_pix=xlim_pix, ylim_pix=ylim_pix, dxy=0.05,
+                                  psf_osamp=psf_osamp, kipc=kipc, kppc=kppc, diffusion_sigma=diffusion_sigma,
+                                  prog_leave=False, **kwargs)
+        xoff_pix, yoff_pix, psf_sh_all = res2
 
         # Perform cross correlations and interpolate at 0.01 pixel
-        xoff_pix, yoff_pix, psf_sh_all = res
-        return find_offsets2(im, xoff_pix, yoff_pix, psf_sh_all, crop=crop,
-                             dxy_fine=0.01, bpmasks=bpmask, prog_leave=False, **kwargs)
+        xsh_fine, ysh_fine = find_offsets2(im, xoff_pix, yoff_pix, psf_sh_all, crop=crop,
+                                           dxy_fine=0.01, bpmasks=bpmask, prog_leave=False, **kwargs)
+        res = (xsh_fine, ysh_fine)
+
+        if return_grids:
+            return res, res1, res2
+        else:
+            return res
 
     xysh_pix = []
-    for i, im in enumerate(imsub_arr):
+    iter_vals = trange(len(imsub_arr), desc='Image XCorr', leave=False) if len(imsub_arr)>=10 else range(len(imsub_arr))
+    for i in iter_vals:
+        im = imsub_arr[i]
+        # If only a single PSF was passed, then use it for all images
+        psf = psfs[i] if sh_orig==sh_orig_psfs else psfs[0]
         if phase:
             crop = 15 if crop is None else crop
-            res = find_pix_phase(im, psfs[i], psf_osamp, kipc=kipc, kppc=kppc, 
+            res = find_pix_phase(im, psf, psf_osamp, kipc=kipc, kppc=kppc, 
                                  diffusion_sigma=diffusion_sigma, crop=crop)
         else:
             crop = 21 if crop is None else crop
-            res = find_pix_cc(im, psfs[i], psf_osamp, kipc=kipc, kppc=kppc, 
+
+            # Only set to return grid on first iteration
+            if len(sh_orig)==3 and len(sh_orig_psfs)==2 and i==0:
+                return_grids = True
+            else:
+                return_grids = False
+
+            res = find_pix_cc(im, psf, psf_osamp, kipc=kipc, kppc=kppc, 
                               diffusion_sigma=diffusion_sigma, crop=crop, 
-                              bpmask=bpmask_arr[i], **kwargs)
+                              bpmask=bpmask_arr[i], return_grids=return_grids, **kwargs)
+            
+            # Set res1 and res2 going forward
+            if return_grids and i==0:
+                res, res1, res2 = res
+                kwargs['res1'] = res1
+                kwargs['res2'] = res2
+
         xysh_pix.append(res)
         
     if len(sh_orig)==2:
-        return xysh_pix[0]
+        return np.asarray(xysh_pix[0])
     else:
         return np.asarray(xysh_pix)
     
