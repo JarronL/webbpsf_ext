@@ -76,11 +76,12 @@ if sys.argv[-1] == 'test':
 #     history = history_file.read()
 
 install_requires = [
+    'matplotlib>=3.7.1',
     'tqdm>4',
     'pysynphot>=2.0.0',
     'poppy>=1.0.3',
     'webbpsf>=1.1.0',
-    'pysiaf>=0.18.0',
+    'pysiaf>=0.21.0',
 ]
 
 setup_requirements = ['pytest-runner', ]
