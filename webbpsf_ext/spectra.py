@@ -268,6 +268,64 @@ def BOSZ_spectrum(Teff, metallicity, log_g, res=2000, interpolate=True,
 
     return sp
 
+
+#  TABLE 2: Suggested models for specific stellar types
+#      Type    T_{eff}    log_g       Kurucz model
+#      O3V      44852     +3.92      ckp00_45000[g45]
+#      O5V      40862     +3.92      ckp00_41000[g45]
+#      O5.5V    39865     +3.92      ckp00_40000[g40]
+#      O6V      38867     +3.92      ckp00_39000[g40]
+#      O6.5V    37870     +3.92      ckp00_38000[g40]
+#      O7V      36872     +3.92      ckp00_37000[g40]
+#      O7.5V    35874     +3.92      ckp00_36000[g40]
+#      O8V      34877     +3.92      ckp00_35000[g40]
+#      O8.5     33879     +3.92      ckp00_34000[g40]
+#      O9V      32882     +3.92      ckp00_33000[g40]
+#      O9.5     31884     +3.92      ckp00_32000[g40]
+#      B0V      30000     +3.90      ckp00_30000[g40]
+#      B1V      25400     +3.90      ckp00_25000[g40]
+#      B3V      18700     +3.94      ckp00_19000[g40]
+#      B5V      15400     +4.04      ckp00_15000[g40]
+#      B8V      11900     +4.04      ckp00_12000[g40]
+#      A0V       9520     +4.14       ckp00_9500[g40]
+#      A1V       9230     +4.10       ckp00_9250[g40]
+#      A3V       8270     +4.20       ckp00_8750[g40]
+#      A5V       8200     +4.29       ckp00_8250[g40]
+#      F0V       7200     +4.34       ckp00_7250[g40]
+#      F2V       6890     +4.34       ckp00_7000[g40]
+#      F5V       6440     +4.34       ckp00_6500[g40]
+#      F8V       6200     +4.40       ckp00_6250[g40]
+#      G0V       6030     +4.39       ckp00_6000[g45]
+#      G2V       5860     +4.40       ckp00_5750[g45]
+#      G8V       5570     +4.50       ckp00_5500[g45]
+#      K0V       5250     +4.49       ckp00_5250[g45]
+#      K2V       4780      +4.5       ckp00_4750[g45]
+#      K4V       4560      +4.5       ckp00_4500[g45]
+#      K5V       4350     +4.54       ckp00_4250[g45]
+#      K7V       4060      +4.5       ckp00_4000[g45]
+#      M0V       3850     +4.59       ckp00_3750[g45]
+#      M2V       3580     +4.64       ckp00_3500[g45]
+#      M6V       3050     +5.00       ckp00_3500[g50]
+#      B0III    29000     +3.34      ckp00_29000[g35]
+#      B5III    15000     +3.49      ckp00_15000[g35]
+#      G0III     5850     +2.94       ckp00_5750[g30]
+#      G5III     5150     +2.54       ckp00_5250[g25]
+#      K0III     4750     +2.14       ckp00_4750[g20]
+#      K5III     3950     +1.74       ckp00_4000[g15]
+#      M0III     3800     +1.34       ckp00_3750[g15]
+#      BOI      26000     +2.84      ckp00_26000[g30]
+#      B5I      13600     +2.44      ckp00_14000[g25]
+#      AOI       9730     +2.14       ckp00_9750[g20]
+#      A5I       8510     +2.04       ckp00_8500[g20]
+#      F0I       7700     +1.74       ckp00_7750[g20]
+#      F5I       6900     +1.44       ckp00_7000[g15]
+#      G0I       5550     +1.34       ckp00_5500[g10]
+#      G5I       4850     +1.14       ckp00_4750[g10]
+#      K0I       4420     +0.94       ckp00_4500[g10]
+#      K5I       3850     +0.00       ckp00_3750[g00]
+#      M0I       3650     -0.10       ckp00_3750[g00]
+#      M2I       3600     -0.10       ckp00_3500[g00]
+
 def stellar_spectrum(sptype, *renorm_args, **kwargs):
     """Stellar spectrum
 
@@ -692,10 +750,18 @@ class source_spectrum(object):
         uflux = np.array(uflux)
         uflux_e = np.array(uflux_e)
 
+        # Check if uwave and uflux are astropy units
+        if isinstance(uwave, table.Column):
+            uwave = uwave.value
+        if isinstance(uflux, table.Column):
+            uflux = uflux.value
+        if isinstance(uflux, table.Column):
+            uflux_e = uflux_e.value
+
         # Photometric data points
         sp_phot = s_ext.ArraySpectrum(uwave, uflux,
-                                  waveunits=wave.unit.name,
-                                  fluxunits=flux.unit.name)
+                                      waveunits=wave.unit.name,
+                                      fluxunits=flux.unit.name)
         sp_phot.convert('Angstrom')
         sp_phot.convert('Flam')
 
