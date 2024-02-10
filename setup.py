@@ -76,6 +76,7 @@ if sys.argv[-1] == 'test':
 #     history = history_file.read()
 
 install_requires = [
+    'matplotlib>=3.7.1',
     'tqdm>4',
     'synphot>=1.2.1',
     'poppy>=1.1.0',
