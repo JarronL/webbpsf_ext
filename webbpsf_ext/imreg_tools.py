@@ -2,10 +2,12 @@ import numpy as np
 import os
 
 import matplotlib.pyplot as plt
-from tqdm.auto import tqdm
+from tqdm.auto import tqdm, trange
 
 from .image_manip import fourier_imshift, fshift, frebin
 from .image_manip import get_im_cen, pad_or_cut_to_size, bp_fix
+from .image_manip import apply_pixel_diffusion, add_ipc, add_ppc
+from .image_manip import crop_observation, crop_image
 from .coords import dist_image, get_sgd_offsets
 from .maths import round_int
 
@@ -1183,224 +1185,6 @@ def recenter_psf(psfs_over, niter=3, halfwidth=7,
     return psfs_over, xyoff_psfs_over
 
 
-###########################################################################
-#    Image Cropping
-###########################################################################
-
-def crop_observation(im_full, ap, xysub, xyloc=None, delx=0, dely=0, 
-                     shift_func=fourier_imshift, interp='cubic',
-                     return_xy=False, fill_val=np.nan, **kwargs):
-    """Crop around aperture reference location
-
-    `xysub` specifies the desired crop size.
-    if `xysub` is an array, dimension order should be [nysub,nxsub].
-    Crops at pixel boundaries (no interpolation) unless delx and dely
-    are specified for pixel shifting.
-
-    `xyloc` provides a way to manually supply the central position. 
-    Set `ap` to None will crop around `xyloc` or center of array.
-
-    delx and delx will shift array by some offset before cropping
-    to allow for sub-pixel shifting. To change integer crop positions,
-    recommend using `xyloc` instead.
-
-    Shift function can be fourier_imshfit, fshift, or cv_shift.
-    The interp keyword only works for the latter two options.
-    Consider 'lanczos' for cv_shift.
-
-    Setting `return_xy` to True will also return the indices 
-    used to perform the crop.
-
-    Parameters
-    ----------
-    im_full : ndarray
-        Input image.
-    ap : pysiaf aperture
-        Aperture to use for cropping. Will crop around the aperture
-        reference point by default. Will be overridden by `xyloc`.
-    xysub : int, tuple, or list
-        Size of subarray to extract. If a single integer is provided,
-        then a square subarray is extracted. If a tuple or list is
-        provided, then it should be of the form (ny, nx).
-    xyloc : tuple or list
-        (x,y) pixel location around which to crop the image. If None,
-        then the image aperture refernece point is used.
-    
-    Keyword Args
-    ------------
-    delx : int or float
-        Pixel offset in x-direction. This shifts the image by
-        some number of pixels in the x-direction. Positive values shift
-        the image to the right.
-    dely : int or float
-        Pixel offset in y-direction. This shifts the image by
-        some number of pixels in the y-direction. Positive values shift
-        the image up.
-    shift_func : function
-        Function to use for shifting. Default is `fourier_imshift`.
-        If delx and dely are both integers, then `fshift` is used.
-    interp : str
-        Interpolation method to use for shifting. Default is 'cubic'.
-        Options are 'nearest', 'linear', 'cubic', and 'quadratic'
-        for `fshift`.
-    return_xy : bool
-        If True, then return the x and y indices used to crop the
-        image prior to any shifting from `delx` and `dely`; 
-        (x1, x2, y1, y2). Default is False.
-    fill_val : float
-        Value to use for filling in the empty pixels after shifting.
-        Default = np.nan.
-    """
-        
-    # xcorn_sci, ycorn_sci = ap.corners('sci')
-    # xcmin, ycmin = (int(xcorn_sci.min()+0.5), int(ycorn_sci.min()+0.5))
-    # xsci_arr = np.arange(1, im_full.shape[1]+1)
-    # ysci_arr = np.arange(1, im_full.shape[0]+1)
-
-    
-    # Cut out postage stamp from full frame image
-    if isinstance(xysub, (list, tuple, np.ndarray)):
-        ny_sub, nx_sub = xysub
-    else:
-        ny_sub = nx_sub = xysub
-    
-    # Get centroid position
-    if ap is None:
-        xc, yc = get_im_cen(im_full) if xyloc is None else xyloc
-    else: 
-        # Subtract 1 from sci coords to get indices
-        xc, yc = (ap.XSciRef-1, ap.YSciRef-1) if xyloc is None else xyloc
-
-    x1 = round_int(xc - nx_sub/2 + 0.5)
-    x2 = x1 + nx_sub
-    y1 = round_int(yc - ny_sub/2 + 0.5)
-    y2 = y1 + ny_sub
-
-    # Save initial values in case they get modified below
-    x1_init, x2_init = (x1, x2)
-    y1_init, y2_init = (y1, y2)
-    xy_ind = np.array([x1_init, x2_init, y1_init, y2_init])
-
-    sh_orig = im_full.shape
-    if (x2>=sh_orig[1]) or (y2>=sh_orig[0]) or (x1<0) or (y1<0):
-        ny, nx = sh_orig
-
-        # Get expansion size along x-axis
-        dxp = x2 - nx + 1
-        dxp = 0 if dxp<0 else dxp
-        dxn = -1*x1 if x1<0 else 0
-        dx = dxp + dxn
-
-        # Get expansion size along y-axis
-        dyp = y2 - ny + 1
-        dyp = 0 if dyp<0 else dyp
-        dyn = -1*y1 if y1<0 else 0
-        dy = dyp + dyn
-
-        # Expand image
-        # TODO: This can probelmatic for some existing functions because it
-        # places NaNs in the output image.
-        shape_new = (2*dy+ny, 2*dx+nx)
-        im_full = pad_or_cut_to_size(im_full, shape_new, fill_val=fill_val)
-
-        xc_new, yc_new = (xc+dx, yc+dy)
-        x1 = round_int(xc_new - nx_sub/2 + 0.5)
-        x2 = x1 + nx_sub
-        y1 = round_int(yc_new - ny_sub/2 + 0.5)
-        y2 = y1 + ny_sub
-    # else:
-    #     xc_new, yc_new = (xc, yc)
-    #     shape_new = sh_orig
-
-    # if (x1<0) or (y1<0):
-    #     dx = -1*x1 if x1<0 else 0
-    #     dy = -1*y1 if y1<0 else 0
-
-    #     # Expand image
-    #     shape_new = (2*dy+shape_new[0], 2*dx+shape_new[1])
-    #     im_full = pad_or_cut_to_size(im_full, shape_new)
-
-    #     xc_new, yc_new = (xc_new+dx, yc_new+dy)
-    #     x1 = round_int(xc_new - nx_sub/2 + 0.5)
-    #     x2 = x1 + nx_sub
-    #     y1 = round_int(yc_new - ny_sub/2 + 0.5)
-    #     y2 = y1 + ny_sub
-
-    # Perform pixel shifting
-    if delx!=0 or dely!=0:
-        kwargs['interp'] = interp
-        # Use fshift function if only performing integer shifts
-        if float(delx).is_integer() and float(dely).is_integer():
-            shift_func = fshift
-
-        # If NaNs are present, print warning and fill with zeros
-        ind_nan = np.isnan(im_full)
-        if np.any(ind_nan):
-            # _log.warning('NaNs present in image. Filling with zeros.')
-            im_full = im_full.copy()
-            im_full[ind_nan] = 0
-
-        kwargs['pad'] = True
-        im_full = shift_func(im_full, delx, dely, **kwargs)
-        # shift NaNs and add back in
-        if np.any(ind_nan):
-            ind_nan = fshift(ind_nan, delx, dely, pad=True) > 0  # Maybe >0.5?
-            im_full[ind_nan] = np.nan
-    
-    im = im_full[y1:y2, x1:x2]
-    
-    if return_xy:
-        return im, xy_ind
-    else:
-        return im
-
-
-def crop_image(im, xysub, xyloc=None, **kwargs):
-    """Crop input image around center using integer offsets only
-
-    If size is exceeded, then the image is expanded and filled with NaNs.
-
-    Parameters
-    ----------
-    im : ndarray
-        Input image.
-    xysub : int, tuple, or list
-        Size of subarray to extract. If a single integer is provided,
-        then a square subarray is extracted. If a tuple or list is
-        provided, then it should be of the form (ny, nx).
-    xyloc : tuple or list
-        (x,y) pixel location around which to crop the image. If None,
-        then the image center is used.
-    
-    Keyword Args
-    ------------
-    delx : int or float
-        Integer pixel offset in x-direction. This shifts the image by
-        some number of pixels in the x-direction. Positive values shift
-        the image to the right.
-    dely : int or float
-        Integer pixel offset in y-direction. This shifts the image by
-        some number of pixels in the y-direction. Positive values shift
-        the image up.
-    shift_func : function
-        Function to use for shifting. Default is `fourier_imshift`.
-        If delx and dely are both integers, then `fshift` is used.
-    interp : str
-        Interpolation method to use for shifting. Default is 'cubic'.
-        Options are 'nearest', 'linear', 'cubic', and 'quadratic'
-        for `fshift`.
-    return_xy : bool
-        If True, then return the x and y indices used to crop the
-        image prior to any shifting from `delx` and `dely`; 
-        (x1, x2, y1, y2). Default is False.
-    fill_val : float
-        Value to use for filling in the empty pixels after shifting.
-        Default = np.nan.
-    """
-    
-    return crop_observation(im, None, xysub, xyloc=xyloc, **kwargs)
-
-
 def correl_images(im1, im2, mask=None):
     """ Image correlation coefficient
     
@@ -1477,8 +1261,6 @@ def correl_images(im1, im2, mask=None):
     else:
         return correl_fin.squeeze()
 
-#### Best fit offset
-
 def sample_crosscorr(corr, xcoarse, ycoarse, xfine, yfine):
     """Perform a cubic interpolation over the coarse grid"""
     
@@ -1503,30 +1285,11 @@ def find_max_crosscorr(corr, xsh_arr, ysh_arr, sub_sample):
     ysh_fine_vals = np.arange(ysh_arr[0],ysh_arr[-1],sub_sample)
     corr_all_fine = sample_crosscorr(corr,  xsh_arr, ysh_arr, xsh_fine_vals, ysh_fine_vals)
 
-    # Fine position
+    # Find position
     iymax, ixmax = np.argwhere(corr_all_fine==np.nanmax(corr_all_fine))[0]
     xsh_fine, ysh_fine = xsh_fine_vals[ixmax], ysh_fine_vals[iymax]
     
     return xsh_fine, ysh_fine
-
-
-def apply_pixel_diffusion(im, pixel_sigma):
-    """Apply charge diffusion kernel to image
-    
-    Approximates the effect of charge diffusion as a Gaussian.
-
-    Parameters
-    ----------
-    im : ndarray
-        Input image.
-    pixel_sigma : float
-        Sigma of Gaussian kernel in units of image pixels.
-    """
-    from scipy.ndimage import gaussian_filter
-    if pixel_sigma > 0:
-        return gaussian_filter(im, pixel_sigma)
-    else:
-        return im
 
 def gen_psf_offsets(psf, crop=65, xlim_pix=(-3,3), ylim_pix=(-3,3), dxy=0.05,
     psf_osamp=1, shift_func=fourier_imshift, ipc_vals=None, kipc=None,
@@ -1548,8 +1311,6 @@ def gen_psf_offsets(psf, crop=65, xlim_pix=(-3,3), ylim_pix=(-3,3), dxy=0.05,
         single output amplifier.
     """
     
-    from .image_manip import add_ipc, add_ppc
-
     psf_is_even = np.mod(psf.shape[0] / psf_osamp, 2) == 0
     psf_is_odd = not psf_is_even
     crop_is_even = np.mod(crop, 2) == 0
@@ -1881,12 +1642,6 @@ def find_pix_offsets(imsub_arr, psfs, psf_osamp=1, kipc=None, kppc=None,
     xylim_pix : tuple or list
         Initial coarse step range in detector pixels.
     """
-
-    # from webbpsf_ext.image_manip import frebin
-    # from webbpsf_ext.imreg_tools import find_offsets_phase
-    # from webbpsf_ext.imreg_tools import gen_psf_offsets, find_offsets2
-    from .image_manip import add_ipc, add_ppc
-    from tqdm import trange
 
     sh_orig = imsub_arr.shape
     sh_orig_psfs = psfs.shape
