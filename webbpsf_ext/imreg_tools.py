@@ -980,6 +980,7 @@ def get_com(im, halfwidth=7, return_sci=False, **kwargs):
 def get_peak(im, nsig_threshold=50, box_size=15, return_sci=False, **kwargs):
     
     from photutils.detection import find_peaks
+    from . import robust
 
     #  Find peak position
     std = robust.medabsdev(im)
