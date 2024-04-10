@@ -93,7 +93,7 @@ def download_BOSZ_spectrum(Teff, metallicity, log_g, res, carbon=0, alpha=0,
 
 
 def BOSZ_spectrum(Teff, metallicity, log_g, res=2000, interpolate=True, 
-    carbon=0, alpha=0, **kwargs):
+    carbon=0, alpha=0, fluxout='photlam', **kwargs):
     """BOSZ stellar atmospheres (Bohlin et al 2017).
 
     Read in a spectrum from the BOSZ stellar atmosphere models database.
@@ -264,8 +264,9 @@ def BOSZ_spectrum(Teff, metallicity, log_g, res=2000, interpolate=True,
 
     name = 'BOSZ(Teff={},z={},logG={})'.format(Teff, metallicity, log_g)
     sp = s_ext.ArraySpectrum(wave=wfin[:-1], flux=ffin[:-1], 
-                         waveunits='angstrom', fluxunits='flam', name=name)
+                             waveunits='angstrom', fluxunits='flam', name=name)
 
+    sp.convert(fluxout)
     return sp
 
 
@@ -762,14 +763,14 @@ class source_spectrum(object):
         sp_phot = s_ext.ArraySpectrum(uwave, uflux,
                                       waveunits=wave.unit.name,
                                       fluxunits=flux.unit.name)
-        sp_phot.convert('Angstrom')
-        sp_phot.convert('Flam')
+        sp_phot.convert(self.sp_lowres.waveunits)
+        sp_phot.convert(self.sp_lowres.fluxunits)
 
         sp_phot_e = s_ext.ArraySpectrum(uwave, uflux_e,
                                     waveunits=wave.unit.name,
                                     fluxunits=eflux.unit.name)
-        sp_phot_e.convert('Angstrom')
-        sp_phot_e.convert('Flam')
+        sp_phot_e.convert(self.sp_lowres.waveunits)
+        sp_phot_e.convert(self.sp_lowres.fluxunits)
 
         self.sp_phot = sp_phot
         self.sp_phot_e = sp_phot_e
@@ -831,7 +832,7 @@ class source_spectrum(object):
 
         bb_flux = x[0] * self.bb_jy(wave/1e4, x[1]) * (wave/1e4)**x[2] / 1e17
         sp_bb = s_ext.ArraySpectrum(wave, bb_flux, fluxunits='Jy')
-        sp_bb.convert('Flam')
+        sp_bb.convert('photlam')
 
         return sp + sp_bb
 
@@ -1311,7 +1312,7 @@ class planets_sb12(object):
         _log.warning("export_pysynphot() is deprecated. Use export_synphot() instead.")
         return self.export_synphot(**kwargs)
 
-    def export_synphot(self, waveout='angstrom', fluxout='flam'):
+    def export_synphot(self, waveout='angstrom', fluxout=None):
         """Output to synphot spectrum object
 
         Parameters
@@ -1326,7 +1327,8 @@ class planets_sb12(object):
         sp = s_ext.ArraySpectrum(w, f, name=name, waveunits=self.waveunits, fluxunits=self.fluxunits)
 
         sp.convert(waveout)
-        sp.convert(fluxout)
+        if fluxout is not None:
+            sp.convert(fluxout)
 
         if self.accr and (self.mmdot>0):
             sp_mdot = sp_accr(self.mmdot, rin=self.rin,
@@ -1342,7 +1344,7 @@ class planets_sb12(object):
             return sp
 
 def sp_accr(mmdot, rin=2, dist=10, truncated=False,
-            waveout='angstrom', fluxout='flam', base_dir=None):
+            waveout='angstrom', fluxout='photlam', base_dir=None):
 
     """Exoplanet accretion flux values (Zhu et al., 2015).
 
@@ -1425,7 +1427,7 @@ def sp_accr(mmdot, rin=2, dist=10, truncated=False,
     return sp
 
 
-def jupiter_spec(dist=10, waveout='angstrom', fluxout='flam', base_dir=None):
+def jupiter_spec(dist=10, waveout='angstrom', fluxout='photlam', base_dir=None):
     """Jupiter as an Exoplanet
     
     Read in theoretical Jupiter spectrum from Irwin et al. 2014 and output
@@ -2262,7 +2264,7 @@ def bin_spectrum(sp, wave, waveunits='um'):
     # Convert wavelength of input spectrum to desired output units
     sp.convert(waveunits)
     # We also want input to be in terms of counts to conserve flux
-    sp.convert('flam')
+    sp.convert('photlam')
 
     edges = calculate_bin_edges(wave * u.um)
     ind = (sp.wave >= edges[0]) & (sp.wave <= edges[-1])
@@ -2273,7 +2275,7 @@ def bin_spectrum(sp, wave, waveunits='um'):
     finterp = interp1d(wave[~ind_nan], binflux[~ind_nan], kind='cubic')
     binflux[ind_nan] = finterp(wave[ind_nan])
 
-    sp2 = s_ext.ArraySpectrum(wave, binflux, waveunits=waveunits, fluxunits='flam')
+    sp2 = s_ext.ArraySpectrum(wave, binflux, waveunits=waveunits, fluxunits='photlam')
     sp2.convert(waveunits0)
     sp2.convert(fluxunits0)
 
