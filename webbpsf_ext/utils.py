@@ -7,16 +7,26 @@ import matplotlib.pyplot as plt
 import os, sys
 import six
 
-import webbpsf, poppy
+import webbpsf, poppy, pysiaf
 
-# Define these here rather than calling multiple times
-# since it takes some time to generate these.
-import pysiaf
-siaf_nrc = pysiaf.Siaf('NIRCam')
-siaf_nis = pysiaf.Siaf('NIRISS')
-siaf_mir = pysiaf.Siaf('MIRI')
-siaf_nrs = pysiaf.Siaf('NIRSpec')
-siaf_fgs = pysiaf.Siaf('FGS')
+try:
+    from webbpsf.webbpsf_core import get_siaf_with_caching
+except ImportError:
+    # In case user doesn't have the latest version of webbpsf installed
+    import functools
+    @functools.lru_cache
+    def get_siaf_with_caching(instrname):
+        """ Parsing and loading the SIAF information is particularly time consuming,
+        (can be >0.1 s per call, so multiple invokations can be a large overhead)
+        Therefore avoid unnecessarily reloading it by caching results.
+        This is a small speed optimization. """
+        return pysiaf.Siaf(instrname)
+
+siaf_nrc = get_siaf_with_caching('NIRCam')
+siaf_nis = get_siaf_with_caching('NIRISS')
+siaf_mir = get_siaf_with_caching('MIRI')
+siaf_nrs = get_siaf_with_caching('NIRSpec')
+siaf_fgs = get_siaf_with_caching('FGS')
 
 from . import conf
 from .logging_utils import setup_logging
