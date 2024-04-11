@@ -153,7 +153,7 @@ def apname_full_frame_coron(apname):
         apname_full = apname.replace('_', '_FULL_', 1)
         return apname_full
 
-def get_files(indir, pid, obsid=None, sca=None, filt=None, file_type='uncal.fits', 
+def get_files(indir, pid=None, obsid=None, sca=None, filt=None, file_type='uncal.fits', 
               exp_type=None, vst_grp_act=None, apername=None, apername_pps=None):
     """Get files of interest
     
@@ -161,6 +161,8 @@ def get_files(indir, pid, obsid=None, sca=None, filt=None, file_type='uncal.fits
     ==========
     indir : str
         Location of FITS files.
+    pid: int
+        Program ID number.
     obsid : int
         Observation number.
     sca : str
@@ -183,18 +185,26 @@ def get_files(indir, pid, obsid=None, sca=None, filt=None, file_type='uncal.fits
     sca = '' if sca is None else get_detname(sca).lower()
     
     # file name start and end
-    if obsid is None:
-        file_start = f'jw{pid:05d}'
-    else:
-        file_start = f'jw{pid:05d}{obsid:03d}'
-    sca = sca.lower()
+    if pid is None file_start = 'jw' else f'jw{pid:05d}'
 
+    # Clear any underscores from file type input
     if file_type[0]=='_':
         file_type = file_type[1:]
-    file_end = f'{sca}_{file_type}'
+    # Add SCA (if specified) and prepend underscore
+    file_end = f'{sca.lower()}_{file_type}'
 
+    # Get all files
     allfiles = np.sort([f for f in os.listdir(indir) if ((file_end in f) and f.startswith(file_start))])
     
+    # Filter by obsid
+    if obsid is not None:
+        files2 = []
+        for f in allfiles:
+            hdr = fits.getheader(os.path.join(indir,f))
+            if int(hdr.get('OBSERVTN', -1))==obsid:
+                files2.append(f)
+        allfiles = np.array(files2)
+
     # Check filter info
     if filt is not None:
         files2 = []
