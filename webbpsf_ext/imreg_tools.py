@@ -189,7 +189,7 @@ def get_files(indir, pid=None, obsid=None, sca=None, filt=None, file_type='uncal
     sca = '' if sca is None else get_detname(sca).lower()
     
     # file name start and end
-    if pid is None file_start = 'jw' else f'jw{pid:05d}'
+    file_start = 'jw' if pid is None else f'jw{pid:05d}'
 
     # Clear any underscores from file type input
     if file_type[0]=='_':
