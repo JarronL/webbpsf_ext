@@ -1953,12 +1953,13 @@ def find_relevant_guiding_file(sci_filename, outdir=None, verbose=False, uncals=
 
     delta_times = np.array(guide_timestamps-obs_end_time, float)
     # want to find the minimum delta which is at least positive
-    # print(delta_times)
-    delta_times[delta_times<0] = np.nan
-    # print(delta_times)
-
-    wmatch = np.argmin(np.abs(delta_times))
-    wmatch = np.where(delta_times ==np.nanmin(delta_times))[0][0]
+    # try:
+    delta_times_nan = delta_times.copy()
+    delta_times_nan[delta_times<0] = np.nan
+    wmatch = np.where(delta_times_nan == np.nanmin(delta_times_nan))[0][0]
+    # except IndexError:
+    #     delta_times = np.abs(delta_times)
+    #     wmatch = np.where(delta_times == np.nanmin(delta_times))[0][0]
     delta_min = (guide_timestamps-obs_end_time)[wmatch]
 
     if verbose:
