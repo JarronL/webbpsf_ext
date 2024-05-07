@@ -157,7 +157,7 @@ def apname_full_frame_coron(apname):
         apname_full = apname.replace('_', '_FULL_', 1)
         return apname_full
 
-def get_files(indir, pid, obsid=None, sca=None, filt=None, file_type='uncal.fits', 
+def get_files(indir, pid=None, obsid=None, sca=None, filt=None, file_type='uncal.fits', 
               exp_type=None, vst_grp_act=None, apername=None, apername_pps=None):
     """Get files of interest
     
@@ -165,6 +165,8 @@ def get_files(indir, pid, obsid=None, sca=None, filt=None, file_type='uncal.fits
     ==========
     indir : str
         Location of FITS files.
+    pid: int
+        Program ID number.
     obsid : int
         Observation number.
     sca : str
@@ -187,18 +189,26 @@ def get_files(indir, pid, obsid=None, sca=None, filt=None, file_type='uncal.fits
     sca = '' if sca is None else get_detname(sca).lower()
     
     # file name start and end
-    if obsid is None:
-        file_start = f'jw{pid:05d}'
-    else:
-        file_start = f'jw{pid:05d}{obsid:03d}'
-    sca = sca.lower()
+    file_start = 'jw' if pid is None else f'jw{pid:05d}'
 
+    # Clear any underscores from file type input
     if file_type[0]=='_':
         file_type = file_type[1:]
-    file_end = f'{sca}_{file_type}'
+    # Add SCA (if specified) and prepend underscore
+    file_end = f'{sca.lower()}_{file_type}'
 
+    # Get all files
     allfiles = np.sort([f for f in os.listdir(indir) if ((file_end in f) and f.startswith(file_start))])
     
+    # Filter by obsid
+    if obsid is not None:
+        files2 = []
+        for f in allfiles:
+            hdr = fits.getheader(os.path.join(indir,f))
+            if int(hdr.get('OBSERVTN', -1))==obsid:
+                files2.append(f)
+        allfiles = np.array(files2)
+
     # Check filter info
     if filt is not None:
         files2 = []
@@ -694,7 +704,8 @@ def read_ta_files(indir, pid, obsid, sca, file_type='rate.fits',
 
 def read_sgd_files(indir, pid, obsid, filter, sca, bpfix=False, 
                    file_type='rate.fits', exp_type=None, vst_grp_act=None,
-                   apername=None, apername_pps=None, nodata=False):
+                   apername=None, apername_pps=None, nodata=False,
+                   combine_same_dithers=False):
     """Store SGD or science data into a dictionary
 
     By default, excludes any TAMASK or TACONFIRM data, but can be overridden
@@ -728,6 +739,8 @@ def read_sgd_files(indir, pid, obsid, filter, sca, bpfix=False,
         Mainly for display purposes.
     nodata : bool
         If True, only return header info and not data.
+    combine_same_dithers : bool
+        Combine same dither positions? Looks at the 'PATT_NUM' keyword.
     """
 
     from jwst import datamodels
@@ -756,7 +769,12 @@ def read_sgd_files(indir, pid, obsid, filter, sca, bpfix=False,
         hdul = fits.open(fpath)
         if not nodata:
             d['data'] = hdul['SCI'].data.astype('float')
-        d['dq']   = hdul['DQ'].data
+            d['dq']   = hdul['DQ'].data
+            try:
+                d['err'] = hdul['ERR'].data
+            except:
+                d['err'] = None
+                
         d['hdr0'] = hdul[0].header
         d['hdr1'] = hdul[1].header
         hdul.close()
@@ -785,6 +803,38 @@ def read_sgd_files(indir, pid, obsid, filter, sca, bpfix=False,
             im = crop_observation(d['data'], d['ap'], 100)
             # Perform pixel fixing in place
             _ = bp_fix(im, sigclip=10, niter=1, in_place=True)
+
+    # Loop through dictionaries and combine observations at same dither position
+    patt_num = sgd_dict[0]['hdr0'].get('PATT_NUM', None)
+    if combine_same_dithers and (patt_num is not None):
+        patt_num_arr = np.array([d['hdr0'].get('PATT_NUM') for i, d in sgd_dict.items()])
+        patt_num_uniq = np.unique(patt_num_arr)
+
+        if len(patt_num_uniq)!=len(patt_num_arr):
+            _log.warning('Combining observation data of same dither positions. Only header info for the first instance will be retained.')
+
+        # Combine data at same dither positions
+        for patt_num in patt_num_uniq:
+            # Find all instances of this pattern number
+            ind_patt = np.where(patt_num_arr==patt_num)[0]
+            if len(ind_patt)==1:
+                continue
+
+            # Combine data
+            d = sgd_dict[ind_patt[0]]
+            for i in ind_patt[1:]:
+                if d.get('files', None) is None:
+                    d['files'] = [d['file']]
+                d['files'] = d['files'] + [sgd_dict[i]['file']]
+                if not nodata:
+                    d['data'] = np.concatenate((d['data'], sgd_dict[i]['data']), axis=0)
+                    d['dq']   = np.concatenate((d['dq'], sgd_dict[i]['dq']), axis=0)
+                    if d['err'] is not None and sgd_dict[i]['err'] is not None:
+                        d['err'] = np.concatenate((d['err'], sgd_dict[i]['err']), axis=0)
+
+            # Remove second entries
+            for i in ind_patt[1:]:
+                del sgd_dict[i]
 
     return sgd_dict
 
@@ -1050,6 +1100,28 @@ def get_loc_all(files, indir, find_func=get_com,
 
 def load_cropped_files(save_dir, files, xysub=65, bgsub=False, 
                        fix_bad_pixels=True, find_func=get_com, **kwargs):
+    """Load a cropper version of the files
+    
+    Opens the files, crops them, and returns the cropped data, DQ arrays,
+    indices of the cropped images, and bad pixel masks. The indices are an
+    array of (x1, x2, y1, y2) in shape of (nfiles,4).
+
+    Parameters
+    ==========
+    save_dir : str
+        Directory where the files are saved
+    files : list
+        List of file names
+    xysub : int
+        Size of the subarray to use for cropping
+    bgsub : bool
+        If True, then subtract the background from the cropped image.
+        The background region is defined as r>0.7*xysub/2.
+    fix_bad_pixels : bool
+        If True, then fix bad pixels in the cropped image.
+    find_func : function
+        Function to use to find the location of the star.
+    """
 
     from jwst.datamodels import dqflags
 
@@ -1098,9 +1170,15 @@ def load_cropped_files(save_dir, files, xysub=65, bgsub=False,
         
         hdul.close()
 
-    imsub_arr = np.asarray(imsub_arr)
-    dqsub_arr = np.asarray(dqsub_arr)
-    xyind_arr = np.asarray(xyind_arr)
+    try:
+        imsub_arr = np.asarray(imsub_arr)
+        dqsub_arr = np.asarray(dqsub_arr)
+        xyind_arr = np.asarray(xyind_arr)
+    except:
+        _log.warning('Unequal number of integrations. Concatenating arrays into [nim_tot,ny,nx].')
+        imsub_arr = np.concatenate(imsub_arr, axis=0)
+        dqsub_arr = np.concatenate(dqsub_arr, axis=0)
+        xyind_arr = np.concatenate(xyind_arr, axis=0)
     bp_masks1 = (dqsub_arr & dqflags.pixel['OTHER_BAD_PIXEL']) > 0
     bp_masks = bp_masks1 | np.isnan(imsub_arr)
 
@@ -1261,7 +1339,7 @@ def correl_images(im1, im2, mask=None):
     else:
         return correl_fin.squeeze()
 
-def sample_crosscorr(corr, xcoarse, ycoarse, xfine, yfine):
+def sample_crosscorr(corr, xcoarse, ycoarse, xfine, yfine, method='cubic'):
     """Perform a cubic interpolation over the coarse grid"""
     
     from scipy.interpolate import griddata
@@ -1272,7 +1350,7 @@ def sample_crosscorr(corr, xcoarse, ycoarse, xfine, yfine):
     xv, yv = np.meshgrid(xfine, yfine)
     
     # Perform cubic interpolation
-    corr_fine = griddata(xycoarse, corr.flatten(), (xv, yv), method='cubic')
+    corr_fine = griddata(xycoarse, corr.flatten(), (xv, yv), method=method)
     
     return corr_fine
 
@@ -1288,7 +1366,7 @@ def find_max_crosscorr(corr, xsh_arr, ysh_arr, sub_sample):
     # Find position
     iymax, ixmax = np.argwhere(corr_all_fine==np.nanmax(corr_all_fine))[0]
     xsh_fine, ysh_fine = xsh_fine_vals[ixmax], ysh_fine_vals[iymax]
-    
+
     return xsh_fine, ysh_fine
 
 def gen_psf_offsets(psf, crop=65, xlim_pix=(-3,3), ylim_pix=(-3,3), dxy=0.05,
@@ -1394,7 +1472,7 @@ def gen_psf_offsets(psf, crop=65, xlim_pix=(-3,3), ylim_pix=(-3,3), dxy=0.05,
 
 
 def find_offsets(input, psf, crop=65, xlim_pix=(-3,3), ylim_pix=(-3,3), 
-    shift_func=fshift, rin=0, rout=None, dxy_coarse=0.05, dxy_fine=0.01):
+    shift_func=fshift, rin=0, rout=None, dxy_coarse=0.05, dxy_fine=0.01, **kwargs):
     """Find offsets necessary to align observations with input psf"""
         
     # Check if input is a dictionary 
@@ -1641,6 +1719,10 @@ def find_pix_offsets(imsub_arr, psfs, psf_osamp=1, kipc=None, kppc=None,
         Exclude pixel exterior to this radius.
     xylim_pix : tuple or list
         Initial coarse step range in detector pixels.
+    corr_avg : bool
+        If True, then find best position using weighted average of the cross-correlation
+        map along the x and y axes. Otherwise, return the position of the maximum value 
+        in the map.
     """
 
     sh_orig = imsub_arr.shape
@@ -1679,12 +1761,12 @@ def find_pix_offsets(imsub_arr, psfs, psf_osamp=1, kipc=None, kppc=None,
         if xylim_pix is not None:
             xlim_pix = ylim_pix = xylim_pix
         else:
-            xlim_pix = ylim_pix = (-10,10)
+            xlim_pix = ylim_pix = (-5,5)
         res1 = kwargs.get('res1', None)
         if res1 is None:
-            res1 = gen_psf_offsets(psf, crop=crop, xlim_pix=xlim_pix, ylim_pix=xlim_pix, dxy=1,
-                                  psf_osamp=psf_osamp, kipc=None, kppc=None, diffusion_sigma=None,
-                                  prog_leave=False, shift_func=fshift, **kwargs)
+            res1 = gen_psf_offsets(psf, crop=crop, xlim_pix=xlim_pix, ylim_pix=xlim_pix, dxy=0.5,
+                                   psf_osamp=psf_osamp, kipc=None, kppc=None, diffusion_sigma=None,
+                                   prog_leave=False, shift_func=fshift, **kwargs)
         xoff_pix, yoff_pix, psf_sh_all = res1
 
         # psf_sh_all are cropped to `crop`` value, whereas im is still input size
@@ -1692,18 +1774,18 @@ def find_pix_offsets(imsub_arr, psfs, psf_osamp=1, kipc=None, kppc=None,
                                                dxy_fine=0.5, bpmasks=bpmask, prog_leave=False, **kwargs)
 
         # Create finer grid off offset PSFs
-        xlim_pix = (xsh_coarse-1.5, xsh_coarse+1.5)
-        ylim_pix = (ysh_coarse-1.5, ysh_coarse+1.5)
+        xlim_pix = (xsh_coarse-0.25, xsh_coarse+0.25)
+        ylim_pix = (ysh_coarse-0.25, ysh_coarse+0.25)
         res2 = kwargs.get('res2', None)
         if res2 is None:
-            res2 = gen_psf_offsets(psf, crop=crop, xlim_pix=xlim_pix, ylim_pix=ylim_pix, dxy=0.05,
-                                  psf_osamp=psf_osamp, kipc=kipc, kppc=kppc, diffusion_sigma=diffusion_sigma,
-                                  prog_leave=False, **kwargs)
+            res2 = gen_psf_offsets(psf, crop=crop, xlim_pix=xlim_pix, ylim_pix=ylim_pix, dxy=0.01,
+                                   psf_osamp=psf_osamp, kipc=kipc, kppc=kppc, diffusion_sigma=diffusion_sigma,
+                                   prog_leave=False, **kwargs)
         xoff_pix, yoff_pix, psf_sh_all = res2
 
         # Perform cross correlations and interpolate at 0.01 pixel
         xsh_fine, ysh_fine = find_offsets2(im, xoff_pix, yoff_pix, psf_sh_all, crop=crop,
-                                           dxy_fine=0.01, bpmasks=bpmask, prog_leave=False, **kwargs)
+                                           dxy_fine=0.005, bpmasks=bpmask, prog_leave=False, **kwargs)
         res = (xsh_fine, ysh_fine)
 
         if return_grids:

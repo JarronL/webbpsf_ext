@@ -397,7 +397,7 @@ class Spectrum(synphot.SourceSpectrum):
     waveunits : str, optional
         Units of the wavelength, default is 'angstrom'.
     fluxunits : str, optional
-        Units of the flux, default is 'flam'.
+        Units of the flux, default is 'photlam'.
     name : str, optional
         Name of the spectrum, default is 'UnnamedSpectrum'.
     **kwargs : dict

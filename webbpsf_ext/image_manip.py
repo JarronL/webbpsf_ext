@@ -19,7 +19,7 @@ from astropy.io import fits
 
 from poppy.utils import krebin
 
-from .utils import siaf_nrc, siaf_nis, siaf_mir, siaf_fgs, siaf_nrs
+from .utils import siaf_nrc, siaf_mir, siaf_nis, siaf_fgs, siaf_nrs
 
 # Program bar
 from tqdm.auto import trange, tqdm
@@ -438,7 +438,7 @@ def fractional_image_shift(imarr, xshift, yshift, method='opencv',
         kernel = Gaussian2DKernel(x_stddev=2)
         if len(imarr.shape)==3:
             imarr_conv = imarr.copy()
-            im_mean = np.nanmean(imarr)
+            im_mean = np.nanmean(imarr, axis=0)
             # First replace NaNs with mean of all images
             for i in range(imarr_conv.shape[0]):
                 ind_nan = np.isnan(imarr[i])
@@ -479,10 +479,11 @@ def fractional_image_shift(imarr, xshift, yshift, method='opencv',
     elif window_func is not None:
         from skimage.filters import window as winfunc
         if len(imarr.shape)==3:
-            for im in imarr:
+            for i, im in enumerate(imarr):
                 im_otf = np.fft.fftshift(np.fft.fft2(im))
                 im_otf *= winfunc(window_func, im_otf.shape)
                 im = np.fft.ifft2(np.fft.ifftshift(im_otf)).real
+                imarr[i] = im
         else:
             im_otf = np.fft.fftshift(np.fft.fft2(imarr))
             im_otf *= winfunc(window_func, im_otf.shape)
@@ -896,7 +897,13 @@ def crop_image(imarr, xysub, xyloc=None, **kwargs):
     if len(sh) == 2:
         return crop_observation(imarr, None, xysub, xyloc=xyloc, **kwargs)
     elif len(sh) == 3:
-        return np.asarray([crop_observation(im, None, xysub, xyloc=xyloc, **kwargs) for im in imarr])
+        return_xy = kwargs.pop('return_xy', False)
+        res = np.asarray([crop_observation(im, None, xysub, xyloc=xyloc, **kwargs) for im in imarr])
+        if return_xy:
+            _, xy = crop_observation(imarr[0], None, xysub, xyloc=xyloc, return_xy=True, **kwargs)
+            return (res, xy)
+        else:
+            return res 
     else:
         raise ValueError(f'Found {len(sh)} dimensions {sh}. Only 2 or 3 dimensions allowed.')
 
@@ -1076,10 +1083,10 @@ def frebin(image, dimensions=None, scale=None, total=True):
         If total is True, then prints a warning, otherwise 
         changes back to input dtype.
         """
-        # Because we're preserving total, maybe be unable to preserver input dtype
+        # Because we're preserving total, may be unable to preserver input dtype
         if result.dtype != input_dtype:
             if total:
-                _log.warning('dtype was updated from {} to {}'.format(result.dtype, input_dtype))
+                _log.warning(f'dtype was updated from {input_dtype} to {result.dtype}')
             else:
                 result = result.astype(input_dtype)
         return result
@@ -1189,6 +1196,10 @@ def frebin(image, dimensions=None, scale=None, total=True):
         temp = np.zeros((nlout, ns))
         result = np.zeros((nsout, nlout))
 
+        if (result.dtype != input_dtype) and ('float' in input_dtype.name) and ('float' in result.dtype.name):
+            result = result.astype(input_dtype)
+            temp = temp.astype(input_dtype)
+
         #first lines
         for i in range(nlout):
             rstart = i * lbox
@@ -1209,7 +1220,7 @@ def frebin(image, dimensions=None, scale=None, total=True):
                 temp[i, :] = np.sum(image[istart:istop + 1, :], axis=0) -\
                              frac1 * image[istart, :] - frac2 * image[istop, :]
 
-        temp = np.transpose(temp)
+        temp = temp.T
 
         #then samples
         for i in range(nsout):
@@ -1228,12 +1239,13 @@ def frebin(image, dimensions=None, scale=None, total=True):
             if istart == istop:
                 result[i, :] = (1. - frac1 - frac2) * temp[istart, :]
             else:
-                result[i, :] = np.sum(temp[istart:istop + 1, :], axis=0) -\
-                               frac1 * temp[istart, :] - frac2 * temp[istop, :]
+                result[i, :] = np.sum(temp[istart:istop + 1, :], axis=0) - \
+                                      frac1 * temp[istart, :] - frac2 * temp[istop, :]
 
-        result = np.transpose(result)
+        result = result.T
+
         if not total:
-            result = result / (sbox * lbox)
+            result = result / (float(sbox) * lbox)
         return dtype_check(result, input_dtype)
 
 
