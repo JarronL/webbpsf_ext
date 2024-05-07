@@ -26,14 +26,18 @@ def bp_igood(bp, min_trans=0.001, fext=0.05):
     bp : synphot bandpass object
         Bandpass to use
     min_trans : float
-        Minimum transmission value outside of band to keep
+        Minimum transmission value relative to max throughput 
+        outside of band to keep
     fext : float
-        Fractional extension of bandpass width to keep
+        Wavelength fractional extension of bandpass width to keep
     """
+    w = bp.wave
+    th = bp.throughput
+
     # Select which wavelengths to use
-    igood = bp.throughput >= min_trans
+    igood = th >= (th.max() * min_trans)
     # Select the "good" wavelengths
-    wgood = (bp.wave)[igood]
+    wgood = w[igood]
     w1 = wgood.min()
     w2 = wgood.max()
     wr = w2 - w1
@@ -43,7 +47,7 @@ def bp_igood(bp, min_trans=0.001, fext=0.05):
     w2 += fext*wr
 
     # Now choose EVERYTHING between w1 and w2 (not just th>0.001)
-    ind = ((bp.wave >= w1) & (bp.wave <= w2))
+    ind = ((w >= w1) & (w <= w2))
     return ind
 
 def miri_filter(filter, **kwargs):
