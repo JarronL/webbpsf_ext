@@ -372,6 +372,8 @@ def fractional_image_shift(imarr, xshift, yshift, method='opencv',
                            oversample=1, gstd_pix=None, return_oversample=False,
                            window_func=None, total=True, **kwargs):
     """Shift image(s) by a fractional amount
+
+    Will first fix any NaNs using astropy convolution.
     
     Parameters
     ----------
@@ -434,7 +436,8 @@ def fractional_image_shift(imarr, xshift, yshift, method='opencv',
     from astropy.convolution import convolve
 
     # Replace NaNs with astropy convolved image values
-    if np.isnan(imarr).any():
+    ind_nan_all = np.isnan(imarr)
+    if ind_nan_all.any():
         kernel = Gaussian2DKernel(x_stddev=2)
         if len(imarr.shape)==3:
             imarr_conv = imarr.copy()
@@ -498,6 +501,11 @@ def fractional_image_shift(imarr, xshift, yshift, method='opencv',
         imarr_shift = cv_shift(imarr, xsh, ysh, **kwargs)
     else:
         raise ValueError(f"Unrecognized method: {method}")
+
+    # Add NaNs back to the image
+    # if ind_nan_all.any():
+    #     nan_mask_shift = fshift(ind_nan_all.astype('float'), xsh, ysh, pad=True, cval=1.0)
+    #     imarr_shift[nan_mask_shift>0] = np.nan
     
     if return_oversample or oversample==1:
         # No need to resample back to original size
