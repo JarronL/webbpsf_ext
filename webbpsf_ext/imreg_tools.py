@@ -748,6 +748,12 @@ def read_sgd_files(indir, pid, obsid, filter, sca, bpfix=False,
     files = get_files(indir, pid, obsid=obsid, sca=sca, filt=filter,
                       file_type=file_type, exp_type=exp_type, vst_grp_act=vst_grp_act,
                       apername=apername, apername_pps=apername_pps)
+    
+    if len(files)==0:
+        _log.warning(f'No files found for PID {pid}, Obs {obsid}, {sca} with filter {filter}')
+        _log.warning(f'file_type={file_type}, exp_type={exp_type}, vst_grp_act={vst_grp_act}, apername={apername}, apername_pps={apername_pps}')
+        _log.warning(f'Input directory: {indir}')
+        return {}
 
     # Exclude any TAMASK or TACONFIRM data by default
     if exp_type is None:
@@ -1145,6 +1151,8 @@ def load_cropped_files(save_dir, files, xysub=65, bgsub=False,
         except KeyError:
             dqmask = np.zeros_like(data).astype(np.uint64)
 
+        ny, nx = data.shape[-2:]
+
         # Crop and roughly center image
         data, xy = crop_image(data, xysub, xyloc=com_ind[i], return_xy=True)
         x1, x2, y1, y2 = xy
@@ -1169,6 +1177,22 @@ def load_cropped_files(save_dir, files, xysub=65, bgsub=False,
         xyind_arr.append(xy)
         
         hdul.close()
+
+    # Ensure data are of the same shape
+    sh1 = imsub_arr[0].shape
+    xymin_size = np.min([sh1[0], sh1[1]])
+    same_shape = True
+    for i in range(1, len(imsub_arr)):
+        sh2 = imsub_arr[i].shape
+        if sh1 != sh2:
+            same_shape = False
+        xymin_size = np.min([xymin_size, np.min([sh2[0], sh2[1]])])
+        # Make sure xymin_size is odd
+        if xymin_size % 2 == 0:
+            xymin_size -= 1
+
+    if not same_shape:
+        raise ValueError(f'xysub={xysub} is too large shifted data of shape {(ny,nx)}. Trying shinking to {xymin_size}.')
 
     try:
         imsub_arr = np.asarray(imsub_arr)
