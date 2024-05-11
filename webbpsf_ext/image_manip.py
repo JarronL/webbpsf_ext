@@ -561,13 +561,12 @@ def pad_or_cut_to_size(array, new_shape, fill_val=0.0, offset_vals=None,
         if isinstance(new_shape, (float,int,np.int64)):
             nx_new = int(new_shape+0.5)
             ny_new = 1
-            new_shape = (ny_new, nx_new)
         elif len(new_shape) < 2:
             nx_new = new_shape[0]
             ny_new = 1
-            new_shape = (ny_new, nx_new)
         else:
             ny_new, nx_new = new_shape
+        new_shape = (ny_new, nx_new)
         output = np.zeros(shape=(nz,ny_new,nx_new), dtype=array.dtype)
     elif (ndim == 2) or (ndim == 3):
         if ndim==2:
@@ -579,12 +578,11 @@ def pad_or_cut_to_size(array, new_shape, fill_val=0.0, offset_vals=None,
 
         if isinstance(new_shape, (float,int,np.int64)):
             ny_new = nx_new = int(new_shape+0.5)
-            new_shape = (ny_new, nx_new)
         elif len(new_shape) < 2:
             ny_new = nx_new = new_shape[0]
-            new_shape = (ny_new, nx_new)
         else:
             ny_new, nx_new = new_shape
+        new_shape = (ny_new, nx_new)
         output = np.zeros(shape=(nz,ny_new,nx_new), dtype=array.dtype)
     else:
         raise ValueError(f'Found {ndim} dimensions (shape={shape_orig}). Only up to 3 dimensions allowed.')
