@@ -81,7 +81,7 @@ install_requires = [
     'synphot>=1.2.1',
     'poppy>=1.1.0',
     'webbpsf>=1.2.0',
-    'pysiaf>=0.21.0',
+    'pysiaf>=0.22.0',
 ]
 
 setup_requirements = ['pytest-runner', ]
@@ -107,7 +107,7 @@ setup(
  
     # Author details
     author='Jarron Leisenring',
-    author_email='jarronl@email.arizona.edu',
+    author_email='jarronl@arizona.edu',
     license='MIT license',
     keywords='jwst psf nircam miri simulation',
     # See https://pypi.python.org/pypi?%3Aaction=list_classifiers
@@ -127,13 +127,9 @@ setup(
 
         # Specify the Python versions you support here. In particular, ensure
         # that you indicate whether you support Python 2, Python 3 or both.
-        #'Programming Language :: Python :: 2',
-        #'Programming Language :: Python :: 2.7',
         'Programming Language :: Python :: 3',
-        'Programming Language :: Python :: 3.7',
-        'Programming Language :: Python :: 3.8',
-        'Programming Language :: Python :: 3.9',
         'Programming Language :: Python :: 3.10',
+        'Programming Language :: Python :: 3.11',
     ],
 
     # You can just specify the packages manually here if your project is
