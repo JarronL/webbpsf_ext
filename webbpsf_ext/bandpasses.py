@@ -1,11 +1,12 @@
 # Import libraries
 from pathlib import Path
 import numpy as np
+
+import astropy.units as u
 from astropy.io import fits, ascii
 
-from webbpsf_ext.maths import jl_poly
-
-from .utils import S
+# from .utils import S
+from . import synphot_ext as S
 
 import logging
 _log = logging.getLogger('webbpsf_ext')
@@ -14,25 +15,29 @@ _log = logging.getLogger('webbpsf_ext')
 from . import __path__
 _bp_dir = Path(__path__[0]) / 'throughputs'
 
-def read_filter(self, *args, **kwargs):
-    if self.inst_name=='MIRI':
-        return miri_filter(*args, **kwargs)
-    elif self.inst_name=='NIRCam':
-        return nircam_filter(*args, **kwargs)
-    else:
-        raise NotImplementedError(f"{self.inst_name} does not have a read bandpass function.")
-
-
 def bp_igood(bp, min_trans=0.001, fext=0.05):
     """
     Given a bandpass with transmission 0.0-1.0, return the indices that
     cover only the region of interest and ignore those wavelengths with
     very low transmission less than and greater than the bandpass width.
+
+    Parameters
+    ----------
+    bp : synphot bandpass object
+        Bandpass to use
+    min_trans : float
+        Minimum transmission value relative to max throughput 
+        outside of band to keep
+    fext : float
+        Wavelength fractional extension of bandpass width to keep
     """
+    w = bp.wave
+    th = bp.throughput
+
     # Select which wavelengths to use
-    igood = bp.throughput > min_trans
+    igood = th >= (th.max() * min_trans)
     # Select the "good" wavelengths
-    wgood = (bp.wave)[igood]
+    wgood = w[igood]
     w1 = wgood.min()
     w2 = wgood.max()
     wr = w2 - w1
@@ -42,7 +47,7 @@ def bp_igood(bp, min_trans=0.001, fext=0.05):
     w2 += fext*wr
 
     # Now choose EVERYTHING between w1 and w2 (not just th>0.001)
-    ind = ((bp.wave >= w1) & (bp.wave <= w2))
+    ind = ((w >= w1) & (w <= w2))
     return ind
 
 def miri_filter(filter, **kwargs):
@@ -79,21 +84,21 @@ def miri_filter(filter, **kwargs):
     hdulist.close()
 
     # Select which wavelengths to keep
-    igood = bp_igood(bp, min_trans=0.005, fext=0.1)
+    bp_max = bp.throughput.max()
+    igood = bp_igood(bp, min_trans=0.001*bp_max, fext=0.1)
     wgood = (bp.wave)[igood]
     w1 = wgood.min()
     w2 = wgood.max()
-    wrange = w2 - w1
 
     # Resample to common dw to ensure consistency
     dw_arr = bp.wave[1:] - bp.wave[:-1]
     dw = np.median(dw_arr)
     warr = np.arange(w1,w2, dw)
-    bp = bp.resample(warr)
+    th = bp(warr)
 
-    # Need to place zeros at either end so Pysynphot doesn't extrapolate
-    warr = np.concatenate(([bp.wave.min()-dw],bp.wave,[bp.wave.max()+dw]))
-    tarr = np.concatenate(([0],bp.throughput,[0]))
+    # Need to place zeros at either end so synphot doesn't extrapolate
+    warr = np.concatenate(([warr.min()-dw], warr, [warr.max()+dw]))
+    tarr = np.concatenate(([0],th,[0]))
     bp   = S.ArrayBandpass(warr, tarr, name=bp_name)
         
     return bp
@@ -123,6 +128,8 @@ def nircam_com_th(wave_out=None, ND_acq=False):
     if wave_out is None:
         return wvals, tvals
     else:
+        if isinstance(wave_out, u.Quantity):
+            wave_out = wave_out.to_value(u.um)
         return np.interp(wave_out, wvals, tvals, left=0, right=0)
 
 
@@ -152,6 +159,8 @@ def nircam_com_nd(wave_out=None):
     if wave_out is None:
         return wdata, odata
     else:
+        if isinstance(wave_out, u.Quantity):
+            wave_out = wave_out.to_value(u.um)
         return np.interp(wave_out, wdata, odata, left=0, right=0)
 
 def nircam_lyot_th(channel, wave_out=None):
@@ -205,11 +214,27 @@ def nircam_lyot_th(channel, wave_out=None):
     if wave_out is None:
         return wtemp, ttemp
     else:
+        if isinstance(wave_out, u.Quantity):
+            wave_out = wave_out.to_value(u.um)
         return np.interp(wave_out, wtemp, ttemp, left=0, right=0)
 
 
 def nircam_grism_si_ar(module, return_bp=False):
-    """NIRCam grism Si and AR coating transmission data"""
+    """NIRCam grism Si and AR coating transmission data
+    
+    Parameters
+    ----------
+    module : str
+        NIRCam module 'A' or 'B'
+    return_bp : bool
+        Return synphot bandpass object instead of wavelength and throughput arrays.
+
+    Returns
+    -------
+    wdata, tdata : ndarray
+        Wavelength and throughput arrays.
+        Wave units are microns.
+    """
 
     from scipy.signal import savgol_filter
 
@@ -224,17 +249,32 @@ def nircam_grism_si_ar(module, return_bp=False):
     tdata = savgol_filter(tdata, 10, 3)
 
     if return_bp:
-        bp = S.ArrayBandpass(wave=1e4*wdata, throughput=tdata)
+        bp = S.ArrayBandpass(wdata, tdata, waveunits='um')
         return bp
     else:
         return wdata, tdata
 
 def nircam_grism_th(module, grism_order=1, wave_out=None, return_bp=False):
-    """NIRCam grism throughput"""
+    """NIRCam grism throughput
+    
+    Parameters
+    ----------
+    module : str
+        NIRCam module 'A' or 'B'
+    grism_order : int
+        Grism order 1 or 2
+    wave_out : ndarray
+        Optional wavelength array in units of microns.
+        Only returns throughput array if set.
+    return_bp : bool
+        Return synphot bandpass object instead of wavelength and throughput arrays.
+    """
 
     from scipy.interpolate import interp1d
+    from .maths import jl_poly
 
     # Si plus AR coating transmission
+    # wdata is in units of microns
     wdata, tdata = nircam_grism_si_ar(module, return_bp=False)
 
     # coefficients are only valid for 2.3-5.1 um
@@ -289,14 +329,27 @@ def nircam_grism_th(module, grism_order=1, wave_out=None, return_bp=False):
 
 
 def qe_nircam(sca, wave=None, flight=True):
-    """NIRCam QE Curves"""
+    """NIRCam QE Curves
+    
+    Parameters
+    ==========
+    sca : str
+        NIRCam SCA name, e.g. 'NRCA5'
+    wave : ndarray
+        Wavelength array in units of microns.
+    flight : bool
+        Use flight or pre-flight QE curves?
+    """
 
     from .utils import get_detname
+
+    sca = get_detname(sca, use_long=False)
+    if wave is not None:
+        wave = np.atleast_1d(wave)
 
     if flight:
         return qe_nircam_flight(sca, wave=wave)
     else:
-        sca = get_detname(sca)
         module = sca[3]
         channel = 'LW' if sca[-1]=='5' else 'SW'
         return qe_nircam_preflight(channel, module, wave=wave)
@@ -322,7 +375,12 @@ def qe_nircam_flight(sca, wave=None):
     }
 
     # Select coefficient
-    cf = np.array(cf_dict.get(sca))
+    cf_list = cf_dict.get(sca)
+    if cf_list is None:
+        raise ValueError(f'Invalid SCA: {sca}')
+    cf = np.asarray(cf_list)
+
+    set_edges_to_zero = True if wave is None else False
 
     channel = 'LW' if sca[-1]=='5' else 'SW'
     if channel=='SW':
@@ -344,9 +402,12 @@ def qe_nircam_flight(sca, wave=None):
         qe = jl_poly(wave, cf)
         qe[qe<0] = 0
 
-    qe[0] = 0
-    qe[-1] = 0
-    bp_qe = S.ArrayBandpass(wave=1e4*wave, throughput=qe)
+    if set_edges_to_zero:
+        qe[0] = 0
+        qe[-1] = 0
+
+    name = f'NIRCam {sca} Flight QE'
+    bp_qe = S.ArrayBandpass(wave=1e4*wave, throughput=qe, name=name)
 
     return bp_qe
 
@@ -413,6 +474,9 @@ def qe_nircam_preflight(channel, module, wave=None):
         lw_qe[lw_qe<0] = 0
         bp_qe = S.ArrayBandpass(wave=1e4*lw_wavelength, throughput=lw_qe)
 
+    name = f'NIRCam {channel} {module} pre-flight QE'
+    bp_qe.name = name
+
     return bp_qe
 
 def qe_nirspec(wave=None):
@@ -439,7 +503,7 @@ def qe_nirspec(wave=None):
     th[red] = th[red] * np.exp((lw_wavecut-wave[red])*lw_exponential)
 
     th[th<0] = 0
-    bp = S.ArrayBandpass(wave*1e4, th)
+    bp = S.ArrayBandpass(wave*1e4, th, name='NIRSpec QE')
 
     return bp
 
@@ -561,11 +625,12 @@ def nircam_filter(filter, pupil=None, mask=None, module=None, sca=None, ND_acq=F
 
     Returns
     -------
-    :mod:`pysynphot.obsbandpass`
-        A Pysynphot bandpass object.
+    :class:`S.Bandpass`
+        A Synphot bandpass object.
     """
 
     from .utils import get_detname
+    from .maths import jl_poly
 
     if sca is None and module is None:
         # Set default module
@@ -603,16 +668,17 @@ def nircam_filter(filter, pupil=None, mask=None, module=None, sca=None, ND_acq=F
         _log.debug(f'Reading file: {filt_file}')
         tbl = ascii.read(filt_path, format='basic')
         wave_ang, throughput = (tbl['Microns'].data * 1e4, tbl['Total_system_throughput'].data)
-        bp = S.ArrayBandpass(wave_ang, throughput)
-        bp_name = f"{filter}_Mod{module}"
     else:
         filt_dir = _bp_dir / 'NRC_preflight'
         filt_file = f'{filter}_nircam_plus_ote_throughput_mod{module.lower()}_sorted.txt'
         filt_path = str(filt_dir / filt_file)
 
         _log.debug(f'Reading file: {filt_file}')
-        bp = S.FileBandpass(filt_path)
-        bp_name = f"{filter}_{filt_file.split('_')[0]}"
+        tbl = ascii.read(filt_path, format='no_header')
+        wave_ang, throughput = (tbl['col1'].data, tbl['col2'].data)
+
+    bp = S.ArrayBandpass(wave_ang, throughput)
+    bp_name = f"{filter}_Mod{module}"
 
     
     # For narrowband/mediumband filters in pupil wheel, handle blocking filter throughput
@@ -639,7 +705,8 @@ def nircam_filter(filter, pupil=None, mask=None, module=None, sca=None, ND_acq=F
         bp = bp_new        
 
     # Select channel (SW or LW) for minor decisions later on
-    channel = 'SW' if bp.avgwave()/1e4 < 2.3 else 'LW'
+    wavg = bp.avgwave().to_value(u.um)
+    channel = 'SW' if wavg < 2.3 else 'LW'
 
     if apply_scale_factors and flight:
         if 'A5' in sca:
@@ -651,17 +718,9 @@ def nircam_filter(filter, pupil=None, mask=None, module=None, sca=None, ND_acq=F
             th_new = bp.throughput * _sca_throughput_scaling(sca, filter)
         bp = S.ArrayBandpass(bp.wave, th_new, name=bp.name)
 
-    # Fix QE
-    # if fix_lwqe and (channel=='LW'):
-    #     bp_qe_orig = qe_nircam(channel, module, wave=bp.wave/1e4)
-    #     bp_qe_new  = qe_nirspec(wave=bp.wave/1e4)
-    #     th_new = bp.throughput
-    #     indnz = bp_qe_orig.throughput>0
-    #     th_new[indnz] = th_new[indnz] * bp_qe_new.throughput[indnz] / bp_qe_orig.throughput[indnz]
-    #     bp = S.ArrayBandpass(bp.wave, th_new, name=bp.name)
-
     # Select which wavelengths to keep
-    igood = bp_igood(bp, min_trans=0.005, fext=0.1)
+    bp_max = bp.throughput.max()
+    igood = bp_igood(bp, min_trans=0.005*bp_max, fext=0.1)
     wgood = (bp.wave)[igood]
     w1 = wgood.min()
     w2 = wgood.max()
@@ -686,6 +745,8 @@ def nircam_filter(filter, pupil=None, mask=None, module=None, sca=None, ND_acq=F
         warr = np.linspace(w1, w1+dw*npts, npts)
         bp = bp.resample(warr)
 
+        bp_name = f"{bp_name}_{pupil}"
+
     # Read in DHS throughput and multiply filter bandpass
     elif (pupil is not None) and ('DHS' in pupil):
         # DHS transmission curve follows a 3rd-order polynomial
@@ -709,9 +770,11 @@ def nircam_filter(filter, pupil=None, mask=None, module=None, sca=None, ND_acq=F
         warr = np.linspace(w1, w1+dw*npts, npts)
         bp = bp.resample(warr)
 
+        bp_name = f"{bp_name}_{pupil}"
+
     # Coronagraphic throughput modifications
     # Substrate transmission (off-axis substrate with occulting masks)
-    if ((mask  is not None) and ('MASK' in mask)) or coron_substrate or ND_acq:
+    if ((mask is not None) and ('MASK' in mask)) or coron_substrate or ND_acq:
         # Sapphire mask transmission values for coronagraphic substrate
         # Did we explicitly set the ND acquisition square?
         #   This is a special case and doesn't necessarily need to be set.
@@ -721,12 +784,16 @@ def nircam_filter(filter, pupil=None, mask=None, module=None, sca=None, ND_acq=F
         th_new = th_coron_sub * bp.throughput
         bp = S.ArrayBandpass(bp.wave, th_new)
 
+        bp_name = f"{bp_name}_{mask}"
+
     # Lyot stop wedge modifications 
     if (pupil is not None) and ('LYOT' in pupil):
         # Substrate transmission (located in pupil wheel to deflect beam)
         th_wedge = nircam_lyot_th(channel, wave_out=bp.wave/1e4)
         th_new = th_wedge * bp.throughput
         bp = S.ArrayBandpass(bp.wave, th_new, name=bp.name)
+
+        bp_name = f"{bp_name}_{pupil}"
 
     # Weak Lens substrate transmission
     # TODO: Update WLP4 with newer flight version
@@ -760,13 +827,13 @@ def nircam_filter(filter, pupil=None, mask=None, module=None, sca=None, ND_acq=F
         wl48_list = ['WEAK LENS +12 (=4+8)', 'WEAK LENS -4 (=4-8)']
         if (wl_name in wl48_list):
             th_wl = th_wl4 * th_wl8
-            bp_name = 'F212N' # F212N2?
+            bp_name.replace(filter, 'F212N') # F212N2?
             # Remove F200W contributions
             if filter=='F200W':
                 th_wl /= 0.97
         elif 'WEAK LENS +4' in wl_name:
             th_wl = th_wl4
-            bp_name = 'F212N' # F212N2?
+            bp_name.replace(filter, 'F212N') # F212N2?
             # Remove F200W contributions
             if filter=='F200W':
                 th_wl /= 0.97
@@ -776,12 +843,24 @@ def nircam_filter(filter, pupil=None, mask=None, module=None, sca=None, ND_acq=F
         th_new = th_wl * bp.throughput
         bp = S.ArrayBandpass(bp.wave, th_new)
 
-        # Select which wavelengths to keep
-        igood = bp_igood(bp, min_trans=0.005, fext=0.1)
-        wgood = (bp.wave)[igood]
-        w1 = wgood.min()
-        w2 = wgood.max()
-        wrange = w2 - w1
+        if '+4' in wl_name:
+            bp_name = f"{bp_name}_WLP4"
+        elif '-4' in wl_name:
+            bp_name = f"{bp_name}_WLM4"
+        elif '+8' in wl_name:
+            bp_name = f"{bp_name}_WLP8"
+        elif '-8' in wl_name:
+            bp_name = f"{bp_name}_WLM8"
+        elif '+12' in wl_name:
+            bp_name = f"{bp_name}_WLP12"
+
+    # Select which wavelengths to keep
+    bp_max = bp.throughput.max()
+    igood = bp_igood(bp, min_trans=0.005*bp_max, fext=0.1)
+    wgood = (bp.wave)[igood]
+    w1 = wgood.min()
+    w2 = wgood.max()
+    wrange = w2 - w1
 
     # OTE scaling (use ice_scale keyword)
     if ote_scale is not None:
@@ -847,17 +926,18 @@ def nircam_filter(filter, pupil=None, mask=None, module=None, sca=None, ND_acq=F
         # Create new bandpass
         bp = S.ArrayBandpass(bp.wave, th_new)
 
-
     # Resample to common dw to ensure consistency
     dw_arr = bp.wave[1:] - bp.wave[:-1]
     #if not np.isclose(dw_arr.min(),dw_arr.max()):
     dw = np.median(dw_arr)
-    warr = np.arange(w1,w2, dw)
-    bp = bp.resample(warr)
+    w1 = bp.wave.min()
+    w2 = bp.wave.max()
+    warr = np.arange(w1, w2+dw, dw)
+    tarr = bp(warr)
 
-    # Need to place zeros at either end so Pysynphot doesn't extrapolate
-    warr = np.concatenate(([bp.wave.min()-dw],bp.wave,[bp.wave.max()+dw]))
-    tarr = np.concatenate(([0],bp.throughput,[0]))
+    # Need to place zeros at either end so synphot won't extrapolate
+    warr = np.concatenate(([warr.min()-dw],warr,[warr.max()+dw]))
+    tarr = np.concatenate(([0],tarr,[0]))
 
     # Check [0,1] limits
     tarr[tarr<0] = 0
@@ -973,8 +1053,8 @@ def bp_2mass(filter):
 
     Returns
     -------
-    :mod:`pysynphot.obsbandpass`
-        A Pysynphot bandpass object.
+    :class:`S.Bandpass`
+        A Synphot bandpass object.
 
     """
 
@@ -1009,8 +1089,8 @@ def bp_wise(filter):
 
     Returns
     -------
-    :mod:`pysynphot.obsbandpass`
-        A Pysynphot bandpass object.
+    :class:`S.Bandpass`
+        A synphot bandpass object.
 
     """
 
@@ -1082,14 +1162,27 @@ def bp_gaia(filter, release='DR2'):
     return bp
 
 
-def filter_width(bp):
-    """Return wavelength positions of filter edges at half max"""
+def filter_width(bp, gsmooth=3):
+    """Return wavelength positions of filter edges at half max
+    
+    Output units will be in microns.
+    """
 
-    w, th = (bp.wave / 1e4, bp.throughput)
-    wavg = bp.avgwave() / 1e4
+    from astropy.convolution import convolve
+    from astropy.convolution import Gaussian1DKernel
+
+    bp.convert('um')
+    w, th = (bp.wave, bp.throughput)
+    wavg = bp.avgwave().to_value(u.um)
+
+    # Quick Gaussian smoothing of noisy data
+    if (gsmooth is not None) and (gsmooth > 0):
+        th_smooth = convolve(th, Gaussian1DKernel(gsmooth))
+        th_mid = np.interp(wavg, w, th_smooth)
+    else:
+        th_mid = np.interp(wavg, w, th)
 
     # Throughput at the effective wavelength
-    th_mid = np.interp(wavg, w, th)
     th_half = th_mid / 2
 
     ind1 = (w<wavg) & (th<(th_mid+th_half) / 2)  & (th>th_half / 2)

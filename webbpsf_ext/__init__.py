@@ -25,11 +25,10 @@ time to calculate . Since the change to the PSF coefficients varies smoothly
 with respect to WFE drift components, it's simple to parameterize the coefficient
 residuals.
 
-Developed by Jarron Leisenring at University of Arizona (2015-2022).
+Developed by Jarron Leisenring at University of Arizona (2015-2024).
 """
 
-import os
-import sys
+import os, sys
 # from warnings import warn
 import astropy
 from astropy import config as _config
@@ -50,23 +49,26 @@ class Conf(_config.ConfigNamespace):
     on_rtd = os.environ.get('READTHEDOCS') == 'True'
     
     if on_rtd:
-        path = tempfile.gettempdir()
+        data_path = tempfile.gettempdir()
     else:
-        path = os.getenv('WEBBPSF_EXT_PATH')
-        if path is None:
+        data_path = os.getenv('WEBBPSF_EXT_PATH')
+        if data_path is None:
             print("WARNING: Environment variable $WEBBPSF_EXT_PATH is not set!")
             import webbpsf
-            path = webbpsf.utils.get_webbpsf_data_path()
-            print("  Setting WEBBPSF_EXT_PATH to WEBBPSF directory:")
-            print("  {}".format(path))
-        if not os.path.isdir(path):
-            raise IOError("WEBBPSF_EXT_PATH ({}) is not a valid directory path!".format(path))
+            data_path = webbpsf.utils.get_webbpsf_data_path()
+            print("  Setting WEBBPSF_EXT_PATH to WEBBPSF_PATH directory:")
+            print(f"  {data_path}")
+        if not os.path.isdir(data_path):
+            try:
+                os.makedirs(data_path)
+            except:
+                raise IOError(f"WEBBPSF_EXT_PATH ({data_path}) is not a valid directory path!")
             
-    if '/' not in path[-1]: 
+    if '/' not in data_path[-1]: 
         # Make sure there is a '/' at the end of the path name
-        path = path + '/'
+        data_path = os.path.join(data_path, '/')
 
-    WEBBPSF_EXT_PATH = _config.ConfigItem(path, 'Directory path to data files \
+    WEBBPSF_EXT_PATH = _config.ConfigItem(data_path, 'Directory path to data files \
                                     required for webbpsf_ext calculations.')
 
     autoconfigure_logging = _config.ConfigItem(

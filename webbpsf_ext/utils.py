@@ -7,16 +7,26 @@ import matplotlib.pyplot as plt
 import os, sys
 import six
 
-import webbpsf, poppy
+import webbpsf, poppy, pysiaf
 
-# Define these here rather than calling multiple times
-# since it takes some time to generate these.
-import pysiaf
-siaf_nrc = pysiaf.Siaf('NIRCam')
-siaf_nis = pysiaf.Siaf('NIRISS')
-siaf_mir = pysiaf.Siaf('MIRI')
-siaf_nrs = pysiaf.Siaf('NIRSpec')
-siaf_fgs = pysiaf.Siaf('FGS')
+try:
+    from webbpsf.webbpsf_core import get_siaf_with_caching
+except ImportError:
+    # In case user doesn't have the latest version of webbpsf installed
+    import functools
+    @functools.lru_cache
+    def get_siaf_with_caching(instrname):
+        """ Parsing and loading the SIAF information is particularly time consuming,
+        (can be >0.1 s per call, so multiple invokations can be a large overhead)
+        Therefore avoid unnecessarily reloading it by caching results.
+        This is a small speed optimization. """
+        return pysiaf.Siaf(instrname)
+
+siaf_nrc = get_siaf_with_caching('NIRCam')
+siaf_nis = get_siaf_with_caching('NIRISS')
+siaf_mir = get_siaf_with_caching('MIRI')
+siaf_nrs = get_siaf_with_caching('NIRSpec')
+siaf_fgs = get_siaf_with_caching('FGS')
 
 from . import conf
 from .logging_utils import setup_logging
@@ -24,13 +34,11 @@ from .logging_utils import setup_logging
 import logging
 _log = logging.getLogger('webbpsf_ext')
 
-import pysynphot as S
-# Extend default wavelength range to 35 um
-S.refs.set_default_waveset(minwave=500, maxwave=350000, num=10000.0, delta=None, log=False)
-# JWST 25m^2 collecting area
-# Flux loss from masks and occulters are taken into account in WebbPSF
-# S.refs.setref(area = 25.4e4) # cm^2
-S.refs.setref(area = 25.78e4) # cm^2 according to jwst_pupil_RevW_npix1024.fits.gz
+# from . import synphot_ext as S
+from . import synphot_ext
+on_rtd = os.environ.get('READTHEDOCS') == 'True'
+if not on_rtd:
+    synphot_ext.download_cdbs_data(verbose=True)
 
 # Progress bar
 from tqdm.auto import trange, tqdm
@@ -168,11 +176,23 @@ def get_detname(det_id, use_long=False):
         
     return detname
 
-def pix_ang_size(ap, sr=True, pixscale=None):
+def pix_ang_size(ap=None, sr=True, pixscale=None):
     """Angular area of pixel from aperture object
     
     If `sr=True` then return in sterradians,
     otherwise return in units of arcsec^2.
+
+    Parameters
+    ==========
+    ap : pysiaf.Aperture
+        Aperture object
+    sr : bool
+        Return in steradians? Default True.
+    pixscale : float, array-like, or None
+        Pixel scale in arcsec/pixel. If None, then
+        use `ap.XSciScale` and `ap.YSciScale` to
+        determine pixel scale. If `pixscale` is
+        array-like, then assume (xscale, yscale).
     """
     sr2asec2 = 42545170296.1522
     
@@ -183,6 +203,8 @@ def pix_ang_size(ap, sr=True, pixscale=None):
         else:
             xscale = yscale = pixscale
     else:
+        if ap is None:
+            raise ValueError("Must specify either `ap` or `pixscale`.")
         xscale = ap.XSciScale
         yscale = ap.YSciScale
     

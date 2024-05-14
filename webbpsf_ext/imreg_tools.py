@@ -1,9 +1,13 @@
 import numpy as np
 import os
-from tqdm.auto import tqdm
+
+import matplotlib.pyplot as plt
+from tqdm.auto import tqdm, trange
 
 from .image_manip import fourier_imshift, fshift, frebin
 from .image_manip import get_im_cen, pad_or_cut_to_size, bp_fix
+from .image_manip import apply_pixel_diffusion, add_ipc, add_ppc
+from .image_manip import crop_observation, crop_image
 from .coords import dist_image, get_sgd_offsets
 from .maths import round_int
 
@@ -286,13 +290,14 @@ def filter_files(files, save_dir):
 
     return files[ind_keep]
 
-def get_save_dir(pid):
+def get_save_dir(pid, mast_dir=None):
     """Return save directory for processed files
     
     Takes the MAST directory for a given PID and adds
     '_proc' to the end. If it doesn't exist, it will be created.
     """
-    mast_dir = os.getenv('JWSTDOWNLOAD_OUTDIR')
+    if mast_dir is None:
+        mast_dir = os.getenv('JWSTDOWNLOAD_OUTDIR')
 
     # Output directory
     if mast_dir[-1]=='/':
@@ -305,59 +310,6 @@ def get_save_dir(pid):
     os.makedirs(save_dir, exist_ok=True)
 
     return save_dir
-
-def load_cropped_files(save_dir, files, xysub=65, bgsub=False, 
-                       fix_bad_pixels=True, **kwargs):
-
-    from jwst.datamodels import dqflags
-
-    # Get index location and 'sci' position
-    halfwidth = kwargs.get('halfwidth', 15)
-    com_ind = get_loc_all(files, save_dir, find_func=get_com,
-                          fix_bad_pixels=fix_bad_pixels, 
-                          halfwidth=halfwidth)
-
-    imsub_arr = []
-    dqsub_arr = []
-    xyind_arr = []
-    for i, f in enumerate(files):
-        fpath = os.path.join(save_dir, f)
-        hdul = fits.open(fpath)
-
-        # Crop and roughly center image
-        data, xy = crop_image(hdul['SCI'].data, xysub, xyloc=com_ind[i], return_xy=True)
-        try:
-            dqmask = crop_image(hdul['DQ'].data, xysub, xyloc=com_ind[i])
-        except KeyError:
-            dqmask = np.zeros_like(data).astype(np.uint64)
-        
-        # For arrays padded with 0s, flag those pixels as DO_NOT_USE
-        indz = (data==0)
-        dqmask[indz] = dqmask[indz] | dqflags.pixel['DO_NOT_USE']
-        
-        imsub_arr.append(data)
-        dqsub_arr.append(dqmask)
-        xyind_arr.append(xy)
-        
-        hdul.close()
-
-    imsub_arr = np.array(imsub_arr)
-    dqsub_arr = np.array(dqsub_arr)
-    xyind_arr = np.array(xyind_arr)
-    bp_masks1 = (dqsub_arr & dqflags.pixel['OTHER_BAD_PIXEL']) > 0
-    bp_masks2 = (dqsub_arr & dqflags.pixel['DO_NOT_USE']) > 0
-    bp_masks = bp_masks1 | bp_masks2 | np.isnan(imsub_arr)
-
-    # Do bg subtraction from r>bg_rad and only include good pixels
-    if bgsub:
-        # Radial position to set background
-        bg_rad = int(0.7 * xysub / 2)
-        ind_bg = dist_image(np.zeros([xysub,xysub])) > bg_rad
-        for i in range(len(files)):
-            indgood = (~bp_masks[i]) & ind_bg
-            imsub_arr[i] -= np.nanmedian(data[indgood])
-
-    return imsub_arr, dqsub_arr, xyind_arr, bp_masks
 
 ###########################################################################
 #    Target Acquisition
@@ -481,6 +433,50 @@ def tasub_to_apname(tasub):
 
     return apname_dict[tasub]
 
+
+def print_ta_visit_times(eventlog, verbose=True):
+    """Get centroid position of TA as reported in JWST event logs"""
+
+    from csv import reader
+    from datetime import datetime
+
+    # parse response (ignoring header line) and print new event messages
+    vid = ''
+    ta_only = True
+    in_ta = False
+
+    # Search through event log for TA visit and get visit ids
+    vid_list = []
+    vstart_list = []
+    vend_list = []
+    for value in reader(eventlog, delimiter=',', quotechar='"'):
+        val_str = value[2]
+
+        if val_str[:6] == 'VISIT ':
+            if val_str[-7:] == 'STARTED':
+                vstart = 'T'.join(value[0].split())[:-3]
+                vid = val_str.split()[1]
+                # Add to lists
+                vid_list.append(vid)
+                vstart_list.append(vstart)
+
+            elif val_str[-5:] == 'ENDED':
+                vend = 'T'.join(value[0].split())[:-3]
+                vend_list.append(vend)
+
+    # Grab unique visit ids
+    vid_list, ivid = np.unique(vid_list, return_index=True)
+    vstart_list    = np.array(vstart_list)[ivid]
+    vend_list      = np.array(vend_list)[ivid]
+
+    for i, vid in enumerate(vid_list):
+        if verbose:
+            print(f"VISIT {vid} STARTED at {vstart_list[i]}")
+        find_centroid_det(eventlog, vid)
+        if verbose:
+            print(f"VISIT {vid} ENDED at {vend_list[i]}")
+        if i+1 < len(vid_list):
+            print('')
 
 
 def find_centroid_det(eventlog, selected_visit_id):
@@ -708,7 +704,8 @@ def read_ta_files(indir, pid, obsid, sca, file_type='rate.fits',
 
 def read_sgd_files(indir, pid, obsid, filter, sca, bpfix=False, 
                    file_type='rate.fits', exp_type=None, vst_grp_act=None,
-                   apername=None, apername_pps=None, nodata=False):
+                   apername=None, apername_pps=None, nodata=False,
+                   combine_same_dithers=False):
     """Store SGD or science data into a dictionary
 
     By default, excludes any TAMASK or TACONFIRM data, but can be overridden
@@ -742,6 +739,8 @@ def read_sgd_files(indir, pid, obsid, filter, sca, bpfix=False,
         Mainly for display purposes.
     nodata : bool
         If True, only return header info and not data.
+    combine_same_dithers : bool
+        Combine same dither positions? Looks at the 'PATT_NUM' keyword.
     """
 
     from jwst import datamodels
@@ -749,6 +748,12 @@ def read_sgd_files(indir, pid, obsid, filter, sca, bpfix=False,
     files = get_files(indir, pid, obsid=obsid, sca=sca, filt=filter,
                       file_type=file_type, exp_type=exp_type, vst_grp_act=vst_grp_act,
                       apername=apername, apername_pps=apername_pps)
+    
+    if len(files)==0:
+        _log.warning(f'No files found for PID {pid}, Obs {obsid}, {sca} with filter {filter}')
+        _log.warning(f'file_type={file_type}, exp_type={exp_type}, vst_grp_act={vst_grp_act}, apername={apername}, apername_pps={apername_pps}')
+        _log.warning(f'Input directory: {indir}')
+        return {}
 
     # Exclude any TAMASK or TACONFIRM data by default
     if exp_type is None:
@@ -770,7 +775,12 @@ def read_sgd_files(indir, pid, obsid, filter, sca, bpfix=False,
         hdul = fits.open(fpath)
         if not nodata:
             d['data'] = hdul['SCI'].data.astype('float')
-        d['dq']   = hdul['DQ'].data
+            d['dq']   = hdul['DQ'].data
+            try:
+                d['err'] = hdul['ERR'].data
+            except:
+                d['err'] = None
+                
         d['hdr0'] = hdul[0].header
         d['hdr1'] = hdul[1].header
         hdul.close()
@@ -799,6 +809,38 @@ def read_sgd_files(indir, pid, obsid, filter, sca, bpfix=False,
             im = crop_observation(d['data'], d['ap'], 100)
             # Perform pixel fixing in place
             _ = bp_fix(im, sigclip=10, niter=1, in_place=True)
+
+    # Loop through dictionaries and combine observations at same dither position
+    patt_num = sgd_dict[0]['hdr0'].get('PATT_NUM', None)
+    if combine_same_dithers and (patt_num is not None):
+        patt_num_arr = np.array([d['hdr0'].get('PATT_NUM') for i, d in sgd_dict.items()])
+        patt_num_uniq = np.unique(patt_num_arr)
+
+        if len(patt_num_uniq)!=len(patt_num_arr):
+            _log.warning('Combining observation data of same dither positions. Only header info for the first instance will be retained.')
+
+        # Combine data at same dither positions
+        for patt_num in patt_num_uniq:
+            # Find all instances of this pattern number
+            ind_patt = np.where(patt_num_arr==patt_num)[0]
+            if len(ind_patt)==1:
+                continue
+
+            # Combine data
+            d = sgd_dict[ind_patt[0]]
+            for i in ind_patt[1:]:
+                if d.get('files', None) is None:
+                    d['files'] = [d['file']]
+                d['files'] = d['files'] + [sgd_dict[i]['file']]
+                if not nodata:
+                    d['data'] = np.concatenate((d['data'], sgd_dict[i]['data']), axis=0)
+                    d['dq']   = np.concatenate((d['dq'], sgd_dict[i]['dq']), axis=0)
+                    if d['err'] is not None and sgd_dict[i]['err'] is not None:
+                        d['err'] = np.concatenate((d['err'], sgd_dict[i]['err']), axis=0)
+
+            # Remove second entries
+            for i in ind_patt[1:]:
+                del sgd_dict[i]
 
     return sgd_dict
 
@@ -929,7 +971,7 @@ def get_expected_loc(input, return_indices=True, add_sroffset=None):
     else:
         return xsci_exp, ysci_exp
 
-def get_gfit_cen(im, xysub=11, return_sci=False, find_max=True):
+def get_gfit_cen(im, xysub=11, return_sci=False, find_max=True, **kwargs):
     """Gaussion fit to get centroid position"""
     
     from astropy.modeling import models, fitting
@@ -993,6 +1035,22 @@ def get_com(im, halfwidth=7, return_sci=False, **kwargs):
     else:
         return xind_com, yind_com
 
+def get_peak(im, nsig_threshold=50, box_size=15, return_sci=False, **kwargs):
+    
+    from photutils.detection import find_peaks
+    from . import robust
+
+    #  Find peak position
+    std = robust.medabsdev(im)
+    threshold = nsig_threshold * std
+    tbl = find_peaks(im, threshold, box_size=box_size, npeaks=1)
+    xind_peak, yind_peak = (tbl[0]['x_peak'], tbl[0]['y_peak'])
+    
+    if return_sci:
+        return xind_peak+1, yind_peak+1
+    else:
+        return xind_peak, yind_peak
+
 def get_loc_all(files, indir, find_func=get_com, 
                 fix_bad_pixels=True, **kwargs):
 
@@ -1013,14 +1071,20 @@ def get_loc_all(files, indir, find_func=get_com,
         except KeyError:
             dqmask = np.zeros_like(data).astype(np.uint64)
 
+        # If data is 3D, then get median image
+        if len(data.shape) > 2:
+            bpmask = (dqmask & dqflags.pixel['DO_NOT_USE']) > 0
+            data[bpmask] = np.nan
+            data = np.nanmedian(data, axis=0)
+            # Bitwise AND of DQ mask
+            dqmask = np.bitwise_and.reduce(dqmask, axis=0)
+
         # Get rough stellar position
         if find_func is get_expected_loc:
             xy = get_expected_loc(hdul[0].header, **kwargs)
         elif find_func is get_com:
             # Fix bad pixels
-            bp_mask1 = (dqmask & dqflags.pixel['OTHER_BAD_PIXEL']) > 0
-            bp_mask2 = (dqmask & dqflags.pixel['DO_NOT_USE']) > 0
-            bpmask = bp_mask1 | bp_mask2
+            bpmask = (dqmask & dqflags.pixel['DO_NOT_USE']) > 0
 
             if fix_bad_pixels:
                 data = bp_fix(data, sigclip=20, in_place=False)
@@ -1038,6 +1102,130 @@ def get_loc_all(files, indir, find_func=get_com,
         hdul.close()
         
     return np.array(star_locs)
+
+
+def load_cropped_files(save_dir, files, xysub=65, bgsub=False, 
+                       fix_bad_pixels=True, find_func=get_com, **kwargs):
+    """Load a cropper version of the files
+    
+    Opens the files, crops them, and returns the cropped data, DQ arrays,
+    indices of the cropped images, and bad pixel masks. The indices are an
+    array of (x1, x2, y1, y2) in shape of (nfiles,4).
+
+    Parameters
+    ==========
+    save_dir : str
+        Directory where the files are saved
+    files : list
+        List of file names
+    xysub : int
+        Size of the subarray to use for cropping
+    bgsub : bool
+        If True, then subtract the background from the cropped image.
+        The background region is defined as r>0.7*xysub/2.
+    fix_bad_pixels : bool
+        If True, then fix bad pixels in the cropped image.
+    find_func : function
+        Function to use to find the location of the star.
+    """
+
+    from jwst.datamodels import dqflags
+
+    # Get index location and 'sci' position
+    if find_func is get_com:
+        kwargs['halfwidth'] = kwargs.get('halfwidth', 15)
+    com_ind = get_loc_all(files, save_dir, find_func=find_func,
+                          fix_bad_pixels=fix_bad_pixels, **kwargs)
+
+    imsub_arr = []
+    dqsub_arr = []
+    xyind_arr = []
+    for i, f in enumerate(files):
+        fpath = os.path.join(save_dir, f)
+        hdul = fits.open(fpath)
+
+        ndim = len(hdul['SCI'].data.shape)
+        data = hdul['SCI'].data[0] if ndim==3 else hdul['SCI'].data
+        try:
+            dqmask = hdul['DQ'].data[0] if ndim==3 else hdul['DQ'].data
+        except KeyError:
+            dqmask = np.zeros_like(data).astype(np.uint64)
+
+        ny, nx = data.shape[-2:]
+
+        # Crop and roughly center image
+        data, xy = crop_image(data, xysub, xyloc=com_ind[i], return_xy=True)
+        x1, x2, y1, y2 = xy
+        if ndim==3:
+            data = hdul['SCI'].data[:,y1:y2,x1:x2]
+            try:
+                dqmask = hdul['DQ'].data[:,y1:y2,x1:x2]
+            except KeyError:
+                dqmask = np.zeros_like(data).astype(np.uint64)
+        else:
+            try:
+                dqmask = hdul['DQ'].data[y1:y2,x1:x2]
+            except KeyError:
+                dqmask = np.zeros_like(data).astype(np.uint64)
+        
+        # For arrays padded with 0s, flag those pixels as DO_NOT_USE
+        indz = (data==0)
+        dqmask[indz] = dqmask[indz] | dqflags.pixel['DO_NOT_USE']
+        
+        imsub_arr.append(data)
+        dqsub_arr.append(dqmask)
+        xyind_arr.append(xy)
+        
+        hdul.close()
+
+    # Ensure data are of the same shape
+    sh1 = imsub_arr[0].shape
+    xymin_size = np.min([sh1[0], sh1[1]])
+    same_shape = True
+    for i in range(1, len(imsub_arr)):
+        sh2 = imsub_arr[i].shape
+        if sh1 != sh2:
+            same_shape = False
+        xymin_size = np.min([xymin_size, np.min([sh2[0], sh2[1]])])
+        # Make sure xymin_size is odd
+        if xymin_size % 2 == 0:
+            xymin_size -= 1
+
+    if not same_shape:
+        raise ValueError(f'xysub={xysub} is too large shifted data of shape {(ny,nx)}. Trying shinking to {xymin_size}.')
+
+    try:
+        imsub_arr = np.asarray(imsub_arr)
+        dqsub_arr = np.asarray(dqsub_arr)
+        xyind_arr = np.asarray(xyind_arr)
+    except:
+        _log.warning('Unequal number of integrations. Concatenating arrays into [nim_tot,ny,nx].')
+        imsub_arr = np.concatenate(imsub_arr, axis=0)
+        dqsub_arr = np.concatenate(dqsub_arr, axis=0)
+        xyind_arr = np.concatenate(xyind_arr, axis=0)
+    bp_masks1 = (dqsub_arr & dqflags.pixel['OTHER_BAD_PIXEL']) > 0
+    bp_masks = bp_masks1 | np.isnan(imsub_arr)
+
+    # Do bg subtraction from r>bg_rad and only include good pixels
+    if bgsub:
+        # Radial position to set background
+        bg_rad = int(0.7 * xysub / 2)
+        ind_bg = dist_image(np.zeros([xysub,xysub])) > bg_rad
+        for i in range(len(files)):
+            imsub_arr_i = imsub_arr[i]
+            bp_masks_i = bp_masks[i]
+            ndim = len(imsub_arr_i.shape)
+            if ndim==3:
+                for j in range(imsub_arr_i.shape[0]):
+                    indgood = (~bp_masks_i[j]) & ind_bg
+                    imsub_arr_i[j] -= np.nanmedian(data[j][indgood])
+            else:
+                indgood = (~bp_masks_i) & ind_bg
+                imsub_arr_i -= np.nanmedian(data[indgood])
+
+    return imsub_arr, dqsub_arr, xyind_arr, bp_masks
+
+
 
 def recenter_psf(psfs_over, niter=3, halfwidth=7, 
                  gfit=True, in_place=False, **kwargs):
@@ -1097,224 +1285,6 @@ def recenter_psf(psfs_over, niter=3, halfwidth=7,
         xyoff_psfs_over = xyoff_psfs_over[0]
 
     return psfs_over, xyoff_psfs_over
-
-
-###########################################################################
-#    Image Cropping
-###########################################################################
-
-def crop_observation(im_full, ap, xysub, xyloc=None, delx=0, dely=0, 
-                     shift_func=fourier_imshift, interp='cubic',
-                     return_xy=False, fill_val=np.nan, **kwargs):
-    """Crop around aperture reference location
-
-    `xysub` specifies the desired crop size.
-    if `xysub` is an array, dimension order should be [nysub,nxsub].
-    Crops at pixel boundaries (no interpolation) unless delx and dely
-    are specified for pixel shifting.
-
-    `xyloc` provides a way to manually supply the central position. 
-    Set `ap` to None will crop around `xyloc` or center of array.
-
-    delx and delx will shift array by some offset before cropping
-    to allow for sub-pixel shifting. To change integer crop positions,
-    recommend using `xyloc` instead.
-
-    Shift function can be fourier_imshfit, fshift, or cv_shift.
-    The interp keyword only works for the latter two options.
-    Consider 'lanczos' for cv_shift.
-
-    Setting `return_xy` to True will also return the indices 
-    used to perform the crop.
-
-    Parameters
-    ----------
-    im_full : ndarray
-        Input image.
-    ap : pysiaf aperture
-        Aperture to use for cropping. Will crop around the aperture
-        reference point by default. Will be overridden by `xyloc`.
-    xysub : int, tuple, or list
-        Size of subarray to extract. If a single integer is provided,
-        then a square subarray is extracted. If a tuple or list is
-        provided, then it should be of the form (ny, nx).
-    xyloc : tuple or list
-        (x,y) pixel location around which to crop the image. If None,
-        then the image aperture refernece point is used.
-    
-    Keyword Args
-    ------------
-    delx : int or float
-        Pixel offset in x-direction. This shifts the image by
-        some number of pixels in the x-direction. Positive values shift
-        the image to the right.
-    dely : int or float
-        Pixel offset in y-direction. This shifts the image by
-        some number of pixels in the y-direction. Positive values shift
-        the image up.
-    shift_func : function
-        Function to use for shifting. Default is `fourier_imshift`.
-        If delx and dely are both integers, then `fshift` is used.
-    interp : str
-        Interpolation method to use for shifting. Default is 'cubic'.
-        Options are 'nearest', 'linear', 'cubic', and 'quadratic'
-        for `fshift`.
-    return_xy : bool
-        If True, then return the x and y indices used to crop the
-        image prior to any shifting from `delx` and `dely`; 
-        (x1, x2, y1, y2). Default is False.
-    fill_val : float
-        Value to use for filling in the empty pixels after shifting.
-        Default = np.nan.
-    """
-        
-    # xcorn_sci, ycorn_sci = ap.corners('sci')
-    # xcmin, ycmin = (int(xcorn_sci.min()+0.5), int(ycorn_sci.min()+0.5))
-    # xsci_arr = np.arange(1, im_full.shape[1]+1)
-    # ysci_arr = np.arange(1, im_full.shape[0]+1)
-
-    
-    # Cut out postage stamp from full frame image
-    if isinstance(xysub, (list, tuple, np.ndarray)):
-        ny_sub, nx_sub = xysub
-    else:
-        ny_sub = nx_sub = xysub
-    
-    # Get centroid position
-    if ap is None:
-        xc, yc = get_im_cen(im_full) if xyloc is None else xyloc
-    else: 
-        # Subtract 1 from sci coords to get indices
-        xc, yc = (ap.XSciRef-1, ap.YSciRef-1) if xyloc is None else xyloc
-
-    x1 = round_int(xc - nx_sub/2 + 0.5)
-    x2 = x1 + nx_sub
-    y1 = round_int(yc - ny_sub/2 + 0.5)
-    y2 = y1 + ny_sub
-
-    # Save initial values in case they get modified below
-    x1_init, x2_init = (x1, x2)
-    y1_init, y2_init = (y1, y2)
-    xy_ind = np.array([x1_init, x2_init, y1_init, y2_init])
-
-    sh_orig = im_full.shape
-    if (x2>=sh_orig[1]) or (y2>=sh_orig[0]) or (x1<0) or (y1<0):
-        ny, nx = sh_orig
-
-        # Get expansion size along x-axis
-        dxp = x2 - nx + 1
-        dxp = 0 if dxp<0 else dxp
-        dxn = -1*x1 if x1<0 else 0
-        dx = dxp + dxn
-
-        # Get expansion size along y-axis
-        dyp = y2 - ny + 1
-        dyp = 0 if dyp<0 else dyp
-        dyn = -1*y1 if y1<0 else 0
-        dy = dyp + dyn
-
-        # Expand image
-        # TODO: This can probelmatic for some existing functions because it
-        # places NaNs in the output image.
-        shape_new = (2*dy+ny, 2*dx+nx)
-        im_full = pad_or_cut_to_size(im_full, shape_new, fill_val=fill_val)
-
-        xc_new, yc_new = (xc+dx, yc+dy)
-        x1 = round_int(xc_new - nx_sub/2 + 0.5)
-        x2 = x1 + nx_sub
-        y1 = round_int(yc_new - ny_sub/2 + 0.5)
-        y2 = y1 + ny_sub
-    # else:
-    #     xc_new, yc_new = (xc, yc)
-    #     shape_new = sh_orig
-
-    # if (x1<0) or (y1<0):
-    #     dx = -1*x1 if x1<0 else 0
-    #     dy = -1*y1 if y1<0 else 0
-
-    #     # Expand image
-    #     shape_new = (2*dy+shape_new[0], 2*dx+shape_new[1])
-    #     im_full = pad_or_cut_to_size(im_full, shape_new)
-
-    #     xc_new, yc_new = (xc_new+dx, yc_new+dy)
-    #     x1 = round_int(xc_new - nx_sub/2 + 0.5)
-    #     x2 = x1 + nx_sub
-    #     y1 = round_int(yc_new - ny_sub/2 + 0.5)
-    #     y2 = y1 + ny_sub
-
-    # Perform pixel shifting
-    if delx!=0 or dely!=0:
-        kwargs['interp'] = interp
-        # Use fshift function if only performing integer shifts
-        if float(delx).is_integer() and float(dely).is_integer():
-            shift_func = fshift
-
-        # If NaNs are present, print warning and fill with zeros
-        ind_nan = np.isnan(im_full)
-        if np.any(ind_nan):
-            # _log.warning('NaNs present in image. Filling with zeros.')
-            im_full = im_full.copy()
-            im_full[ind_nan] = 0
-
-        kwargs['pad'] = True
-        im_full = shift_func(im_full, delx, dely, **kwargs)
-        # shift NaNs and add back in
-        if np.any(ind_nan):
-            ind_nan = fshift(ind_nan, delx, dely, pad=True) > 0  # Maybe >0.5?
-            im_full[ind_nan] = np.nan
-    
-    im = im_full[y1:y2, x1:x2]
-    
-    if return_xy:
-        return im, xy_ind
-    else:
-        return im
-
-
-def crop_image(im, xysub, xyloc=None, **kwargs):
-    """Crop input image around center using integer offsets only
-
-    If size is exceeded, then the image is expanded and filled with NaNs.
-
-    Parameters
-    ----------
-    im : ndarray
-        Input image.
-    xysub : int, tuple, or list
-        Size of subarray to extract. If a single integer is provided,
-        then a square subarray is extracted. If a tuple or list is
-        provided, then it should be of the form (ny, nx).
-    xyloc : tuple or list
-        (x,y) pixel location around which to crop the image. If None,
-        then the image center is used.
-    
-    Keyword Args
-    ------------
-    delx : int or float
-        Integer pixel offset in x-direction. This shifts the image by
-        some number of pixels in the x-direction. Positive values shift
-        the image to the right.
-    dely : int or float
-        Integer pixel offset in y-direction. This shifts the image by
-        some number of pixels in the y-direction. Positive values shift
-        the image up.
-    shift_func : function
-        Function to use for shifting. Default is `fourier_imshift`.
-        If delx and dely are both integers, then `fshift` is used.
-    interp : str
-        Interpolation method to use for shifting. Default is 'cubic'.
-        Options are 'nearest', 'linear', 'cubic', and 'quadratic'
-        for `fshift`.
-    return_xy : bool
-        If True, then return the x and y indices used to crop the
-        image prior to any shifting from `delx` and `dely`; 
-        (x1, x2, y1, y2). Default is False.
-    fill_val : float
-        Value to use for filling in the empty pixels after shifting.
-        Default = np.nan.
-    """
-    
-    return crop_observation(im, None, xysub, xyloc=xyloc, **kwargs)
 
 
 def correl_images(im1, im2, mask=None):
@@ -1393,9 +1363,7 @@ def correl_images(im1, im2, mask=None):
     else:
         return correl_fin.squeeze()
 
-#### Best fit offset
-
-def sample_crosscorr(corr, xcoarse, ycoarse, xfine, yfine):
+def sample_crosscorr(corr, xcoarse, ycoarse, xfine, yfine, method='cubic'):
     """Perform a cubic interpolation over the coarse grid"""
     
     from scipy.interpolate import griddata
@@ -1406,7 +1374,7 @@ def sample_crosscorr(corr, xcoarse, ycoarse, xfine, yfine):
     xv, yv = np.meshgrid(xfine, yfine)
     
     # Perform cubic interpolation
-    corr_fine = griddata(xycoarse, corr.flatten(), (xv, yv), method='cubic')
+    corr_fine = griddata(xycoarse, corr.flatten(), (xv, yv), method=method)
     
     return corr_fine
 
@@ -1419,27 +1387,11 @@ def find_max_crosscorr(corr, xsh_arr, ysh_arr, sub_sample):
     ysh_fine_vals = np.arange(ysh_arr[0],ysh_arr[-1],sub_sample)
     corr_all_fine = sample_crosscorr(corr,  xsh_arr, ysh_arr, xsh_fine_vals, ysh_fine_vals)
 
-    # Fine position
+    # Find position
     iymax, ixmax = np.argwhere(corr_all_fine==np.nanmax(corr_all_fine))[0]
     xsh_fine, ysh_fine = xsh_fine_vals[ixmax], ysh_fine_vals[iymax]
-    
+
     return xsh_fine, ysh_fine
-
-
-def apply_pixel_diffusion(im, pixel_sigma):
-    """Apply charge diffusion kernel to image
-    
-    Approximates the effect of charge diffusion as a Gaussian.
-
-    Parameters
-    ----------
-    im : ndarray
-        Input image.
-    pixel_sigma : float
-        Sigma of Gaussian kernel in units of image pixels.
-    """
-    from scipy.ndimage import gaussian_filter
-    return gaussian_filter(im, pixel_sigma)
 
 def gen_psf_offsets(psf, crop=65, xlim_pix=(-3,3), ylim_pix=(-3,3), dxy=0.05,
     psf_osamp=1, shift_func=fourier_imshift, ipc_vals=None, kipc=None,
@@ -1461,8 +1413,6 @@ def gen_psf_offsets(psf, crop=65, xlim_pix=(-3,3), ylim_pix=(-3,3), dxy=0.05,
         single output amplifier.
     """
     
-    from .image_manip import add_ipc, add_ppc
-
     psf_is_even = np.mod(psf.shape[0] / psf_osamp, 2) == 0
     psf_is_odd = not psf_is_even
     crop_is_even = np.mod(crop, 2) == 0
@@ -1546,7 +1496,7 @@ def gen_psf_offsets(psf, crop=65, xlim_pix=(-3,3), ylim_pix=(-3,3), dxy=0.05,
 
 
 def find_offsets(input, psf, crop=65, xlim_pix=(-3,3), ylim_pix=(-3,3), 
-    shift_func=fshift, rin=0, rout=None, dxy_coarse=0.05, dxy_fine=0.01):
+    shift_func=fshift, rin=0, rout=None, dxy_coarse=0.05, dxy_fine=0.01, **kwargs):
     """Find offsets necessary to align observations with input psf"""
         
     # Check if input is a dictionary 
@@ -1793,18 +1743,20 @@ def find_pix_offsets(imsub_arr, psfs, psf_osamp=1, kipc=None, kppc=None,
         Exclude pixel exterior to this radius.
     xylim_pix : tuple or list
         Initial coarse step range in detector pixels.
+    corr_avg : bool
+        If True, then find best position using weighted average of the cross-correlation
+        map along the x and y axes. Otherwise, return the position of the maximum value 
+        in the map.
     """
 
-    # from webbpsf_ext.image_manip import frebin
-    # from webbpsf_ext.imreg_tools import find_offsets_phase
-    # from webbpsf_ext.imreg_tools import gen_psf_offsets, find_offsets2
-    from .image_manip import add_ipc, add_ppc
-
     sh_orig = imsub_arr.shape
+    sh_orig_psfs = psfs.shape
     if len(sh_orig)==2:
         imsub_arr = [imsub_arr]
-        psfs = [psfs]
         bpmask_arr = [bpmask_arr]
+        psfs = [psfs]
+    elif len(sh_orig_psfs)==2:
+        psfs = [psfs]
 
     def find_pix_phase(im, psf, psf_osamp, kipc=None, kppc=None, diffusion_sigma=None, crop=15):
         # Rebin to detector sampling
@@ -1825,7 +1777,7 @@ def find_pix_offsets(imsub_arr, psfs, psf_osamp=1, kipc=None, kppc=None,
         return res
 
     def find_pix_cc(im, psf, psf_osamp, kipc=None, kppc=None, diffusion_sigma=None,
-                    crop=33, bpmask=None, **kwargs):
+                    crop=33, bpmask=None, return_grids=False, **kwargs):
         """Cross correlate by shifting PSF in fine steps"""
 
         # Create a series of coarse offset PSFs to find initial estimate
@@ -1833,42 +1785,71 @@ def find_pix_offsets(imsub_arr, psfs, psf_osamp=1, kipc=None, kppc=None,
         if xylim_pix is not None:
             xlim_pix = ylim_pix = xylim_pix
         else:
-            xlim_pix = ylim_pix = (-10,10)
-        res = gen_psf_offsets(psf, crop=crop, xlim_pix=xlim_pix, ylim_pix=xlim_pix, dxy=1,
-                              psf_osamp=psf_osamp, kipc=None, kppc=None, diffusion_sigma=None,
-                              prog_leave=False, shift_func=fshift, **kwargs)
-        xoff_pix, yoff_pix, psf_sh_all = res
+            xlim_pix = ylim_pix = (-5,5)
+        res1 = kwargs.get('res1', None)
+        if res1 is None:
+            res1 = gen_psf_offsets(psf, crop=crop, xlim_pix=xlim_pix, ylim_pix=xlim_pix, dxy=0.5,
+                                   psf_osamp=psf_osamp, kipc=None, kppc=None, diffusion_sigma=None,
+                                   prog_leave=False, shift_func=fshift, **kwargs)
+        xoff_pix, yoff_pix, psf_sh_all = res1
+
         # psf_sh_all are cropped to `crop`` value, whereas im is still input size
         xsh_coarse, ysh_coarse = find_offsets2(im, xoff_pix, yoff_pix, psf_sh_all, crop=crop,
                                                dxy_fine=0.5, bpmasks=bpmask, prog_leave=False, **kwargs)
 
         # Create finer grid off offset PSFs
-        xlim_pix = (xsh_coarse-1.5, xsh_coarse+1.5)
-        ylim_pix = (ysh_coarse-1.5, ysh_coarse+1.5)
-        res = gen_psf_offsets(psf, crop=crop, xlim_pix=xlim_pix, ylim_pix=ylim_pix, dxy=0.05,
-                              psf_osamp=psf_osamp, kipc=kipc, kppc=kppc, diffusion_sigma=diffusion_sigma,
-                              prog_leave=False, **kwargs)
+        xlim_pix = (xsh_coarse-0.25, xsh_coarse+0.25)
+        ylim_pix = (ysh_coarse-0.25, ysh_coarse+0.25)
+        res2 = kwargs.get('res2', None)
+        if res2 is None:
+            res2 = gen_psf_offsets(psf, crop=crop, xlim_pix=xlim_pix, ylim_pix=ylim_pix, dxy=0.01,
+                                   psf_osamp=psf_osamp, kipc=kipc, kppc=kppc, diffusion_sigma=diffusion_sigma,
+                                   prog_leave=False, **kwargs)
+        xoff_pix, yoff_pix, psf_sh_all = res2
 
         # Perform cross correlations and interpolate at 0.01 pixel
-        xoff_pix, yoff_pix, psf_sh_all = res
-        return find_offsets2(im, xoff_pix, yoff_pix, psf_sh_all, crop=crop,
-                             dxy_fine=0.01, bpmasks=bpmask, prog_leave=False, **kwargs)
+        xsh_fine, ysh_fine = find_offsets2(im, xoff_pix, yoff_pix, psf_sh_all, crop=crop,
+                                           dxy_fine=0.005, bpmasks=bpmask, prog_leave=False, **kwargs)
+        res = (xsh_fine, ysh_fine)
+
+        if return_grids:
+            return res, res1, res2
+        else:
+            return res
 
     xysh_pix = []
-    for i, im in enumerate(imsub_arr):
+    iter_vals = trange(len(imsub_arr), desc='Image XCorr', leave=False) if len(imsub_arr)>=10 else range(len(imsub_arr))
+    for i in iter_vals:
+        im = imsub_arr[i]
+        # If only a single PSF was passed, then use it for all images
+        psf = psfs[i] if sh_orig==sh_orig_psfs else psfs[0]
         if phase:
             crop = 15 if crop is None else crop
-            res = find_pix_phase(im, psfs[i], psf_osamp, kipc=kipc, kppc=kppc, 
+            res = find_pix_phase(im, psf, psf_osamp, kipc=kipc, kppc=kppc, 
                                  diffusion_sigma=diffusion_sigma, crop=crop)
         else:
             crop = 21 if crop is None else crop
-            res = find_pix_cc(im, psfs[i], psf_osamp, kipc=kipc, kppc=kppc, 
+
+            # Only set to return grid on first iteration
+            if len(sh_orig)==3 and len(sh_orig_psfs)==2 and i==0:
+                return_grids = True
+            else:
+                return_grids = False
+
+            res = find_pix_cc(im, psf, psf_osamp, kipc=kipc, kppc=kppc, 
                               diffusion_sigma=diffusion_sigma, crop=crop, 
-                              bpmask=bpmask_arr[i], **kwargs)
+                              bpmask=bpmask_arr[i], return_grids=return_grids, **kwargs)
+            
+            # Set res1 and res2 going forward
+            if return_grids and i==0:
+                res, res1, res2 = res
+                kwargs['res1'] = res1
+                kwargs['res2'] = res2
+
         xysh_pix.append(res)
         
     if len(sh_orig)==2:
-        return xysh_pix[0]
+        return np.asarray(xysh_pix[0])
     else:
         return np.asarray(xysh_pix)
     
@@ -2078,12 +2059,13 @@ def find_relevant_guiding_file(sci_filename, outdir=None, verbose=False, uncals=
 
     delta_times = np.array(guide_timestamps-obs_end_time, float)
     # want to find the minimum delta which is at least positive
-    # print(delta_times)
-    delta_times[delta_times<0] = np.nan
-    # print(delta_times)
-
-    wmatch = np.argmin(np.abs(delta_times))
-    wmatch = np.where(delta_times ==np.nanmin(delta_times))[0][0]
+    # try:
+    delta_times_nan = delta_times.copy()
+    delta_times_nan[delta_times<0] = np.nan
+    wmatch = np.where(delta_times_nan == np.nanmin(delta_times_nan))[0][0]
+    # except IndexError:
+    #     delta_times = np.abs(delta_times)
+    #     wmatch = np.where(delta_times == np.nanmin(delta_times))[0][0]
     delta_min = (guide_timestamps-obs_end_time)[wmatch]
 
     if verbose:
@@ -2174,11 +2156,10 @@ def get_jitter_balls(files_sci, indir, outdir=None, verbose=False, return_raw=Fa
 
         return xoff_all, yoff_all
 
+@plt.style.context('webbpsf_ext.wext_style')
 def plot_jitter_balls(xoff_all, yoff_all, sci_filename=None, fov_size=50, 
                       save=False, save_dir=None, return_fixaxes=False):
     """ Plot jitter ball positions"""
-
-    import matplotlib.pyplot as plt
 
     # Check that xoff_all and yoff_all are lists
     if not isinstance(xoff_all, list) or not isinstance(yoff_all, list):

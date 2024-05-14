@@ -897,6 +897,7 @@ class OTE_WFE_Drift_Model(OTE_Linear_Model_WSS):
         return hdul
     
     
+@plt.style.context('webbpsf_ext.wext_style')
 def plot_im(im, fig, ax, vlim=None, add_cbar=True, return_ax=False, 
     extent=None, cmap='RdBu_r'):
     """
@@ -918,7 +919,7 @@ def plot_im(im, fig, ax, vlim=None, add_cbar=True, return_ax=False,
     elif return_ax:
         return ax
     
-
+@plt.style.context('webbpsf_ext.wext_style')
 def plot_opd(hdul, index=1, opd0=None, vlim1=None, vlim2=None):
     """ 
     Plot OPDs images (full or delta)

@@ -6,9 +6,9 @@
 
 *Authors*: Jarron Leisenring (U. of Arizona, Steward Observatory)
 
-`webbpsf_ext` provides some enhancements to the [WebbPSF](https://webbpsf.readthedocs.io) package for PSF creation. This follows the [pyNRC](https://github.com/JarronL/pynrc) implementation for storing and retrieving JWST PSFs. In particular, this module generates and saves polynomial coefficients to quickly create unique instrument PSFs as a function of wavelength, focal plane position, wavefront error drift from thermal distortions.
+`webbpsf_ext` provides some enhancements to the [WebbPSF](https://webbpsf.readthedocs.io) package for PSF creation. This follows the [pyNRC](https://github.com/JarronL/pynrc) implementation for storing and retrieving JWST PSFs. In particular, this module generates and saves polynomial coefficients to quickly create unique instrument PSFs as a function of wavelength, focal plane position, and wavefront error drift from thermal distortions.
 
-More specifically, `webbpsf_ext` uses WebbPSF to generate a series of monochromatic PSF simulations, then produces polynomial fits to each pixel. Storing the coefficients rather than a library of PSFS allows for quick creation (via matrix multiplication) of PSF images for an arbitrary number of wavelengths (subject to hardware memory limitations, of course). The applications range from quickly creating PSFs for many different stellar types over wide bandpasses to generating a large number of monochromatic PSFs for spectral dispersion.
+More specifically, `webbpsf_ext` uses WebbPSF to generate a series of monochromatic PSF simulations, then produces polynomial fits to each pixel. Storing the coefficients rather than a library of PSFS allows for quick creation (via matrix multiplication) of PSF images for an arbitrary number of wavelengths (subject to hardware memory limitations). The applications range from quickly creating PSFs for many different stellar types over wide bandpasses to generating a large number of monochromatic PSFs for spectral dispersion.
 
 In addition, each science instrument PSF is dependent on the detector position due to field-dependent wavefront errors. Such changes are tracked in WebbPSF, but it becomes burdensome to generate new PSFs from scratch at each location, especially for large starfields. Instead, these changes can be stored by the fitting the residuals of the PSF coefficients across an instrument's field of view, then interpolating for an arbitrary location. A similar scheme can be achieved for coronagraphic occulters, where the PSF changes as the source position moves with respect to the mask.
 
@@ -66,3 +66,19 @@ export WEBBPSF_EXT_PATH='$HOME/data/webbpsf_ext_data/'
 ```
 
 If this is not set, then a `psf_coeff` sub-directory is created in the already existing `WEBBPSF_PATH` directory.
+
+## Synphot Data Directory
+
+If you have not already done so, you will need to provide a data files for the required `synphot` and `stsynphot` packages . These are used to generate the monochromatic PSFs and to calculate the throughput of the instrument. Data files for Synphot are distributed through the
+[Calibration Reference Data System](https://www.stsci.edu/hst/instrumentation/reference-data-for-calibration-and-tools). They are expected to follow a certain directory structure under the root directory, identified by the ``PYSYN_CDBS`` environment variable that *must* be
+set prior to using this package.
+
+1. Download [cdbs.tar.gz](https://arizona.box.com/shared/static/cbkxlwvokml7n1gref8nw3neg98kzcwn.gz) [approx. 900 MB] to obtain the full set of Synphot data files. Or download a minimum subset of files [here](https://arizona.box.com/shared/static/wgq7ymqsp8e7jfno8yk6o2igbnqlad8z.zip) [approx 50 MB].
+2. Untar into a directory of your choosing.
+3. Set the environment variable ``PYSYN_CDBS`` to point to that directory. For example, in .bashrc shell file, add:
+
+```bash
+export PYSYN_CDBS='$HOME/data/cdbs/'
+```
+
+After re-sourcing your shell, you should now be able to successfully ``import synphot, stsynphot`` in a Python session.

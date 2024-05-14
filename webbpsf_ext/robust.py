@@ -21,7 +21,7 @@ For additional information about the original IDL routines, see:
   http://idlastro.gsfc.nasa.gov/contents.html#C17
 """
 
-from __future__ import division, print_function#, unicode_literals
+from __future__ import division
 
 import numpy as np
 from numpy import median, nanmedian
@@ -31,7 +31,8 @@ _log = logging.getLogger('webbpsf_ext')
 
 __version__ = '0.4'
 __revision__ = '$Rev$'
-__all__ = ['medabsdev','biweightMean', 'mean', 'mode', 'std', \
+__all__ = ['median', 'nanmedian', 'mean', 'mode', \
+           'medabsdev','biweightMean', 'std', \
            'checkfit', 'linefit', 'polyfit', \
            '__version__', '__revision__', '__all__']
 

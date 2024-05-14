@@ -1,4 +1,8 @@
 import numpy as np
+import matplotlib
+import matplotlib.pyplot as plt
+
+
 import logging
 _log = logging.getLogger('webbpsf_ext')
 
@@ -1103,6 +1107,7 @@ class jwst_point(object):
             
         self.position_offsets_act = offsets_actual
 
+    @plt.style.context('webbpsf_ext.wext_style')
     def plot_main_apertures(self, fill=False, **kwargs):
         """ Plot main SIAF telescope apertures.
         
@@ -1140,6 +1145,7 @@ class jwst_point(object):
         
         pysiaf.siaf.plot_main_apertures(fill=fill, **kwargs)
         
+    @plt.style.context('webbpsf_ext.wext_style')
     def plot_inst_apertures(self, subarrays=False, fill=False, **kwargs):
         """ Plot all apertures in this instrument's SIAF.
         
@@ -1194,6 +1200,7 @@ class jwst_point(object):
 
         return self.siaf_inst.plot(subarrays=subarrays, fill=fill, **kwargs)
     
+    @plt.style.context('webbpsf_ext.wext_style')
     def plot_ref_aperture(self, fill=False, **kwargs):
         """ Plot reference aperture
 
@@ -1244,6 +1251,7 @@ class jwst_point(object):
         siaf_ap.plot(fill=fill, **kwargs)
         siaf_ap._attitude_matrix = None
         
+    @plt.style.context('webbpsf_ext.wext_style')
     def plot_obs_aperture(self, fill=False, **kwargs):
         """ Plot observed aperture
 
@@ -1295,6 +1303,7 @@ class jwst_point(object):
         siaf_ap._attitude_matrix = None
 
 
+@plt.style.context('webbpsf_ext.wext_style')
 def plotAxes(ax, position=(0.9,0.1), label1='V2', label2='V3', dir1=[-1,0], dir2=[0,1],
              angle=0, alength=0.12, width=1.5, headwidth=6, color='w', alpha=1,
              fontsize=11):
