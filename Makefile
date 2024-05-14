@@ -78,10 +78,10 @@ dist: clean ## builds source and wheel package
 	ls -lh dist
 
 release-test: dist ## package and upload a release to TestPyPI
-	twine upload --repository pypitest dist/*
+	twine upload --repository wext_test dist/*
 
 release: dist ## package and upload a release; tag on github
-	twine upload dist/*
+	twine upload --repository webbpsf_ext dist/*
 	python setup.py tag
 
 tag: ## package and upload a release; tag on github
