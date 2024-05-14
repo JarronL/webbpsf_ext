@@ -10,6 +10,8 @@ from setuptools import setup, find_packages
 from codecs import open
 from os import path
 
+from git_helpers import get_git_devstr
+
 # root = path.abspath(path.dirname(__file__))
 
 # Rather than importing (which will fail due to __init__.py)
@@ -17,9 +19,9 @@ from os import path
 exec(open('webbpsf_ext/version.py').read())
 version = __version__
 
-# RELEASE = 'dev' not in version
-# if not RELEASE:
-#     version += get_git_devstr(False)
+RELEASE = 'dev' not in version
+if not RELEASE:
+    version += get_git_devstr(False)
 
 ################################################################
 # shortcuts for publishing, tagging, testing
@@ -74,14 +76,12 @@ if sys.argv[-1] == 'test':
 #     history = history_file.read()
 
 install_requires = [
-    'numpy>=1.19.0',
-    'matplotlib>=3.3.0',
-    'scipy>=1.5.0',
-    'pysynphot>=2.0.0',
-    'poppy>=1.0.1',
-    'webbpsf>=1.0.0',
+    'matplotlib>=3.7.1',
     'tqdm>4',
-    'astropy>=4.2',
+    'synphot>=1.2.1',
+    'poppy>=1.1.0',
+    'webbpsf>=1.2.0',
+    'pysiaf>=0.22.0',
 ]
 
 setup_requirements = ['pytest-runner', ]
@@ -107,7 +107,7 @@ setup(
  
     # Author details
     author='Jarron Leisenring',
-    author_email='jarronl@email.arizona.edu',
+    author_email='jarronl@arizona.edu',
     license='MIT license',
     keywords='jwst psf nircam miri simulation',
     # See https://pypi.python.org/pypi?%3Aaction=list_classifiers
@@ -127,12 +127,9 @@ setup(
 
         # Specify the Python versions you support here. In particular, ensure
         # that you indicate whether you support Python 2, Python 3 or both.
-        #'Programming Language :: Python :: 2',
-        #'Programming Language :: Python :: 2.7',
         'Programming Language :: Python :: 3',
-        'Programming Language :: Python :: 3.7',
-        'Programming Language :: Python :: 3.8',
-        'Programming Language :: Python :: 3.9',
+        'Programming Language :: Python :: 3.10',
+        'Programming Language :: Python :: 3.11',
     ],
 
     # You can just specify the packages manually here if your project is

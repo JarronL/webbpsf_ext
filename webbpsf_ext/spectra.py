@@ -1,3 +1,4 @@
+from pathlib import Path
 import numpy as np
 import matplotlib
 import matplotlib.pyplot as plt
@@ -11,25 +12,24 @@ import astropy.units as u
 from scipy.interpolate import griddata, RegularGridInterpolator, interp1d
 
 from . import conf
-from .utils import S
+from . import synphot_ext as s_ext
 from .bandpasses import miri_filter, nircam_filter
-from .maths import jl_poly, jl_poly_fit, binned_statistic
 from .robust import medabsdev
 
 import logging
 _log = logging.getLogger('webbpsf_ext')
 
 from . import __path__
-_spec_dir = __path__[0] + '/spectral_data/'
+_spec_dir = Path(__path__[0]) / 'spectral_data/'
 
 def BOSZ_filename(Teff, metallicity, log_g, res, carbon=0, alpha=0):
     """ Generate filename for BOSZ spectrum. """
 
     teff_str = f't{Teff:04.0f}'
     logg_str = 'g{:02.0f}'.format(int(log_g*10))
-    metal_str = 'mp{:02.0f}'.format(int(abs(metallicity*10)+0.5))
 
     # Metallicity [M/H]
+    metal_str = 'mp{:02.0f}'.format(int(abs(metallicity*10)+0.5))
     if metallicity<0:
         metal_str = metal_str.replace('p', 'm')
 
@@ -51,15 +51,18 @@ def BOSZ_filename(Teff, metallicity, log_g, res, carbon=0, alpha=0):
 
     return fname
 
-def download_BOSZ_spectrum(Teff, metallicity, log_g, res, carbon=0, alpha=0):
+def download_BOSZ_spectrum(Teff, metallicity, log_g, res, carbon=0, alpha=0,
+                           outdir=None):
 
     import requests
 
-    res_dir = os.path.join(_spec_dir, 'bosz_grids', 'R{}'.format(res))
+    if outdir is None:
+        res_dir = os.path.join(_spec_dir, 'bosz_grids', 'R{}'.format(res))
 
-    # Create resolution directory if it doesn't exists
-    if not os.path.isdir(res_dir):
-        os.makedirs(res_dir)
+        # Create resolution directory if it doesn't exists
+        if not os.path.isdir(res_dir):
+            os.makedirs(res_dir)
+        outdir = res_dir
 
     # Generate URL directory that file is saved in
     url_base = 'http://archive.stsci.edu/missions/hlsp/bosz/fits/'
@@ -84,17 +87,17 @@ def download_BOSZ_spectrum(Teff, metallicity, log_g, res, carbon=0, alpha=0):
         req.raise_for_status()
 
     # Save file to directory
-    outpath = os.path.join(res_dir, fname)
+    outpath = os.path.join(outdir, fname)
     _log.info(f'Saving file to: {outpath}')
     open(outpath, 'wb').write(req.content)
 
 
 def BOSZ_spectrum(Teff, metallicity, log_g, res=2000, interpolate=True, 
-    carbon=0, alpha=0, **kwargs):
+    carbon=0, alpha=0, fluxout='photlam', **kwargs):
     """BOSZ stellar atmospheres (Bohlin et al 2017).
 
     Read in a spectrum from the BOSZ stellar atmosphere models database.
-    Returns a Pysynphot spectral object. Wavelength values range between
+    Returns a synphot spectral object. Wavelength values range between
     1000 Angstroms to 32 microns. Teff range from 3500K to 36000K.
 
     This function interpolates the model grid by reading in those models
@@ -132,11 +135,11 @@ def BOSZ_spectrum(Teff, metallicity, log_g, res=2000, interpolate=True,
     https://archive.stsci.edu/prepds/bosz/
     """
 
-    model_dir = _spec_dir + 'bosz_grids/'
-    res_dir = model_dir + 'R{}/'.format(res)
+    model_dir = os.path.join(_spec_dir, 'bosz_grids/')
+    res_dir = os.path.join(model_dir, f'R{res:.0f}/')
 
     if not os.path.isdir(model_dir):
-        raise IOError('BOSZ model directory does not exist: {}'.format(model_dir))
+        raise IOError(f'BOSZ model directory does not exist: {model_dir}')
     if not os.path.isdir(res_dir):
         os.makedirs(res_dir)
         # raise IOError('Resolution directory does not exist: {}'.format(res_dir))
@@ -230,11 +233,12 @@ def BOSZ_spectrum(Teff, metallicity, log_g, res=2000, interpolate=True,
         flux_all = []
         for i, f in enumerate(fnames):
             # Download files that don't currently exist
-            if not os.path.isfile(res_dir+f):
+            fpath = os.path.join(res_dir, f)
+            if not os.path.isfile(fpath):
                 download_BOSZ_spectrum(teff_all[i], metal_all[i], logg_all[i], res,
                                        carbon=carbon, alpha=alpha)
 
-            d = fits.getdata(res_dir+f, 1)
+            d = fits.getdata(fpath, 1)
             wave_all.append(d['Wavelength'])
             flux_all.append(d['SpecificIntensity'] * weights[i])
 
@@ -248,19 +252,80 @@ def BOSZ_spectrum(Teff, metallicity, log_g, res=2000, interpolate=True,
         metallicity = metal_all[ind]
 
         # Download files if doesn't exist
-        if not os.path.isfile(res_dir+f):
+        fpath = os.path.join(res_dir, f)
+        if not os.path.isfile(fpath):
             download_BOSZ_spectrum(Teff, metallicity, log_g, res,
                                    carbon=carbon, alpha=alpha)
 
-        d = fits.getdata(res_dir+f, 1)
+        d = fits.getdata(fpath, 1)
         wfin = d['Wavelength']
         ffin = np.pi * d['SpecificIntensity'] # erg/s/cm^2/A
 
 
     name = 'BOSZ(Teff={},z={},logG={})'.format(Teff, metallicity, log_g)
-    sp = S.ArraySpectrum(wfin[:-1], ffin[:-1], 'angstrom', 'flam', name=name)
+    sp = s_ext.ArraySpectrum(wave=wfin[:-1], flux=ffin[:-1], 
+                             waveunits='angstrom', fluxunits='flam', name=name)
 
+    sp.convert(fluxout)
     return sp
+
+
+#  TABLE 2: Suggested models for specific stellar types
+#      Type    T_{eff}    log_g       Kurucz model
+#      O3V      44852     +3.92      ckp00_45000[g45]
+#      O5V      40862     +3.92      ckp00_41000[g45]
+#      O5.5V    39865     +3.92      ckp00_40000[g40]
+#      O6V      38867     +3.92      ckp00_39000[g40]
+#      O6.5V    37870     +3.92      ckp00_38000[g40]
+#      O7V      36872     +3.92      ckp00_37000[g40]
+#      O7.5V    35874     +3.92      ckp00_36000[g40]
+#      O8V      34877     +3.92      ckp00_35000[g40]
+#      O8.5     33879     +3.92      ckp00_34000[g40]
+#      O9V      32882     +3.92      ckp00_33000[g40]
+#      O9.5     31884     +3.92      ckp00_32000[g40]
+#      B0V      30000     +3.90      ckp00_30000[g40]
+#      B1V      25400     +3.90      ckp00_25000[g40]
+#      B3V      18700     +3.94      ckp00_19000[g40]
+#      B5V      15400     +4.04      ckp00_15000[g40]
+#      B8V      11900     +4.04      ckp00_12000[g40]
+#      A0V       9520     +4.14       ckp00_9500[g40]
+#      A1V       9230     +4.10       ckp00_9250[g40]
+#      A3V       8270     +4.20       ckp00_8750[g40]
+#      A5V       8200     +4.29       ckp00_8250[g40]
+#      F0V       7200     +4.34       ckp00_7250[g40]
+#      F2V       6890     +4.34       ckp00_7000[g40]
+#      F5V       6440     +4.34       ckp00_6500[g40]
+#      F8V       6200     +4.40       ckp00_6250[g40]
+#      G0V       6030     +4.39       ckp00_6000[g45]
+#      G2V       5860     +4.40       ckp00_5750[g45]
+#      G8V       5570     +4.50       ckp00_5500[g45]
+#      K0V       5250     +4.49       ckp00_5250[g45]
+#      K2V       4780      +4.5       ckp00_4750[g45]
+#      K4V       4560      +4.5       ckp00_4500[g45]
+#      K5V       4350     +4.54       ckp00_4250[g45]
+#      K7V       4060      +4.5       ckp00_4000[g45]
+#      M0V       3850     +4.59       ckp00_3750[g45]
+#      M2V       3580     +4.64       ckp00_3500[g45]
+#      M6V       3050     +5.00       ckp00_3500[g50]
+#      B0III    29000     +3.34      ckp00_29000[g35]
+#      B5III    15000     +3.49      ckp00_15000[g35]
+#      G0III     5850     +2.94       ckp00_5750[g30]
+#      G5III     5150     +2.54       ckp00_5250[g25]
+#      K0III     4750     +2.14       ckp00_4750[g20]
+#      K5III     3950     +1.74       ckp00_4000[g15]
+#      M0III     3800     +1.34       ckp00_3750[g15]
+#      BOI      26000     +2.84      ckp00_26000[g30]
+#      B5I      13600     +2.44      ckp00_14000[g25]
+#      AOI       9730     +2.14       ckp00_9750[g20]
+#      A5I       8510     +2.04       ckp00_8500[g20]
+#      F0I       7700     +1.74       ckp00_7750[g20]
+#      F5I       6900     +1.44       ckp00_7000[g15]
+#      G0I       5550     +1.34       ckp00_5500[g10]
+#      G5I       4850     +1.14       ckp00_4750[g10]
+#      K0I       4420     +0.94       ckp00_4500[g10]
+#      K5I       3850     +0.00       ckp00_3750[g00]
+#      M0I       3650     -0.10       ckp00_3750[g00]
+#      M2I       3600     -0.10       ckp00_3500[g00]
 
 def stellar_spectrum(sptype, *renorm_args, **kwargs):
     """Stellar spectrum
@@ -291,7 +356,7 @@ def stellar_spectrum(sptype, *renorm_args, **kwargs):
     renorm_args : tuple
         Renormalization arguments to pass to ``sp.renorm()``.
         The order (after ``sptype``) should be (``value, units, bandpass``)
-        Bandpass should be a :mod:`pysynphot.obsbandpass` type.
+        Bandpass should be a :class:`s_ext.Bandpass` type.
 
     Keyword Args
     ------------
@@ -309,17 +374,17 @@ def stellar_spectrum(sptype, *renorm_args, **kwargs):
         Default: 2000.
     interpolate : bool
         Interpolate BOSZ spectrum using a weighted average of grid points
-        surrounding the desired input parameters. Default is True.
+        surrounding the desired input parameters. 
         Default: True
     """
 
     def call_bosz(v0,v1,v2,**kwargs):
         if v0 > 35000:
             v0 = 35000
-            _log.warn("BOSZ models stop at 35000K. Setting Teff=35000.")
+            _log.warning("BOSZ models stop at 35000K. Setting Teff=35000.")
         if v0 < 3500:
             v0 = 3500
-            _log.warn("BOSZ models start at 3500K. Setting Teff=3500.")
+            _log.warning("BOSZ models start at 3500K. Setting Teff=3500.")
         return BOSZ_spectrum(v0, v1, v2, **kwargs)
 
 
@@ -426,12 +491,12 @@ def stellar_spectrum(sptype, *renorm_args, **kwargs):
             if ('ck04models' in catname.lower()) and (v0<3500):
                 _log.warn("ck04 models stop at 3500K. Setting Teff=3500.")
                 v0 = 3500
-            sp = S.Icat(catname, v0, v1, v2)
+            sp = s_ext.Icat(catname, v0, v1, v2)
         sp.name = '({:.0f},{:0.1f},{:0.1f})'.format(v0,v1,v2)
     elif 'flat' in sptype.lower():
-        # waveset = S.refs._default_waveset
-        # sp = S.ArraySpectrum(waveset, 0*waveset + 10.)
-        sp = S.FlatSpectrum(10, fluxunits='photlam')
+        # waveset = s_ext.refs._default_waveset
+        # sp = s_ext.ArraySpectrum(waveset, 0*waveset + 10.)
+        sp = s_ext.FlatSpectrum(10, fluxunits='photlam')
         sp.name = 'Flat spectrum in photlam'
     elif sptype in sptype_list:
         v0, v1, v2 = lookuptable[sptype]
@@ -442,7 +507,7 @@ def stellar_spectrum(sptype, *renorm_args, **kwargs):
             if ('ck04models' in catname.lower()) and (v0<3500):
                 _log.warn("ck04 models start at 3500K. Setting Teff=3500.")
                 v0 = 3500
-            sp = S.Icat(catname, v0, v1, v2)
+            sp = s_ext.Icat(catname, v0, v1, v2)
         sp.name = sptype
     else: # Interpolate values for undefined sptype
         # Sort the list and return their rank values
@@ -464,7 +529,7 @@ def stellar_spectrum(sptype, *renorm_args, **kwargs):
             if ('ck04models' in catname.lower()) and (v0<3500):
                 _log.warn("ck04 models stop at 3500K. Setting Teff=3500.")
                 v0 = 3500
-            sp = S.Icat(catname, v0, v1, v2)
+            sp = s_ext.Icat(catname, v0, v1, v2)
         sp.name = sptype
 
     #print(int(v0),v1,v2)
@@ -477,13 +542,39 @@ def stellar_spectrum(sptype, *renorm_args, **kwargs):
 
     return sp
 
+def download_votable(target_name, radius=1, **kwargs):
+    """Download a VOTable from the Vizier archive
+
+    Reads from Vizier URL: 
+    
+        f'ttps://vizier.cds.unistra.fr/viz-bin/sed?-c={target}&-c.rs={radius}'
+
+    Parameters
+    ----------
+    target_name : str
+        Name of target to search for in Vizier.
+        Will replace spaces with '+'.
+    radius : float
+        Search radius in arcseconds.
+
+    Returns
+    -------
+    astropy.table.Table
+    """
+    from astropy.table import Table
+
+    target = target_name.replace(' ' ,'+')
+    tbl = Table.read(f"https://vizier.cds.unistra.fr/viz-bin/sed?-c={target}&-c.rs={radius}")
+
+    return tbl
+
 
 # Class for creating an input source spectrum
 class source_spectrum(object):
     """Model source spectrum
 
     The class ingests spectral information of a given target
-    and generates :mod:`pysynphot.spectrum` model fit to the
+    and generates :class:`s_ext.Spectrum` model fit to the
     known photometric SED. Two model routines can fit. The
     first is a very simple scale factor that is applied to the
     input spectrum, while the second takes the input spectrum
@@ -498,12 +589,13 @@ class source_spectrum(object):
         and log_g are specified.
     mag_val : float
         Magnitude of input bandpass for initial scaling of spectrum.
-    bp : :mod:`pysynphot.obsbandpass`
+    bp : :class:`s_ext.Bandpass`
         Bandpass to apply initial mag_val scaling.
-    votable_file: string
+    votable_input: string
         VOTable name that holds the source's photometry. The user can
         find the relevant data at http://vizier.u-strasbg.fr/vizier/sed/
         and click download data.
+        Or astropy Table with column 'sed_freq', 'sed_flux', 'sed_eflux'.
 
     Keyword Args
     ------------
@@ -513,6 +605,8 @@ class source_spectrum(object):
         Metallicity [Fe/H] value ranging from -2.5 to 0.5.
     log_g : float
         Surface gravity (log g) from 0 to 5.
+    Av : float
+        Add extinction to the stellar spectrum
     catname : str
         Catalog name, including 'bosz', 'ck04models', and 'phoenix'.
         Default is 'bosz', which comes from :func:`BOSZ_spectrum`.
@@ -520,7 +614,10 @@ class source_spectrum(object):
         Spectral resolution to use (200 or 2000 or 20000).
     interpolate : bool
         Interpolate spectrum using a weighted average of grid points
-        surrounding the desired input parameters.
+        surrounding the desired input parameters. Default: True
+    radius : float
+        Search radius in arcseconds for Vizier query.
+        Default: 1 arcsec.
 
     Example
     -------
@@ -536,14 +633,14 @@ class source_spectrum(object):
     >>> # Read in stellar spectrum model and normalize to Ks = 5.24
     >>> src = source_spectrum(name, 'F0V', 5.24, bp_k, vot,
     >>>                       Teff=7430, metallicity=-0.47, log_g=4.35)
-    >>> # Fit model to photometry from 0.1 - 30 micons
-    >>> # Saves pysynphot spectral object at src.sp_model
+    >>> # Fit model to photometry from 0.1 - 30 microns
+    >>> # Saves synphot spectral object at src.sp_model
     >>> src.fit_SED(wlim=[0.1,30])
     >>> sp_sci = src.sp_model
 
     """
 
-    def __init__(self, name, sptype, mag_val, bp, votable_file,
+    def __init__(self, name, sptype, mag_val, bp, votable_input,
                  Teff=None, metallicity=None, log_g=None, Av=None, **kwargs):
 
         self.name = name
@@ -560,8 +657,8 @@ class source_spectrum(object):
 
         if Av is not None:
             Rv = 4
-            self.sp0 = self.sp0 * S.Extinction(Av/Rv,name='mwrv4')
-            self.sp_lowres = self.sp_lowres * S.Extinction(Av/Rv,name='mwrv4')
+            self.sp0 = self.sp0 * s_ext.Extinction(Av/Rv,name='mwrv4')
+            self.sp_lowres = self.sp_lowres * s_ext.Extinction(Av/Rv,name='mwrv4')
 
             self.sp0 = self.sp0.renorm(mag_val, 'vegamag', bp)
             self.sp_lowres = self.sp_lowres.renorm(mag_val, 'vegamag', bp)
@@ -572,26 +669,55 @@ class source_spectrum(object):
         # Init model to None
         self.sp_model = None
 
-        # Readin photometry
-        self.votable_file = votable_file
+        # Backwards compatible with votable_file
+        if kwargs.get('votable_file') is not None:
+            self.votable_input = kwargs.get('votable_file')
+        else:
+            self.votable_input = votable_input
+        
+        # Read in photometry
+        self._check_file(**kwargs)
         self._gen_table()
         self._combine_fluxes()
 
+    def _check_file(self, **kwargs):
+        """Check if VOTable exists. If not, download from Vizier."""
+
+        # Check if votable_input is a string
+        is_str = isinstance(self.votable_input, str)
+
+        # If VOTable does not exist, download from Vizier.
+        # Stores input as astropy table.
+        if is_str and (not os.path.exists(self.votable_input)):
+            _log.warning('VOTable does not exist. Downloading from Vizier...')
+            tbl = download_votable(self.name, **kwargs)
+
+            # Save VOTable to file
+            save_name = self.votable_input
+            _log.info('Writing VOTable to {}'.format(save_name))
+            tbl.write(save_name, format='votable')
+
+            self.votable_input = tbl
+
     def _gen_table(self):
         """Read VOTable and convert to astropy table"""
-        # Import source SED from VOTable
-        from astropy.io.votable import parse_single_table
-        table = parse_single_table(self.votable_file)
-        # Convert to astropy table
-        tbl = table.to_table()
 
-        freq = tbl['sed_freq'] * 1e9 # Hz
-        wave_m = 2.99792458E+08 / freq
-        wave_A = 1e10 * wave_m
+        if isinstance(self.votable_input, str):
+            # Import source SED from VOTable
+            from astropy.io.votable import parse_single_table
+            table = parse_single_table(self.votable_input)
+            # Convert to astropy table
+            tbl = table.to_table()
+        else:
+            # Otherwise assume already astropy Table
+            tbl = self.votable_input
+
+        # Convert from frequency to wavelength
+        freq = tbl['sed_freq']
+        wave_A = freq.to(u.Angstrom, equivalencies=u.spectral())
 
         # Add wavelength column
         col = tbl.Column(wave_A, 'sed_wave')
-        col.unit = 'Angstrom'
         tbl.add_column(col)
 
         # Sort flux monotomically with wavelength
@@ -602,7 +728,7 @@ class source_spectrum(object):
     def _combine_fluxes(self):
         """Average duplicate data points
 
-        Creates average of duplicate point stored in self.sp_phot.
+        Creates average of duplicate points stored in self.sp_phot.
         """
 
         table = self.table
@@ -625,19 +751,26 @@ class source_spectrum(object):
         uflux = np.array(uflux)
         uflux_e = np.array(uflux_e)
 
-        # Photometric data points
-        sp_phot = S.ArraySpectrum(uwave, uflux,
-                                  waveunits=wave.unit.name,
-                                  fluxunits=flux.unit.name)
-        sp_phot.convert('Angstrom')
-        sp_phot.convert('Flam')
+        # Check if uwave and uflux are astropy units
+        if isinstance(uwave, table.Column):
+            uwave = uwave.value
+        if isinstance(uflux, table.Column):
+            uflux = uflux.value
+        if isinstance(uflux, table.Column):
+            uflux_e = uflux_e.value
 
-        sp_phot_e = S.ArraySpectrum(uwave, uflux_e,
+        # Photometric data points
+        sp_phot = s_ext.ArraySpectrum(uwave, uflux,
+                                      waveunits=wave.unit.name,
+                                      fluxunits=flux.unit.name)
+        sp_phot.convert(self.sp_lowres.waveunits)
+        sp_phot.convert(self.sp_lowres.fluxunits)
+
+        sp_phot_e = s_ext.ArraySpectrum(uwave, uflux_e,
                                     waveunits=wave.unit.name,
                                     fluxunits=eflux.unit.name)
-        sp_phot_e.convert('Angstrom')
-        sp_phot_e.convert('Flam')
-
+        sp_phot_e.convert(self.sp_lowres.waveunits)
+        sp_phot_e.convert(self.sp_lowres.fluxunits)
 
         self.sp_phot = sp_phot
         self.sp_phot_e = sp_phot_e
@@ -695,9 +828,11 @@ class source_spectrum(object):
 
         sp = self.sp_lowres if sp is None else sp
 
-        bb_flux = x[0] * self.bb_jy(sp.wave/1e4, x[1]) * (sp.wave/1e4)**x[2] / 1e17
-        sp_bb = S.ArraySpectrum(sp.wave, bb_flux, fluxunits='Jy')
-        sp_bb.convert('Flam')
+        wave = sp.wave
+
+        bb_flux = x[0] * self.bb_jy(wave/1e4, x[1]) * (wave/1e4)**x[2] / 1e17
+        sp_bb = s_ext.ArraySpectrum(wave, bb_flux, fluxunits='Jy')
+        sp_bb.convert('photlam')
 
         return sp + sp_bb
 
@@ -788,7 +923,8 @@ class source_spectrum(object):
         res = least_squares(self.func_resid, x0, bounds=(0,np.inf), loss=loss,
                             kwargs=kwargs)
         out = res.x
-        if verbose: print(out)
+        if verbose: 
+            print('SED best-fit params:', out)
 
         # Which model are we using?
         func_model = self.model_IRexcess if IR_excess else self.model_scale
@@ -798,6 +934,7 @@ class source_spectrum(object):
 
         self.sp_model = sp_model
 
+    @plt.style.context('webbpsf_ext.wext_style')
     def plot_SED(self, ax=None, return_figax=False, xr=[0.3,30], yr=None,
                      units='Jy', **kwargs):
 
@@ -960,7 +1097,7 @@ class planets_sb12(object):
     """
 
 	# Define default self.base_dir
-    _base_dir = _spec_dir + 'spiegel/'
+    _base_dir = os.path.join(_spec_dir, 'spiegel/')
 
     def __init__(self, atmo='hy1s', mass=1, age=100, entropy=10.0, distance=10,
                  accr=False, mmdot=None, mdot=None, accr_rin=2.0, truncated=False,
@@ -1170,11 +1307,13 @@ class planets_sb12(object):
     def entropy(self):
         """Initial entropy (8.0-13.0)"""
         return self._entropy
+    
+    def export_pysynphot(self, **kwargs):
+        _log.warning("export_pysynphot() is deprecated. Use export_synphot() instead.")
+        return self.export_synphot(**kwargs)
 
-    def export_pysynphot(self, waveout='angstrom', fluxout='flam'):
-        """Output to :mod:`pysynphot.spectrum` object
-
-        Export object settings to a :mod:`pysynphot.spectrum`.
+    def export_synphot(self, waveout='angstrom', fluxout=None):
+        """Output to synphot spectrum object
 
         Parameters
         ----------
@@ -1185,10 +1324,11 @@ class planets_sb12(object):
         """
         w = self.wave; f = self.flux
         name = (re.split('[\.]', self.file))[0]#[5:]
-        sp = S.ArraySpectrum(w, f, name=name, waveunits=self.waveunits, fluxunits=self.fluxunits)
+        sp = s_ext.ArraySpectrum(w, f, name=name, waveunits=self.waveunits, fluxunits=self.fluxunits)
 
         sp.convert(waveout)
-        sp.convert(fluxout)
+        if fluxout is not None:
+            sp.convert(fluxout)
 
         if self.accr and (self.mmdot>0):
             sp_mdot = sp_accr(self.mmdot, rin=self.rin,
@@ -1197,14 +1337,14 @@ class planets_sb12(object):
             # Interpolate accretion spectrum at each wavelength
             # and create new composite spectrum
             fnew = np.interp(sp.wave, sp_mdot.wave, sp_mdot.flux)
-            sp_new = S.ArraySpectrum(sp.wave, sp.flux+fnew,
+            sp_new = s_ext.ArraySpectrum(sp.wave, sp.flux+fnew,
                                      waveunits=waveout, fluxunits=fluxout)
             return sp_new
         else:
             return sp
 
 def sp_accr(mmdot, rin=2, dist=10, truncated=False,
-            waveout='angstrom', fluxout='flam', base_dir=None):
+            waveout='angstrom', fluxout='photlam', base_dir=None):
 
     """Exoplanet accretion flux values (Zhu et al., 2015).
 
@@ -1241,7 +1381,7 @@ def sp_accr(mmdot, rin=2, dist=10, truncated=False,
     """
 
     base_dir = _spec_dir if base_dir is None else base_dir
-    fname = base_dir + 'zhu15_accr.txt'
+    fname = os.path.join(base_dir, 'zhu15_accr.txt')
 
     names = ('MMdot', 'Rin', 'Tmax', 'J', 'H', 'K', 'L', 'M', 'N', 'J2', 'H2', 'K2', 'L2', 'M2', 'N2')
     tbl = ascii.read(fname, guess=True, names=names)
@@ -1280,18 +1420,18 @@ def sp_accr(mmdot, rin=2, dist=10, truncated=False,
     mag_vals += 5*np.log10(dist/10)
     flux_Jy = 10**(-mag_vals/2.5) * zpt
 
-    sp = S.ArraySpectrum(wcen*1e4, flux_Jy, fluxunits='Jy')
+    sp = s_ext.ArraySpectrum(wcen*1e4, flux_Jy, fluxunits='Jy')
     sp.convert(waveout)
     sp.convert(fluxout)
 
     return sp
 
 
-def jupiter_spec(dist=10, waveout='angstrom', fluxout='flam', base_dir=None):
+def jupiter_spec(dist=10, waveout='angstrom', fluxout='photlam', base_dir=None):
     """Jupiter as an Exoplanet
     
     Read in theoretical Jupiter spectrum from Irwin et al. 2014 and output
-    as a :mod:`pysynphot.spectrum`.
+    as a synphot spectrum.
     
     Parameters
     ===========
@@ -1305,8 +1445,8 @@ def jupiter_spec(dist=10, waveout='angstrom', fluxout='flam', base_dir=None):
         Location of tabulated file irwin_2014_ref_spectra.txt.
     """
 
-    base_dir = _spec_dir + 'solar_system/' if base_dir is None else base_dir
-    fname = base_dir + 'irwin_2014_ref_spectra.txt'
+    base_dir = os.path.join(_spec_dir, 'solar_system/') if base_dir is None else base_dir
+    fname = os.path.join(base_dir, 'irwin_2014_ref_spectra.txt')
 
     # Column 1: Wavelength (in microns)
     # Column 2: 100*Ap/Astar (Earth-Sun Primary Transit)
@@ -1340,7 +1480,7 @@ def jupiter_spec(dist=10, waveout='angstrom', fluxout='flam', base_dir=None):
     # flux in f_lambda
     fspec *= area        # erg s-1 cm^-2 A^-1
 
-    sp = S.ArraySpectrum(wspec, fspec, fluxunits='flam')
+    sp = s_ext.ArraySpectrum(wspec, fspec, fluxunits='flam')
     sp.convert(waveout)
     sp.convert(fluxout)
     
@@ -1360,12 +1500,21 @@ def linder_table(file=None, **kwargs):
         Default is ``BEX_evol_mags_-3_MH_0.00.dat``.
     """
 
-    # Default file to read and load
+    # Default input directory
+    indir = os.path.join(_spec_dir, 'linder', 'isochrones/')
+    # Default file
     if file is None:
-        indir = _spec_dir + 'linder/isochrones/'
-        file = indir + 'BEX_evol_mags_-3_MH_0.00.dat'
+        file = 'BEX_evol_mags_-3_MH_0.00.dat'
 
-    with open(file) as f:
+    # First check if file is in indir
+    file_path = os.path.join(indir, file)
+    if not os.path.exists(file_path):
+        # Check if file is in current directory
+        file_path = file
+        if not os.path.exists(file):
+            raise ValueError(f"File {file_path} not found.")
+
+    with open(file_path) as f:
         content = f.readlines()
 
     content = [x.strip('\n') for x in content]
@@ -1376,7 +1525,7 @@ def linder_table(file=None, **kwargs):
     
     content_arr = []
     for line in content[4:]:
-        arr = np.array(line.split()).astype(np.float)
+        arr = np.array(line.split()).astype(float)
         if len(arr)>0: 
             content_arr.append(arr)
     
@@ -1387,7 +1536,8 @@ def linder_table(file=None, **kwargs):
     
     return tbl
     
-def linder_filter(table, filt, age, dist=10, cond_file=None, **kwargs):
+def linder_filter(table, filt, age, dist=10, cond_file=None, 
+                  extrapolate=True, **kwargs):
     """Linder Mags vs Mass Arrays
     
     Given a Linder table, filter name, and age (Myr), return arrays of MJup 
@@ -1408,10 +1558,23 @@ def linder_filter(table, filt, age, dist=10, cond_file=None, **kwargs):
         Name of NIRCam filter.
     age : float
         Age in Myr of planet.
+
+    Keyword Args
+    =============
     dist : float
         Distance in pc. Default is 10pc (abs mag).
-    """    
+    cond_file : string
+        COND file to use for extrapolating to higher masses.
+    extrapolate : bool
+        If True, extrapolate to higher masses using COND models
+        as well as lower masses using a lower order polynomial fit.
+    """
+
+    from .maths import jl_poly, jl_poly_fit
     
+    # In the event of underscores within name
+    filt = filt.split('_')[0]
+
     try:
         x = table[filt]
     except KeyError:
@@ -1439,7 +1602,7 @@ def linder_filter(table, filt, age, dist=10, cond_file=None, **kwargs):
             bp = nircam_filter(filt)
         except:
             bp = miri_filter(filt)
-        wint = bp.avgwave() / 1e4
+        wint = bp.avgwave().to_value('um')
         x = np.array([np.interp(wint, wvals, row) for row in tbl_arr])
         
     y = table['log(Age/yr)'].data
@@ -1448,48 +1611,53 @@ def linder_filter(table, filt, age, dist=10, cond_file=None, **kwargs):
 
     #######################################################
     # Grab COND model data to fill in higher masses
-    base_dir = _spec_dir + 'cond_models/'
-    if cond_file is None: 
-        cond_file = base_dir + 'model.AMES-Cond-2000.M-0.0.JWST.Vega'
+    if extrapolate:
+        base_dir = os.path.join(_spec_dir, 'cond_models/')
+        if cond_file is None: 
+            cond_file = os.path.join(base_dir, 'model.AMES-Cond-2000.M-0.0.JWST.Vega')
+        npsave_file = os.path.join(cond_file + f'.{filt}.npy')
+    
+        if os.path.exists(npsave_file):
+            mag2, age2, mass2_mjup = np.load(npsave_file)
+        else:
+            d_tbl2 = cond_table(file=cond_file) # Dictionary of ages
+            mass2_mjup = []
+            mag2 = []
+            age2 = []
+            for k in d_tbl2.keys():
+                tbl2 = d_tbl2[k]
+                mass2_mjup = mass2_mjup + list(tbl2['MJup'].data)
+                try:
+                    mag2 = mag2 + list(tbl2[filt+'a'].data) # NIRCam
+                except KeyError:        
+                    filt_alt = {'F1065C':'F1000W', 'F1140C':'F1130W', 'F1550C':'F1500W', 'F2300C':'F2100W'}
+                    fcol = filt_alt.get(filt, filt)
+                    mag2 = mag2 + list(tbl2[fcol].data)  # MIRI
+                age2 = age2 + list(np.ones(len(tbl2))*k)
         
-    npsave_file = cond_file + '.{}.npy'.format(filt)
-    
-    try:
-        mag2, age2, mass2_mjup = np.load(npsave_file)
-    except:
-        d_tbl2 = cond_table(file=cond_file) # Dictionary of ages
-        mass2_mjup = []
-        mag2 = []
-        age2 = []
-        for k in d_tbl2.keys():
-            tbl2 = d_tbl2[k]
-            mass2_mjup = mass2_mjup + list(tbl2['MJup'].data)
-            try:
-                mag2 = mag2 + list(tbl2[filt+'a'].data) # NIRCam
-            except KeyError:        
-                filt_alt = {'F1065C':'F1000W', 'F1140C':'F1130W', 'F1550C':'F1500W', 'F2300C':'F2100W'}
-                fcol = filt_alt.get(filt, filt)
-                mag2 = mag2 + list(tbl2[fcol].data)  # MIRI
-            age2 = age2 + list(np.ones(len(tbl2))*k)
-    
-        mass2_mjup = np.array(mass2_mjup)
-        mag2 = np.array(mag2)
-        age2 = np.array(age2)
-    
-        mag_age_mass = np.array([mag2,age2,mass2_mjup])
-        np.save(npsave_file, mag_age_mass)    
+            mass2_mjup = np.array(mass2_mjup)
+            mag2 = np.array(mag2)
+            age2 = np.array(age2)
+        
+            mag_age_mass = np.array([mag2,age2,mass2_mjup])
+            np.save(npsave_file, mag_age_mass)    
 
-    # Irregular grid
-    x2 = mag2
-    y2 = np.log10(age2 * 1e6)
-    z2 = mass2_mjup * 318 # Convert to Earth masses
-    zlog2 = np.log10(z2)
-    
+        # Irregular grid
+        x2 = mag2
+        age2 = age2 * 1e6 # Convert from Myr to years
+        y2 = np.log10(age2)
+        z2 = mass2_mjup * 318 # Convert to Earth masses
+        zlog2 = np.log10(z2)
+
 
     #######################################################
     
-    xlim = np.array([x2.min(),x.max()+5]) # magntidue limits
-    ylim = np.array([6,10])  # 10^6 to 10^10 yrs
+    if extrapolate:
+        xlim = np.array([x2.min(),x.max()+5]) # magnitude limits
+        ylim = np.array([6,10])  # 10^6 to 10^10 yrs
+    else:
+        xlim = np.array([x.min(),x.max()]) # magnitude limits
+        ylim = np.array([y.min(),y.max()]) # age limits
     dx = (xlim[1] - xlim[0]) / 200
     dy = (ylim[1] - ylim[0]) / 200
     xgrid = np.arange(xlim[0], xlim[1]+dx, dx)
@@ -1497,56 +1665,85 @@ def linder_filter(table, filt, age, dist=10, cond_file=None, **kwargs):
     X, Y = np.meshgrid(xgrid, ygrid)
     
     zgrid = griddata((x,y), zlog, (X, Y), method='cubic')
-    zgrid_cond = griddata((x2,y2), zlog2, (X, Y), method='cubic')
-
     # There will be NaN's along the border that need to be replaced
     ind_nan = np.isnan(zgrid)
-    # First replace with COND grid
-    zgrid[ind_nan] = zgrid_cond[ind_nan]
-    ind_nan = np.isnan(zgrid)
+    if extrapolate:
+        # Replace some NaNs with COND grid
+        zgrid_cond = griddata((x2,y2), zlog2, (X, Y), method='cubic')
+        zgrid[ind_nan] = zgrid_cond[ind_nan]
+        ind_nan = np.isnan(zgrid)
     
     # Remove rows/cols with NaN's
-    xgrid2, ygrid2, zgrid2 = _trim_nan_array(xgrid, ygrid, zgrid)
+    # x is mag, y is log(age), z is log(mass)
+    # xgrid2, ygrid2, zgrid2 = _trim_nan_array(xgrid, ygrid, zgrid)
+    xgrid2, ygrid2, zgrid2 = xgrid, ygrid, zgrid
 
     # Create regular grid interpolator function for extrapolation at NaN's
+    # Need to us linear method over cubic if not trimming NaN's
+    fill_value = None if extrapolate else np.nan
     func = RegularGridInterpolator((ygrid2,xgrid2), zgrid2, method='linear',
-                                   bounds_error=False, fill_value=None)
+                                   bounds_error=False, fill_value=fill_value)
 
-    # Fix NaN's in zgrid and rebuild func
-    pts = np.array([Y[ind_nan], X[ind_nan]]).transpose()
-    zgrid[ind_nan] = func(pts)
+    if extrapolate:
+        # Fix NaN's in zgrid and rebuild func
+        pts = np.array([Y[ind_nan], X[ind_nan]]).transpose()
+        zgrid[ind_nan] = func(pts)
 
-    func = RegularGridInterpolator((ygrid,xgrid), zgrid, method='linear',
-                                   bounds_error=False, fill_value=None)
+        func = RegularGridInterpolator((ygrid,xgrid), zgrid, method='linear',
+                                       bounds_error=False, fill_value=None)
     
     # Get mass limits for series of magnitudes at a given age                                
     age_log = np.log10(age*1e6)
     mag_abs_arr = xgrid
     pts = np.array([(age_log,xval) for xval in mag_abs_arr])
     mass_arr = 10**func(pts) / 318.0 # Convert to MJup
+
+    # Get rid of any NaN's
+    ind_use = ~np.isnan(mass_arr)
+    mag_abs_arr = mag_abs_arr[ind_use]
+    mass_arr = mass_arr[ind_use]
     
-    # TODO: Rewrite this function to better extrapolate to lower and higher masses
-    # For now, fit low order polynomial
+    # Sort by magnitude
     isort = np.argsort(mag_abs_arr)
     mag_abs_arr = mag_abs_arr[isort]
     mass_arr = mass_arr[isort]
-    ind_fit = mag_abs_arr<x.max()
-    lxmap = [mag_abs_arr.min(), mag_abs_arr.max()]
-    xfit = np.append(mag_abs_arr[ind_fit], mag_abs_arr[-1])
-    yfit = np.log10(np.append(mass_arr[ind_fit], mass_arr[-1]))
-    cf = jl_poly_fit(xfit, yfit, deg=4, use_legendre=False, lxmap=lxmap)
-    mass_arr = 10**jl_poly(mag_abs_arr,cf)
 
+    # At a given magnitude, if there is a lower mass at a brighter magnitude, 
+    # replace mass value
+    # for i, mag in enumerate(mag_abs_arr):
+    #     ind = mag_abs_arr < mag
+    #     if ind.sum() > 0:
+    #         mass_arr[i] = np.min([mass_arr[i], mass_arr[ind].min()])
 
+    # Fit low order polynomial
+    ifit = mag_abs_arr<x.max()
+    xfit = np.append(mag_abs_arr[ifit], mag_abs_arr[-1])
+    yfit = np.log10(np.append(mass_arr[ifit], mass_arr[-1]))
+    # Perform a bunch of polynomial fits and find chi^2 to choose optimal degree
+    use_lg = False
+    lxmap = None # np.array([mag_abs_arr.min(), mag_abs_arr.max()])
+    chi2_arr = []
+    deg_arr = np.arange(1,8)
+    for deg in deg_arr:
+        cf = jl_poly_fit(xfit, yfit, deg=deg, use_legendre=use_lg, lxmap=lxmap)
+        vals_fit = 10**jl_poly(mag_abs_arr,cf, use_legendre=use_lg, lxmap=lxmap)
+        chi2 = np.sum((mass_arr - vals_fit)**2)
+        chi2_arr.append(chi2)
+    ind_deg = np.argmin(chi2_arr)
+    deg = deg_arr[ind_deg]
+    cf = jl_poly_fit(xfit, yfit, deg=deg, use_legendre=use_lg, lxmap=lxmap)
+    mass_arr_fit = 10**jl_poly(mag_abs_arr,cf, use_legendre=use_lg, lxmap=lxmap)
+
+    # Convert to apparent magnitude
     mag_app_arr = mag_abs_arr + 5*np.log10(dist/10.0)
 
     # Sort by mass
-    isort = np.argsort(mass_arr)
-    mass_arr = mass_arr[isort]
+    mass_arr_fin = mass_arr_fit
+    isort = np.argsort(mass_arr_fin)
+    mass_arr_fin = mass_arr_fin[isort]
     mag_app_arr = mag_app_arr[isort]
 
-
-    return mass_arr, mag_app_arr
+    return mass_arr_fin, mag_app_arr
     
 
 def cond_table(age=None, file=None, **kwargs):
@@ -1590,12 +1787,21 @@ def cond_table(age=None, file=None, **kwargs):
 
         return tbl
 
-    # Default file to read and load
+    # Default input directory
+    base_dir = os.path.join(_spec_dir, 'cond_models/')
+    # Default file
     if file is None:
-        base_dir = _spec_dir + 'cond_models/'
-        file = base_dir + 'model.AMES-Cond-2000.M-0.0.JWST.Vega'
+        file = 'model.AMES-Cond-2000.M-0.0.JWST.Vega'
 
-    with open(file) as f:
+    # First check if file is in indir
+    file_path = os.path.join(base_dir, file)
+    if not os.path.exists(file_path):
+        # Check if file is in current directory
+        file_path = file
+        if not os.path.exists(file):
+            raise ValueError(f"File {file_path} not found.")
+
+    with open(file_path) as f:
         content = f.readlines()
 
     content = [x.strip('\n') for x in content]
@@ -1647,6 +1853,8 @@ def cond_filter(table, filt, module='A', dist=None, **kwargs):
     by age.
     """
 
+    from .maths import jl_poly, jl_poly_fit
+
     # Table Data
     try:
         fcol = filt + module.lower()
@@ -1681,6 +1889,111 @@ def cond_filter(table, filt, module='A', dist=None, **kwargs):
         mag_arr = mag_arr + 5*np.log10(dist/10)
 
     return mass_arr, mag_arr
+
+def mass_sensitivity_table(filt, dist=10, extrapolate=True, lfile=None, age_arr=None, 
+                           save=True, save_dir=None, return_tbl=False, **kwargs):
+    """ Generate a table of mass sensitivities for a given filter
+
+    Interpolate mass and brightnesses of BEX evolutionary tracks. Creates a
+    table with first column of magnitudes, second column is log10(Jy), and
+    subsequent columns are log10(Mass) for each age in Myr.
+
+
+    Parameters
+    ----------
+    filt : str
+        Name of filter
+    dist : float
+        Distance in parsecs
+    extrapolate : bool
+        If True, extrapolate to higher masses using COND models
+        as well as lower masses using a lower order polynomial fit.
+    lfile : str
+        Filename of Linder evolutionary tracks. If None, then use
+        BEX_evol_mags_-3_MH_0.00.dat (warm start HELIOS grid).
+    age_arr : array_like
+        Array of ages in Myr. If None, then defualts to [1,2,...,20] Myr.
+    save : bool
+        Save table to file.
+    save_dir : str
+        Directory to save table. If None, then save to current directory.
+    return_tbl : bool
+        Return astropy table object
+    """
+
+    from .bandpasses import nircam_filter
+
+    if lfile is None:
+        lfile = 'BEX_evol_mags_-3_MH_0.00.dat'
+    tbl = linder_table(file=lfile)
+
+    if age_arr is None:
+        age_arr = np.arange(1, 21, 1)
+
+    mass_all = []
+    mag_all = []
+    for age in age_arr:
+        mass_data, mag_data = linder_filter(tbl, filt, age, dist, 
+                                            extrapolate=extrapolate, **kwargs)
+        mass_all.append(mass_data)
+        mag_all.append(mag_data)
+
+    # Interpolate masses onto a common magnitude array
+    dm = 0.1
+    if extrapolate:
+        mag_arr_min = np.round(np.max([np.min(m) for m in mag_all])+dm, 1)
+        mag_arr_max = np.round(np.max([np.max(m) for m in mag_all])-dm, 1)
+    else:
+        mag_arr_min = np.round(np.min([np.min(m) for m in mag_all])+dm, 1)
+        mag_arr_max = np.round(np.max([np.max(m) for m in mag_all])-dm, 1)
+    mag_arr = np.arange(mag_arr_min, mag_arr_max, 0.1)
+
+    # Convert magnitudes to Jy
+    # Get 0th magnitude flux density
+    bp = nircam_filter(filt)
+    sp = stellar_spectrum('G2V', 0, 'vegamag', bp)
+    obs = s_ext.Observation(sp, bp, binset=bp.wave)
+    flux0 = obs.effstim('Jy')
+    fluxJy_arr = 10**(-0.4*mag_arr)*flux0
+
+    mass_arr = []
+    for i, mass_vals in enumerate(mass_all):
+        # 
+        fn = interp1d(mag_all[i], mass_vals, kind='cubic', 
+                    bounds_error=False, fill_value=np.nan)
+        mass_arr.append(fn(mag_arr))
+
+        # isort = np.argsort(mag_all[i])
+        # xvals = mag_all[i][isort]
+        # yvals = mass_vals[isort]
+        # mass_arr.append(np.interp(mag_arr, xvals, yvals))
+
+    mass_arr = np.array(mass_arr)
+    log_jy = np.log10(fluxJy_arr)
+
+    # Create astropy table
+    data = np.concatenate([[mag_arr], [log_jy], np.log10(mass_arr)])
+    names = ['mag', 'log_Jy'] + [f'{age}Myr' for age in age_arr]
+    tbl = Table(data=data.T, names=names)
+
+    tbl['mag'].info.format = '.1f'
+    tbl['log_Jy'].info.format = '.3f'
+    for k in tbl.colnames[2:]:
+        tbl[k].info.format = '.4f'
+
+    if save:
+        ext_str = '_extrapolated' if extrapolate else ''
+        save_name = f'{filt}__{lfile[:-4]}__d{dist}pc{ext_str}.txt'
+        if save_dir is not None:
+            save_path = os.path.join(save_dir, save_name)
+        else:
+            save_path = save_name
+        tbl.write(save_path, overwrite=True, format='ascii.fixed_width', 
+            bookend=False, delimiter=None, delimiter_pad='  ')
+
+    if return_tbl:
+        return tbl
+
 
 def _trim_nan_array(xgrid, ygrid, zgrid):
     """NaN Trimming of Array Image
@@ -1766,17 +2079,12 @@ def _trim_nan_array(xgrid, ygrid, zgrid):
 def companion_spec(bandpass, model='SB12', atmo='hy3s', mass=10, age=100, entropy=10,
     dist=10, accr=False, mmdot=None, mdot=None, accr_rin=2, truncated=False,
     sptype=None, renorm_args=None, Av=0, **kwargs):
-    """ Determine flux (ph/sec) of a companion 
-
-    Add exoplanet information that will be used to generate a point
-    source image using a spectrum from Spiegel & Burrows (2012).
-
-    Coordinate convention is for +N up and +E to left.
+    """ Create a spectrum of a companion 
 
     Parameters
     ----------
-    bandpass : :mod:`pysynphot.obsbandpass`
-        A Pysynphot bandpass object.
+    bandpass : :class:`s_ext.Bandpass`
+        A synphot bandpass object.
     model : str
         Exoplanet model to use ('sb12', 'bex', 'cond') or
         stellar spectrum model ('bosz', 'ck04models', 'phoenix').
@@ -1793,7 +2101,7 @@ def companion_spec(bandpass, model='SB12', atmo='hy3s', mass=10, age=100, entrop
     sptype : str
         Instead of using a exoplanet spectrum, specify a stellar type.
     renorm_args : dict
-        Pysynphot renormalization arguments in case you want
+        Renormalization arguments in case you want
         very specific luminosity in some bandpass.
         Includes (value, units, bandpass).
 
@@ -1827,10 +2135,10 @@ def companion_spec(bandpass, model='SB12', atmo='hy3s', mass=10, age=100, entrop
             'accr_rin': accr_rin, 'truncated': truncated
         }
         planet = planets_sb12(**pl)
-        sp = planet.export_pysynphot()
+        sp = planet.export_synphot()
         
         # Check spectral overlap
-        sp_overlap = S.observation.check_overlap(bandpass, sp)
+        sp_overlap = bandpass.check_overlap(sp)
 
         # Ensure there is a data point at the edge of the input bandpass
         if sp_overlap != 'full':
@@ -1838,61 +2146,62 @@ def companion_spec(bandpass, model='SB12', atmo='hy3s', mass=10, age=100, entrop
             f_end = sp.sample(w_end)
             w_new = np.append(sp.wave, w_end)
             f_new = np.append(sp.flux, f_end)
-            sp = S.ArraySpectrum(w_new, f_new, waveunits=sp.waveunits, fluxunits=sp.fluxunits)
+            sp = s_ext.ArraySpectrum(w_new, f_new, waveunits=sp.waveunits, fluxunits=sp.fluxunits)
 
         del_mag = 0
         # Add accretion mag offsets for BEX and COND models
-        if (model.lower() in ['bex', 'cond']) and (accr==True):
+        if (model.lower() in ['bex', 'cond']) and (accr == True):
             if sp_overlap != 'full':
                 _log.warn(f"Overlap between spectrum and bandpass: {sp_overlap}.")
                 _log.warn("Accretion calculation may be unreliable.")
             pl = {
-                'atmo': atmo, 'mass': mass, 'age': age,  
+                'atmo': atmo, 'mass': mass, 'age': age,
                 'entropy': entropy, 'distance': dist,
-                'accr': True, 'mmdot': mmdot, 'mdot': mdot, 
+                'accr': True, 'mmdot': mmdot, 'mdot': mdot,
                 'accr_rin': accr_rin, 'truncated': truncated
             }
             planet = planets_sb12(**pl)
             # Get spectrum from accretion component
             sp_mdot = sp_accr(planet.mmdot, rin=planet.rin,
-                                dist=planet.distance, truncated=planet.truncated,
-                                waveout=sp.waveunits, fluxout=sp.fluxunits)
+                              dist=planet.distance, truncated=planet.truncated,
+                              waveout=sp.waveunits, fluxout=sp.fluxunits)
             # Interpolate accretion spectrum at each wavelength
             fnew = np.interp(sp.wave, sp_mdot.wave, sp_mdot.flux)
-            sp_new = S.ArraySpectrum(sp.wave, fnew, waveunits=sp.waveunits, 
-                                        fluxunits=sp.fluxunits)
-            obs_accr = S.Observation(sp_new, bandpass, binset=bandpass.wave)
+            sp_new = s_ext.ArraySpectrum(sp.wave, fnew, waveunits=sp.waveunits,
+                                     fluxunits=sp.fluxunits)
+            obs_accr = s_ext.Observation(sp_new, bandpass, binset=bandpass.wave)
             del_mag -= obs_accr.effstim('vegamag')
-            # Make new spectrum 
-            sp = planet.export_pysynphot()
+            # Make new spectrum
+            sp = planet.export_synphot()
 
         # Add extinction from the disk
         if Av>0: 
             Rv = 4.0  
-            sp_ext = sp * S.Extinction(Av/Rv, name='mwrv4')
+            sp_ext = sp * s_ext.Extinction(Av/Rv, name='mwrv4')
 
             if model.lower() in ['bex', 'cond']:
                 if sp_overlap != 'full':
                     _log.warn(f"Overlap between spectrum and bandpass: {sp_overlap}.")
                     _log.warn("Extinction calculation may be unreliable.")
-                obs = S.Observation(sp, bandpass, binset=bandpass.wave)
-                obs_ext = S.Observation(sp_ext, bandpass, binset=bandpass.wave)
+                obs = s_ext.Observation(sp, bandpass, binset=bandpass.wave)
+                obs_ext = s_ext.Observation(sp_ext, bandpass, binset=bandpass.wave)
                 del_mag += obs_ext.effstim('vegamag') - obs.effstim('vegamag')
             sp = sp_ext
                         
         # For BEX and COND models, set up renorm_args
         # unless renorm_args is already set
+        filt = bandpass.name.split('_')[0]
         if (renorm_args is not None) and (len(renorm_args) > 0):
             pass
         elif model.lower()=='bex':
             table = linder_table()
-            mass_arr, mag_arr = linder_filter(table, bandpass.name, age, dist=dist)
+            mass_arr, mag_arr = linder_filter(table, filt, age, dist=dist)
             mag = np.interp(mass, mass_arr, mag_arr)
             mag += del_mag  # Apply extinction and/or accretion offsets
             renorm_args = (mag, 'vegamag', bandpass)
         elif model.lower()=='cond':
             table = cond_table(age)
-            mass_arr, mag_arr = cond_filter(table, bandpass.name, dist=dist)
+            mass_arr, mag_arr = cond_filter(table, filt, dist=dist)
             mag = np.interp(mass, mass_arr, mag_arr)
             mag += del_mag  # Apply extinction and/or accretion offsets
             renorm_args = (mag, 'vegamag', bandpass)
@@ -1910,7 +2219,7 @@ def companion_spec(bandpass, model='SB12', atmo='hy3s', mass=10, age=100, entrop
         sp = stellar_spectrum(sptype)
         if Av>0: 
             Rv = 4.0  
-            sp *= S.Extinction(Av/Rv, name='mwrv4')
+            sp *= s_ext.Extinction(Av/Rv, name='mwrv4')
         if (renorm_args is not None) and (len(renorm_args) > 0):
             sp_norm = sp.renorm(*renorm_args, force=True)
             sp = sp_norm
@@ -1924,7 +2233,7 @@ def companion_spec(bandpass, model='SB12', atmo='hy3s', mass=10, age=100, entrop
 def bin_spectrum(sp, wave, waveunits='um'):
     """Rebin spectrum
 
-    Rebin a :mod:`pysynphot.spectrum` to a different wavelength grid.
+    Rebin a synphot spectrum to a different wavelength grid.
     This function first converts the input spectrum to units
     of counts then combines the photon flux onto the
     specified wavelength grid.
@@ -1933,18 +2242,21 @@ def bin_spectrum(sp, wave, waveunits='um'):
 
     Parameters
     -----------
-    sp : :mod:`pysynphot.spectrum`
+    sp : :class:`s_ext.Spectrum`
         Spectrum to rebin.
     wave : array_like
         Wavelength grid to rebin onto.
     waveunits : str
-        Units of wave input. Must be recognizeable by Pysynphot.
+        Units of wave input. Must be recognizeable by synphot.
 
     Returns
     -------
-    :mod:`pysynphot.spectrum`
+    :class:`s_ext.Spectrum`
         Rebinned spectrum in same units as input spectrum.
     """
+
+    from .maths import binned_statistic
+    from synphot.binning import calculate_bin_edges
 
     waveunits0 = sp.waveunits
     fluxunits0 = sp.fluxunits
@@ -1952,9 +2264,9 @@ def bin_spectrum(sp, wave, waveunits='um'):
     # Convert wavelength of input spectrum to desired output units
     sp.convert(waveunits)
     # We also want input to be in terms of counts to conserve flux
-    sp.convert('flam')
+    sp.convert('photlam')
 
-    edges = S.binning.calculate_bin_edges(wave)
+    edges = calculate_bin_edges(wave * u.um)
     ind = (sp.wave >= edges[0]) & (sp.wave <= edges[-1])
     binflux = binned_statistic(sp.wave[ind], sp.flux[ind], np.mean, bins=edges)
 
@@ -1963,7 +2275,7 @@ def bin_spectrum(sp, wave, waveunits='um'):
     finterp = interp1d(wave[~ind_nan], binflux[~ind_nan], kind='cubic')
     binflux[ind_nan] = finterp(wave[ind_nan])
 
-    sp2 = S.ArraySpectrum(wave, binflux, waveunits=waveunits, fluxunits='flam')
+    sp2 = s_ext.ArraySpectrum(wave, binflux, waveunits=waveunits, fluxunits='photlam')
     sp2.convert(waveunits0)
     sp2.convert(fluxunits0)
 
@@ -1980,7 +2292,7 @@ def mag_to_counts(src_mag, bandpass, sp_type='G0V', mag_units='vegamag', **kwarg
         
         # Get flux of a 0 magnitude star (zero-point flux)
         sp = stellar_spectrum(sp_type, 0, mag_units, bandpass)
-        obs = S.Observation(sp, bandpass, binset=bandpass.wave)
+        obs = s_ext.Observation(sp, bandpass, binset=bandpass.wave)
         zp_counts = obs.effstim('counts') # Counts of a 0 mag star
         
         # Flux of each star e-/sec

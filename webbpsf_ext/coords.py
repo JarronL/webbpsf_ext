@@ -1,4 +1,8 @@
 import numpy as np
+import matplotlib
+import matplotlib.pyplot as plt
+
+
 import logging
 _log = logging.getLogger('webbpsf_ext')
 
@@ -8,11 +12,7 @@ from .utils import pysiaf
 
 # Define these here rather than calling multiple times
 # since it takes some time to generate these.
-siaf_nrc = pysiaf.Siaf('NIRCam')
-siaf_nis = pysiaf.Siaf('NIRISS')
-siaf_mir = pysiaf.Siaf('MIRI')
-siaf_nrs = pysiaf.Siaf('NIRSpec')
-siaf_fgs = pysiaf.Siaf('FGS')
+from .utils import siaf_nrc, siaf_nis, siaf_mir, siaf_fgs, siaf_nrs
 si_match = {'NRC': siaf_nrc, 'NIS': siaf_nis, 'MIR': siaf_mir, 'NRS': siaf_nrs, 'FGS': siaf_fgs}
 
 
@@ -147,7 +147,9 @@ def get_NRC_v2v3_limits(pupil=None, border=10, return_corners=False, **kwargs):
         Otherwise, values are chosen to be a square in V2/V3.
     """
     
-    siaf = pysiaf.Siaf('NIRCam')
+    from copy import deepcopy
+
+    siaf = deepcopy(siaf_nrc)
     siaf.generate_toc()
 
     names_dict = {
@@ -177,7 +179,7 @@ def get_NRC_v2v3_limits(pupil=None, border=10, return_corners=False, **kwargs):
             v2_ref -= 2.1
             v3_ref += 47.7
 
-        # Add border margin
+        # Add border margin (in arcsec)
         v2_avg = np.mean(v2_ref)
         v2_ref[v2_ref<v2_avg] -= border
         v2_ref[v2_ref>v2_avg] += border
@@ -185,6 +187,7 @@ def get_NRC_v2v3_limits(pupil=None, border=10, return_corners=False, **kwargs):
         v3_ref[v3_ref<v3_avg] -= border
         v3_ref[v3_ref>v3_avg] += border
 
+        # Convert to arcmin
         if return_corners:
 
             v2v3_limits[name] = {'V2': v2_ref / 60.,
@@ -199,7 +202,7 @@ def get_NRC_v2v3_limits(pupil=None, border=10, return_corners=False, **kwargs):
 
 def NIRCam_V2V3_limits(module, channel='LW', pupil=None, rederive=False, return_corners=False, **kwargs):
     """
-    NIRCam V2/V3 bounds +10" border encompassing detector.
+    NIRCam V2/V3 bounds to encompass detector.
     """
 
     # Grab coordinate from pySIAF
@@ -213,17 +216,24 @@ def NIRCam_V2V3_limits(module, channel='LW', pupil=None, rederive=False, return_
             v2_min, v2_max = v2v3_limits[name]['V2']
             v3_min, v3_max = v2v3_limits[name]['V3']
     else: # Or use preset coordinates
+        # WebbPSF includes some strict NIRCam V2/V3 limits
+        #   V2: -2.6 to 2.6
+        #   V3: -9.4 to -6.2
+        # Make sure there is 
         if module=='A':
-            v2_min, v2_max, v3_min, v3_max = (0.2, 2.7, -9.5, -7.0)
+            v2_min, v2_max, v3_min, v3_max = (0.3, 2.58, -9.35, -7.1)
         else:
-            v2_min, v2_max, v3_min, v3_max = (-2.7, -0.2, -9.5, -7.0)
+            v2_min, v2_max, v3_min, v3_max = (-2.58, -0.3, -9.35, -7.1)
+
+        # Offset Lyot field of view coverage
+        if (pupil is not None) and ('LYOT' in pupil):
+            v3_min += 0.8
+            v3_max += 0.8
 
         if return_corners:
             return np.array([v2_min, v2_min, v2_max, v2_max]), np.array([v3_min, v3_max, v3_min, v3_max])
 
-    return v2_min, v2_max, v3_min, v3_max 
-
-
+    return v2_min, v2_max, v3_min, v3_max
 
 
 def ap_radec(ap_obs, ap_ref, coord_ref, pa, base_off=(0,0), dith_off=(0,0),
@@ -308,11 +318,86 @@ def ap_radec(ap_obs, ap_ref, coord_ref, pa, base_off=(0,0), dith_off=(0,0),
         return
 
 
+def convert_to_sky(coords, siaf_obs_name, radec_ref, pa_v3, frame_in='sci'):
+    """ Convert coordinates to RA/Dec
+    
+
+
+    Parameters
+    ==========
+    coord_objs : tuple 
+        (xvals, yvals) positions, where xvals and yvals can be numpy arrays
+        or single values.
+    siaf_obs_name : str
+        Observed SIAF aperture name (e.g., 'NRCA1_FULL').
+    radec_ref : tuple
+        RA and Dec corresponding to aperture's reference point.
+    pa_v3 : float
+        Position angle in degrees measured from North to V3 axis in North to East direction.
+    frame_in : str
+        One of 'tel' (arcsec), 'idl' (arcsec), 'sci' (pixels), or 'det' (pixels).
+
+    Returns
+    =======
+    RA and Dec arrays.
+
+    Example
+    =======
+
+    >>> hdul = fits.open(file)
+    pheader = hdul[0].header
+    fheader = hdul[1].header
+    hdul.close
+
+    # Get SIAF info
+    siaf = pysiaf.Siaf('NIRCam')
+    siaf_obs_name = pheader.get('APERNAME')
+
+    # V3 PA
+    pa_v3 = fheader.get('V3I_YANG')
+    # RA/Dec located at aperture reference position
+    ra_ref = fheader.get('RA_REF')
+    dec_ref = fheader.get('DEC_REF')
+
+    coords_sci = np.random.random_sample(size=(2,100)) * 2040 + 4
+    ra, dec = convert_to_sky(coords_sci, siaf_obs_name, (ra_ref, dec_ref), pa_v3)
+    """
+
+   # SIAF object setup
+    siaf_ref = si_match.get(siaf_obs_name[0:3])
+    apsiaf = siaf_ref[siaf_obs_name]
+
+    xvals, yvals = coords
+
+    # RA/Dec located at aperture reference position
+    ra_ref, dec_ref = radec_ref
+    # V2/V3 aperture reference
+    v2_ref, v3_ref = apsiaf.reference_point('tel')
+
+    # Create attitude matrix
+    att = pysiaf.utils.rotations.attitude(v2_ref, v3_ref, ra_ref, dec_ref, pa_v3)
+    try:
+        # Only works for pysiaf v0.12+
+        apsiaf.set_attitude_matrix(att)
+        # Convert to sky coordinates
+        ra_deg, dec_deg = apsiaf.convert(xvals, yvals, frame_in, 'sky')
+    except AttributeError:
+        # Get V2/V3 positions of each pixel position
+        if frame_in=='tel':
+            v2_all, v3_all = (xvals, yvals)
+        else:
+            v2_all, v3_all = apsiaf.convert(xvals, yvals, frame_in, 'tel')
+        # Use attitude matrix to convert to RA/Dec
+        ra_deg, dec_deg = pysiaf.utils.rotations.pointing(att, v2_all, v3_all)
+
+    return (ra_deg, dec_deg)
+
+
 def radec_to_coord(coord_objs, siaf_ref_name, coord_ref, pa_ref, 
                    frame_out='tel', base_off=(0,0), dith_off=(0,0)):
     """RA/Dec to 'tel' (arcsec), 'sci' (pixels), or 'det' (pixels)
     
-    Convert a series of RA/Dec positions to telescope V2/V3 coordinates (in arcsec).
+    Convert a series of RA/Dec positions to coordinate frame.
     
     Parameters
     ----------
@@ -321,7 +406,7 @@ def radec_to_coord(coord_objs, siaf_ref_name, coord_ref, pa_ref,
     siaf_ref_name : str
         Reference SIAF aperture name (e.g., 'NRCALL_FULL') 
     coord_ref : list or tuple
-        RA and Dec towards which reference SIAF points
+        RA and Dec of SIAF reference point
     pa : float
         Position angle in degrees measured from North to V3 axis in North to East direction.
         
@@ -335,12 +420,12 @@ def radec_to_coord(coord_objs, siaf_ref_name, coord_ref, pa_ref,
         Additional offset from dithering (see APT pointing file)
     """
 
-    return radec_to_v2v3(coord_objs, siaf_ref_name, coord_ref, pa_ref, frame_out=frame_out, 
-                         base_off=base_off, dith_off=dith_off)
+    return radec_to_v2v3(coord_objs, siaf_ref_name, coord_ref, pa_ref, 
+                         frame_out=frame_out, base_off=base_off, dith_off=dith_off)
 
 
-def radec_to_v2v3(coord_objs, siaf_ref_name, coord_ref, pa_ref, frame_out='tel',
-                  base_off=(0,0), dith_off=(0,0)):
+def radec_to_v2v3(coord_objs, siaf_ref_name, coord_ref, pa_ref, 
+                  frame_out='tel', base_off=(0,0), dith_off=(0,0)):
     """RA/Dec to V2/V3
     
     Convert a series of RA/Dec positions to telescope V2/V3 coordinates (in arcsec).
@@ -352,7 +437,7 @@ def radec_to_v2v3(coord_objs, siaf_ref_name, coord_ref, pa_ref, frame_out='tel',
     siaf_ref_name : str
         Reference SIAF aperture name (e.g., 'NRCALL_FULL') 
     coord_ref : list or tuple
-        RA and Dec towards which reference SIAF points
+        RA and Dec of SIAF reference point
     pa : float
         Position angle in degrees measured from North to V3 axis in North to East direction.
         
@@ -429,8 +514,55 @@ def v2v3_to_pixel(ap_obs, v2_obj, v3_obj, frame='sci'):
     return (xpix, ypix)
 
 
-def gen_sgd_offsets(sgd_type, slew_std=5, fsm_std=2.5, rand_seed=None):
+def get_sgd_offsets(sgd_type):
+    """ Get SGD offsets
+
+    Return ideal x and y position offsets for a SGD pattern.
+    This includes the central position as the first in the series.
+    Returns values in arcsec.
+    
+    Parameters
+    ==========
+    sgd_type : str
+        Small grid dither pattern. Valid types are
+        '9circle', '5box', '5diamond', '3bar', '5bar', '5miri', and '9miri'
+        where the first four refer to NIRCam coronagraphic dither
+        positions and the last two are for MIRI coronagraphy.
+        Can also use the APT names for the patterns:
+        '9-POINT-CIRCLE', '5-POINT-DIAMOND', '5-POINT-BOX', '3-POINT-BAR',
+        '5-POINT-BAR', '5-POINT-SMALL-GRID', '9-POINT-SMALL-GRID'.
     """
+
+    if sgd_type.lower()=='9circle' or sgd_type.upper()=='9-POINT-CIRCLE':
+        xoff_msec = np.array([0.0,  0,-15,-20,-15,  0,+15,+20,+15])
+        yoff_msec = np.array([0.0,+20,+15,  0,-15,-20,-15,  0,+15])
+    elif sgd_type.lower()=='5box' or sgd_type.upper()=='5-POINT-BOX':
+        xoff_msec = np.array([0.0,+15,-15,-15,+15])
+        yoff_msec = np.array([0.0,+15,+15,-15,-15])
+    elif sgd_type.lower()=='5diamond' or sgd_type.upper()=='5-POINT-DIAMOND':
+        xoff_msec = np.array([0.0,  0,  0,+20,-20])
+        yoff_msec = np.array([0.0,+20,-20,  0,  0])
+    elif sgd_type.lower()=='5bar' or sgd_type.upper()=='5-POINT-BAR':
+        xoff_msec = np.array([0.0,  0,  0,  0,  0])
+        yoff_msec = np.array([0.0,+20,+10,-10,-20])
+    elif sgd_type.lower()=='3bar' or sgd_type.upper()=='3-POINT-BAR':
+        xoff_msec = np.array([0.0,  0,  0])
+        yoff_msec = np.array([0.0,+15,-15])
+    elif sgd_type.lower()=='5miri' or sgd_type.upper()=='5-POINT-SMALL-GRID':
+        xoff_msec = np.array([0.0,-10,+10,+10,-10])
+        yoff_msec = np.array([0.0,+10,+10,-10,-10])
+    elif sgd_type.lower()=='9miri' or sgd_type.upper()=='9-POINT-SMALL-GRID':
+        xoff_msec = np.array([0.0,-10,-10,  0,+10,+10,+10,  0,-10])
+        yoff_msec = np.array([0.0,  0,+10,+10,+10,  0,-10,-10,-10])
+    else:
+        raise ValueError(f"{sgd_type} not a valid SGD type")
+    
+    # Return in arcsec
+    return xoff_msec / 1000, yoff_msec / 1000
+
+def gen_sgd_offsets(sgd_type, slew_std=5, fsm_std=2.5, rand_seed=None):
+    """ Generate SGD offsets with random point errors
+
     Create a series of x and y position offsets for a SGD pattern.
     This includes the central position as the first in the series.
     By default, will also add random movement errors using the
@@ -443,6 +575,9 @@ def gen_sgd_offsets(sgd_type, slew_std=5, fsm_std=2.5, rand_seed=None):
         '9circle', '5box', '5diamond', '3bar', '5bar', '5miri', and '9miri'
         where the first four refer to NIRCam coronagraphic dither
         positions and the last two are for MIRI coronagraphy.
+        Can also use the APT names for the patterns:
+        '9-POINT-CIRCLE', '5-POINT-DIAMOND', '5-POINT-BOX', '3-POINT-BAR',
+        '5-POINT-BAR', '5-POINT-SMALL-GRID', '9-POINT-SMALL-GRID'.
     fsm_std : float
         One-sigma accuracy per axis of fine steering mirror positions.
         This provides randomness to each position relative to the nominal 
@@ -456,30 +591,8 @@ def gen_sgd_offsets(sgd_type, slew_std=5, fsm_std=2.5, rand_seed=None):
         Input a random seed in order to make reproduceable pseudo-random
         numbers.
     """
-    
-    if sgd_type=='9circle':
-        xoff_msec = np.array([0.0,  0,-15,-20,-15,  0,+15,+20,+15])
-        yoff_msec = np.array([0.0,+20,+15,  0,-15,-20,-15,  0,+15])
-    elif sgd_type=='5box':
-        xoff_msec = np.array([0.0,+15,-15,-15,+15])
-        yoff_msec = np.array([0.0,+15,+15,-15,-15])
-    elif sgd_type=='5diamond':
-        xoff_msec = np.array([0.0,  0,  0,+20,-20])
-        yoff_msec = np.array([0.0,+20,-20,  0,  0])
-    elif sgd_type=='5bar':
-        xoff_msec = np.array([0.0,  0,  0,  0,  0])
-        yoff_msec = np.array([0.0,+20,+10,-10,-20])
-    elif sgd_type=='3bar':
-        xoff_msec = np.array([0.0,  0,  0])
-        yoff_msec = np.array([0.0,+15,-15])
-    elif sgd_type=='5miri':
-        xoff_msec = np.array([0.0,-10,+10,+10,-10])
-        yoff_msec = np.array([0.0,+10,+10,-10,-10])
-    elif sgd_type=='9miri':
-        xoff_msec = np.array([0.0,-10,-10,  0,+10,+10,+10,  0,-10])
-        yoff_msec = np.array([0.0,  0,+10,+10,+10,  0,-10,-10,-10])
-    else:
-        raise ValueError(f"{sgd_type} not a valid SGD type")
+    # Get SGD offsets in mas    
+    xoff_msec, yoff_msec = np.array(get_sgd_offsets(sgd_type)) * 1000
 
     # Create local random number generator to avoid global seed setting
     rng = np.random.default_rng(seed=rand_seed)
@@ -835,6 +948,66 @@ class jwst_point(object):
             _log.warning("Neither get_cenpos nor get_vert were set to True. Nothing to return.")
             return
 
+    def frame_to_radec(self, coord_objs, frame_in='tel', idl_offsets=None):
+        """Aperture coordinate frame to RA/Dec
+
+        Convert a series of SAIF coordiante positions to RA/Dec sky coordinates 
+        for the observed aperture. Will return a list of RA/Dec coordinate pairs 
+        for all objects at each position.
+
+        Parameters
+        ----------
+        coord_objs : tuple 
+            (xvals, yvals) positions (deg), where xvals and yvas are numpy arrays.
+        frame_in : str
+            One of 'tel' (arcsec), 'idl' (arcsec), 'sci' (pixels), or 'det' (pixels).
+        idl_offsets : None or list of 2-element array
+            Option to specify custom offset locations. Normally this is set to None, and
+            we return RA/Dec for all telescope point positions defined in 
+            `self.position_offsets_act`. However, we can specify offsets here (in 'idl')
+            coordinates if you're only interested in a single position or want a custom
+            location.
+        """
+
+        siaf_ap = self.siaf_ap_obs
+
+        # RA and Dec of ap ref location and the objects in the field
+        ra_ref, dec_ref = (self.ra_obs, self.dec_obs)
+        xvals, yvals = coord_objs
+
+        # Field offset as specified in APT Special Requirements
+        # These appear to be defined in 'idl' coords
+        if idl_offsets is None:
+            idl_offsets = self.position_offsets_act
+
+        out_all = []
+        # For each dither position
+        for idl_off in idl_offsets:
+            # Attitude correction matrix relative to observed aperture
+            att = self.attitude_matrix(idl_off=idl_off, ap_siaf_ref=siaf_ap, coord_ref=(ra_ref, dec_ref))
+
+            try:
+                # Use internal pysiaf conversion wrapper (v0.12+)
+                siaf_ap.set_attitude_matrix(att)
+                ra_deg, dec_deg = siaf_ap.convert(xvals, yvals, frame_in, 'sky')
+                siaf_ap._attitude_matrix = None
+            except AttributeError:
+                # Get V2/V3 positions of each pixel position
+                if frame_in=='tel':
+                    v2_all, v3_all = (xvals, yvals)
+                else:
+                    v2_all, v3_all = siaf_ap.convert(xvals, yvals, frame_in, 'tel')
+                # Use attitude matrix to convert to RA/Dec
+                ra_deg, dec_deg = pysiaf.utils.rotations.pointing(att, v2_all, v3_all)
+
+            out_all.append((ra_deg, dec_deg))
+
+        if len(out_all)==1:
+            return out_all[0]
+        else:
+            return out_all
+
+
     def radec_to_frame(self, coord_objs, frame_out='tel', idl_offsets=None):
         """RA/Dec to aperture coordinate frame
 
@@ -847,7 +1020,7 @@ class jwst_point(object):
         coord_objs : tuple 
             (RA, Dec) positions (deg), where RA and Dec are numpy arrays.
         frame_out : str
-            One of 'tel' (arcsec), 'sci' (pixels), or 'det' (pixels).
+            One of 'tel' (arcsec), 'idl' (arcsec), 'sci' (pixels), or 'det' (pixels).
         idl_offsets : None or list of 2-element array
             Option to specify custom offset locations. Normally this is set to None, and
             we return RA/Dec for all telescope point positions defined in 
@@ -934,6 +1107,7 @@ class jwst_point(object):
             
         self.position_offsets_act = offsets_actual
 
+    @plt.style.context('webbpsf_ext.wext_style')
     def plot_main_apertures(self, fill=False, **kwargs):
         """ Plot main SIAF telescope apertures.
         
@@ -971,6 +1145,7 @@ class jwst_point(object):
         
         pysiaf.siaf.plot_main_apertures(fill=fill, **kwargs)
         
+    @plt.style.context('webbpsf_ext.wext_style')
     def plot_inst_apertures(self, subarrays=False, fill=False, **kwargs):
         """ Plot all apertures in this instrument's SIAF.
         
@@ -1025,6 +1200,7 @@ class jwst_point(object):
 
         return self.siaf_inst.plot(subarrays=subarrays, fill=fill, **kwargs)
     
+    @plt.style.context('webbpsf_ext.wext_style')
     def plot_ref_aperture(self, fill=False, **kwargs):
         """ Plot reference aperture
 
@@ -1075,6 +1251,7 @@ class jwst_point(object):
         siaf_ap.plot(fill=fill, **kwargs)
         siaf_ap._attitude_matrix = None
         
+    @plt.style.context('webbpsf_ext.wext_style')
     def plot_obs_aperture(self, fill=False, **kwargs):
         """ Plot observed aperture
 
@@ -1126,6 +1303,7 @@ class jwst_point(object):
         siaf_ap._attitude_matrix = None
 
 
+@plt.style.context('webbpsf_ext.wext_style')
 def plotAxes(ax, position=(0.9,0.1), label1='V2', label2='V3', dir1=[-1,0], dir2=[0,1],
              angle=0, alength=0.12, width=1.5, headwidth=6, color='w', alpha=1,
              fontsize=11):

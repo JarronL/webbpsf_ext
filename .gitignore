@@ -204,6 +204,7 @@ flycheck_*.el
 am*.fits
 spec_cf*.txt
 spec_hy*.txt
+model*.npy
 
 # Dask files
 dask-worker-space

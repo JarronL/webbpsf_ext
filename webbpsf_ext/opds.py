@@ -52,7 +52,7 @@ def OPDFile_to_HDUList(file, slice=0):
             inst = 'FGS'
 
         if 'JWST_OTE_OPD' in file:
-            # Location of JWST_OTE_OPD_RevAA_prelaunch_predicted.fits.gz
+            # Location of JWST_OTE_OPD*.fits.gz
             opd_dir = get_webbpsf_data_path()
         else:
             opd_dir = os.path.join(get_webbpsf_data_path(),inst,'OPD')
@@ -897,6 +897,7 @@ class OTE_WFE_Drift_Model(OTE_Linear_Model_WSS):
         return hdul
     
     
+@plt.style.context('webbpsf_ext.wext_style')
 def plot_im(im, fig, ax, vlim=None, add_cbar=True, return_ax=False, 
     extent=None, cmap='RdBu_r'):
     """
@@ -918,7 +919,7 @@ def plot_im(im, fig, ax, vlim=None, add_cbar=True, return_ax=False,
     elif return_ax:
         return ax
     
-
+@plt.style.context('webbpsf_ext.wext_style')
 def plot_opd(hdul, index=1, opd0=None, vlim1=None, vlim2=None):
     """ 
     Plot OPDs images (full or delta)
@@ -960,7 +961,7 @@ def plot_opd(hdul, index=1, opd0=None, vlim1=None, vlim2=None):
     plot_im(opd * m_to_nm, fig, ax, vlim=vlim, extent=extent)
     data_val, data_units = str.split(delta_time)
     
-    data_val = np.float(data_val)
+    data_val = float(data_val)
     if 'h' in data_units:
         dt = data_val * u.hr
     elif 'm' in data_units:

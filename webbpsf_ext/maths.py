@@ -2,7 +2,7 @@
 import numpy as np
 from numpy.polynomial import legendre
 from scipy.special import eval_legendre
-
+from scipy import stats
 
 from .coords import dist_image
 from .image_manip import frebin
@@ -54,7 +54,7 @@ def jl_poly(xvals, coeff, dim_reorder=False, use_legendre=False, lxmap=None, **k
     """
 
     # How many xvals?
-    n = np.size(xvals)
+    nx = np.size(xvals)
     try:
         xdim = len(xvals.shape)
     except AttributeError:
@@ -70,7 +70,16 @@ def jl_poly(xvals, coeff, dim_reorder=False, use_legendre=False, lxmap=None, **k
         raise ValueError('xvals can only have 1 dimension. Found {} dimensions.'.format(xdim))
 
     # Check number of dimensions in coefficients
-    dim = coeff.shape
+    try:
+        dim = coeff.shape
+    except AttributeError:
+        coeff = np.array(coeff)
+        dim = coeff.shape
+        # Handle single value
+        if len(dim) == 0:
+            coeff = np.array([coeff])
+            dim = coeff.shape
+
     ndim = len(dim)
     if ndim>3:
         raise ValueError('coefficient can only have 1, 2, or 3 dimensions. \
@@ -88,7 +97,7 @@ def jl_poly(xvals, coeff, dim_reorder=False, use_legendre=False, lxmap=None, **k
         # Use Identity matrix to evaluate each polynomial component
         # xfan = legendre.legval(lxvals, np.identity(dim[0]))
         # Below method is faster for large lxvals
-        xfan = np.asarray([eval_legendre(n, lxvals) for n in range(dim[0])])
+        xfan = np.asarray([eval_legendre(nn, lxvals) for nn in range(dim[0])])
     else:
         # Create an array of exponent values
         parr = np.arange(dim[0], dtype='float')
@@ -104,10 +113,10 @@ def jl_poly(xvals, coeff, dim_reorder=False, use_legendre=False, lxmap=None, **k
         # Use np.matmul instead of np.dot for speed improvement
         yfit = np.matmul(cf.T, xfan) # cf.T @ xfan
 
-        if ndim==1 or n==1: 
+        if ndim==1 or nx==1: 
             yfit = yfit.ravel()
         if ndim==3: 
-            yfit = yfit.reshape((dim[1],dim[2],n))
+            yfit = yfit.reshape((dim[1],dim[2],nx))
     else:
         # This is the Python preferred ordering
         # Coefficients are assumed (deg+1,ny,nx)
@@ -116,10 +125,10 @@ def jl_poly(xvals, coeff, dim_reorder=False, use_legendre=False, lxmap=None, **k
         # Use np.matmul instead of np.dot for speed improvement
         yfit = np.matmul(xfan.T, cf) # xfan.T @ cf
 
-        if ndim==1 or n==1: 
+        if ndim==1 or nx==1: 
             yfit = yfit.ravel()
         if ndim==3: 
-            yfit = yfit.reshape((n,dim[1],dim[2]))
+            yfit = yfit.reshape((nx,dim[1],dim[2]))
 
     return yfit
 
@@ -353,7 +362,7 @@ def hist_indices(values, bins=10, return_more=False):
     # then we need to set a warning.
     if (vmin<bins[0]) or (vmax>bins[-1]):
         raise ValueError("Bins must encompass entire set of input values.")
-    digitized = ((nbins-1.0) / (vmax-vmin) * (values_flat-vmin)).astype(np.int)
+    digitized = ((nbins-1.0) / (vmax-vmin) * (values_flat-vmin)).astype(int)
     csr = csr_matrix((values_flat, [digitized, np.arange(N)]), shape=(nbins, N))
 
     # Split indices into their bin groups    
@@ -366,7 +375,7 @@ def hist_indices(values, bins=10, return_more=False):
         return igroups
     
 
-def binned_statistic(x, values, func=np.mean, bins=10):
+def binned_statistic(x, values, func=np.mean, bins=10, **kwargs):
     """Binned statistic
     
     Compute a binned statistic for a set of data. Drop-in replacement
@@ -405,7 +414,7 @@ def binned_statistic(x, values, func=np.mean, bins=10):
         # Check if bins is a single value
         if (len(np.array(bins))==1) and (bins is not None):
             igroups = hist_indices(x, bins=bins, return_more=False)
-            res = np.array([func(values_flat[ind]) for ind in igroups])
+            res = np.array([func(values_flat[ind], **kwargs) for ind in igroups])
         # Otherwise we assume bins is a list or array defining edge locations
         else:
             bins = np.array(bins)
@@ -414,23 +423,23 @@ def binned_statistic(x, values, func=np.mean, bins=10):
             # Make sure bins encompass full set of input values
             ind_bin = (x>=bins.min()) & (x<=bins.max())
             x = x[ind_bin]
-            values_flat = values_flat[ind_bin]
+            values_flat = values_flat[ind_bin.flatten()]
             if np.isclose(bsize.min(), bsize.max()):
                 igroups = hist_indices(x, bins=bins, return_more=False)
-                res = np.array([func(values_flat[ind]) for ind in igroups])
+                res = np.array([func(values_flat[ind], **kwargs) for ind in igroups])
             else:
-                # If non-uniform bins, just use scipy.stats.binned_statistic
-                from scipy import stats 
+                # If non-uniform bins, pass to scipy.stats.binned_statistic
                 res, _, _ = stats.binned_statistic(x, values, func, bins)
     except:
         # Assume that input is a list of indices
         igroups = x
-        res = np.array([func(values_flat[ind]) for ind in igroups])
+        res = np.array([func(values_flat[ind], **kwargs) for ind in igroups])
     
     return res
 
 
-def radial_std(im_diff, pixscale=None, oversample=None, supersample=False, func=np.std):
+def radial_std(im_diff, pixscale=None, oversample=None, supersample=False, nsig=1, 
+               smooth=True, func=np.std, small_numbers=True, **kwargs):
     """Generate contrast curve of PSF difference
 
     Find the standard deviation within fixed radial bins of a differenced image.
@@ -451,9 +460,15 @@ def radial_std(im_diff, pixscale=None, oversample=None, supersample=False, func=
     supersample : bool
         If set, then oversampled data will have a binsize of pixscale,
         otherwise the binsize is pixscale*oversample.
+    nsig : float
+        Return number of n-sigma standard deviation.
     func_std : func
         The function to use for calculating the radial standard deviation.
-
+    smooth : bool
+        Smooth the result by convolving with a Gaussian that has stddev=1
+        Default: True.
+    small_numbers : bool
+        Account for small number statistics? Default: True.
     """
 
     from astropy.convolution import convolve, Gaussian1DKernel
@@ -462,7 +477,7 @@ def radial_std(im_diff, pixscale=None, oversample=None, supersample=False, func=
     oversample = 1 if supersample or (oversample is None) else oversample
 
     # Rebin data
-    data_rebin = frebin(im_diff, scale=1/oversample)
+    data_rebin = im_diff if oversample==1 else frebin(im_diff, scale=1/oversample)
 
     # Determine pixel scale of rebinned data
     pixscale = 1 if pixscale is None else oversample*pixscale
@@ -471,12 +486,44 @@ def radial_std(im_diff, pixscale=None, oversample=None, supersample=False, func=
     rho = dist_image(data_rebin, pixscale=pixscale)
 
     # Get radial profiles
-    binsize = pixscale
-    bins = np.arange(rho.min(), rho.max() + binsize, binsize)
+    bsize = pixscale
+    bins = np.arange(rho.min(), rho.max() + bsize, bsize)
     nan_mask = np.isnan(data_rebin)
     igroups, _, rr = hist_indices(rho[~nan_mask], bins, True)
-    stds = binned_statistic(igroups, data_rebin[~nan_mask], func=func)
-    stds = convolve(stds, Gaussian1DKernel(1))
+
+    # Pass delta degree of freedom to std dev for N-1 (unbiased estimator)
+    kwargs = {}
+    if func is np.std or func is np.nanstd:
+        kwargs = {'ddof': 1}
+    stds = binned_statistic(igroups, data_rebin[~nan_mask], func=func, **kwargs)
+
+    # Account for small number statistics
+    if small_numbers:
+        # Find n-sigma using student-t distribution
+        # Based on Mawet et al. (2014) Section 3.4
+        # 1. Choose confidence level (nsig)
+        # 2. Get number of resolution elements within each annulus
+        # 3. Get Student T detection threshold corresponding to CL (nsig)
+        # 4. Multiply detection threshold by np.sqrt(1+1/nres)
+
+        # Number of values within each bin
+        nvals = np.array([len(ig) for ig in igroups])
+        # Number of resolution elements within each bin
+        # divide the number of pixels by ~size of one resolution element
+        resolution = 1
+        nres = np.floor(nvals/(np.pi * (resolution/2)**2)).astype(int)
+
+        # Cumulative distribution for somen-sigma
+        cdf = stats.norm.cdf(nsig)
+        # Get equivalent n-sigma distribution for small sample sizes
+        tau = stats.t.ppf(q=cdf, df=nres-1) * np.sqrt(1. + 1/nres)
+        stds = tau * stds
+    else:
+        stds = nsig * stds
+
+    # Smooth curve?
+    if smooth:
+        stds = convolve(stds, Gaussian1DKernel(1))
 
     # Ignore corner regions
     arr_size = np.min(data_rebin.shape) * pixscale
@@ -588,3 +635,25 @@ def fit_bootstrap(pinit, datax, datay, function, yerr_systematic=0.0, nrand=1000
     else:
         return mean_pfit, err_pfit
     
+
+def round_int(val, half_round='down'):
+    """
+    Replacement for `round` and `np.round`, which uses 'bankers rounding'
+    such that x.5 is rounded to the nearest even number. Instead,
+    we want x.5 to round down. Option to round x.5 up by
+    setting `half_round='up'`.
+    """
+
+    if half_round.lower()=='down':
+        if isinstance(val, (list, tuple, np.ndarray)):
+            val = np.asarray(val)
+            return np.rint(np.nextafter(val, val-1)).astype(int)
+        else:
+            return int(np.rint(np.nextafter(val, val-1)))
+    else:
+        if isinstance(val, (list, tuple, np.ndarray)):
+            val = np.asarray(val)
+            return np.rint(np.nextafter(val, val+1)).astype(int)
+        else:
+            return int(np.rint(np.nextafter(val, val+1)))
+

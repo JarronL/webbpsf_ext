@@ -6,15 +6,20 @@ import six
 
 import scipy
 from scipy import fftpack
-from scipy.ndimage import fourier_shift
-from scipy.ndimage.interpolation import rotate
+from scipy.ndimage import fourier_shift, rotate
+
+try:
+    import cv2
+    OPENCV_EXISTS = True
+except ImportError:
+    OPENCV_EXISTS = False
 
 from astropy.convolution import convolve, convolve_fft
 from astropy.io import fits
 
 from poppy.utils import krebin
 
-from .utils import S
+from .utils import siaf_nrc, siaf_mir, siaf_nis, siaf_fgs, siaf_nrs
 
 # Program bar
 from tqdm.auto import trange, tqdm
@@ -25,6 +30,15 @@ _log = logging.getLogger('webbpsf_ext')
 ###########################################################################
 #    Image manipulation
 ###########################################################################
+
+def get_im_cen(im):
+    """
+    Returns pixel position (xcen, ycen) of array center.
+    For odd dimensions, this is in a pixel center.
+    For even dimensions, this is at the pixel boundary.
+    """
+    ny, nx = im.shape
+    return np.array([nx / 2. - 0.5, ny / 2. - 0.5])
 
 def fshift(inarr, delx=0, dely=0, pad=False, cval=0.0, interp='linear', **kwargs):
     """ Fractional image shift
@@ -71,7 +85,7 @@ def fshift(inarr, delx=0, dely=0, pad=False, cval=0.0, interp='linear', **kwargs
             return inarr
 
         # separate shift into an integer and fraction shift
-        intx = np.int(delx)
+        intx = int(delx)
         fracx = delx - intx
         if fracx < 0:
             fracx += 1
@@ -111,8 +125,8 @@ def fshift(inarr, delx=0, dely=0, pad=False, cval=0.0, interp='linear', **kwargs
         ny, nx = shape
 
         # separate shift into an integer and fraction shift
-        intx = np.int(delx)
-        inty = np.int(dely)
+        intx = int(delx)
+        inty = int(dely)
         fracx = delx - intx
         fracy = dely - inty
         if fracx < 0:
@@ -133,24 +147,25 @@ def fshift(inarr, delx=0, dely=0, pad=False, cval=0.0, interp='linear', **kwargs
             out = inarr.copy()
 
         # shift by integer portion
-        out = np.roll(np.roll(out, intx, axis=1), inty, axis=0)
+        out = np.roll(out, (inty, intx), axis=(0,1))
     
         # Check if fracx and fracy are effectively 0
         fxis0 = np.isclose(fracx,0, atol=1e-5)
         fyis0 = np.isclose(fracy,0, atol=1e-5)
-        # If fractional shifts are significant
-        # use bi-linear interpolation between four pixels
         
-        if interp=='linear':
-            if not (fxis0 and fyis0):
-                # Break bi-linear interpolation into four parts
-                # to avoid NaNs unnecessarily affecting integer shifted dimensions
-                part1 = out * ((1-fracx)*(1-fracy))
-                part2 = 0 if fyis0 else np.roll(out,1,axis=0)*((1-fracx)*fracy)
-                part3 = 0 if fxis0 else np.roll(out,1,axis=1)*((1-fracy)*fracx)
-                part4 = 0 if (fxis0 or fyis0) else np.roll(np.roll(out, 1, axis=1), 1, axis=0) * fracx*fracy
+        if fxis0 and fyis0:
+            # If fractional shifts are 0, no need for interpolation
+            # Just perform whole pixel shifts
+            pass
+        elif interp=='linear':
+            # Break bi-linear interpolation into four parts
+            # to avoid NaNs unnecessarily affecting integer shifted dimensions
+            part1 = out * ((1-fracx)*(1-fracy))
+            part2 = 0 if fyis0 else np.roll(out,1,axis=0)*((1-fracx)*fracy)
+            part3 = 0 if fxis0 else np.roll(out,1,axis=1)*((1-fracy)*fracx)
+            part4 = 0 if (fxis0 or fyis0) else np.roll(np.roll(out, 1, axis=1), 1, axis=0) * fracx*fracy
 
-                out = part1 + part2 + part3 + part4
+            out = part1 + part2 + part3 + part4
         elif interp=='cubic' or interp=='quintic':
             fracx = 0 if fxis0 else fracx
             fracy = 0 if fxis0 else fracy
@@ -175,13 +190,106 @@ def fshift(inarr, delx=0, dely=0, pad=False, cval=0.0, interp='linear', **kwargs
     else:
         raise ValueError(f'Found {ndim} dimensions {shape}. Only up to 3 dimensions allowed.')
 
+    # Ensure the output isn't all NaNs
+    if np.isnan(out).all():
+        # Report number of NaNs in input and raise error 
+        n_nan = np.sum(np.isnan(inarr))
+        raise ValueError(f'All NaNs in final shifted array. Found {n_nan} NaNs in input.')
+
     return out
 
                           
-def fourier_imshift(image, xshift, yshift, pad=False, cval=0.0, **kwargs):
+def fourier_imshift(image, xshift, yshift, pad=False, cval=0.0, 
+                    window_func=None, **kwargs):
     """Fourier shift image
     
     Shift an image by use of Fourier shift theorem
+
+    Parameters
+    ----------
+    image : ndarray
+        2D image or 3D image cube [nz,ny,nx].
+    xshift : float
+        Number of pixels to shift image in the x direction.
+    yshift : float
+        Number of pixels to shift image in the y direction.
+    pad : bool
+        Should we pad the array before shifting, then truncate?
+        Otherwise, the image is wrapped.
+    cval : sequence or float, optional
+        The values to set the padded values for each axis. Default is 0.
+        ((before_1, after_1), ... (before_N, after_N)) unique pad constants for each axis.
+        ((before, after),) yields same before and after constants for each axis.
+        (constant,) or int is a shortcut for before = after = constant for all axes.
+    window_func : string, float, or tuple
+        Name of window function from `scipy.signal.windows` to use before 
+        Fourier shifting. The idea is to reduce artifacts from
+        high frequency information during sub-pixel shifting. 
+        This effectively acts as a low-pass filter applied
+        to the Fourier transform of the image prior to shifting.
+        Uses `skimage.filters.window()` to generate the window.
+        For example:
+            window_func='hann'
+            window_func=('tukey', 0.25) # alpha=0.25
+            window_func=('gaussian', 5) # std dev of 5 pixels
+        Available options can be found: 
+            https://docs.scipy.org/doc/scipy-1.12.0/reference/signal.windows.html
+
+    Returns
+    -------
+    ndarray
+        Shifted image
+    """
+
+    from skimage.filters import window as winfunc
+
+    shape = image.shape
+    ndim = len(shape)
+
+    if ndim==2:
+
+        ny, nx = shape
+    
+        # Pad ends with zeros
+        if pad:
+            padx = np.abs(int(xshift)) + 5
+            pady = np.abs(int(yshift)) + 5
+            pad_vals = ([pady]*2,[padx]*2)
+            im = np.pad(image,pad_vals,'constant',constant_values=cval)
+        else:
+            padx = 0; pady = 0
+            im = image
+        
+        im_fft = np.fft.fft2(im)
+        if window_func is not None:
+            im_otf = np.fft.fftshift(im_fft)
+            im_otf *= winfunc(window_func, im_otf.shape)
+            im_fft = np.fft.ifftshift(im_otf)
+        offset = fourier_shift(im_fft, (yshift,xshift))
+        offset = np.fft.ifft2(offset).real
+        
+        offset = offset[pady:pady+ny, padx:padx+nx]
+
+        # Ensure the output isn't all NaNs
+        if np.isnan(offset).all():
+            # Report number of NaNs in input and raise error 
+            n_nan = np.sum(np.isnan(image))
+            raise ValueError(f'All NaNs in final shifted image. Found {n_nan} NaNs in input.')
+        
+    elif ndim==3:
+        kwargs['pad'] = pad
+        kwargs['cval'] = cval
+        offset = np.array([fourier_imshift(im, xshift, yshift, **kwargs) for im in image])
+    else:
+        raise ValueError(f'Found {ndim} dimensions {shape}. Only up 2 or 3 dimensions allowed.')
+    
+    return offset
+    
+def cv_shift(image, xshift, yshift, pad=False, cval=0.0, interp='lanczos', **kwargs):
+    """Use OpenCV library for image shifting
+
+    Requires opencv-python package. Produces fewer artifacts that `fourier_imshift`.
+    Faster than `fshift`.
 
     Parameters
     ----------
@@ -199,12 +307,22 @@ def fourier_imshift(image, xshift, yshift, pad=False, cval=0.0, **kwargs):
         ((before_1, after_1), ... (before_N, after_N)) unique pad constants for each axis.
         ((before, after),) yields same before and after constants for each axis.
         (constant,) or int is a shortcut for before = after = constant for all axes.
+    interp : str
+        Type of interpolation to use during the sub-pixel shift. Valid values are
+        'linear', 'cubic', and 'lanczos'.
 
     Returns
     -------
     ndarray
         Shifted image
     """
+
+    # If xshift and yshift are 0, then return the input image
+    if np.isclose(xshift, 0, atol=1e-5) and np.isclose(yshift, 0, atol=1e-5):
+        return image
+
+    if OPENCV_EXISTS==False:
+        raise ImportError('opencv-python not installed')
 
     shape = image.shape
     ndim = len(shape)
@@ -215,27 +333,191 @@ def fourier_imshift(image, xshift, yshift, pad=False, cval=0.0, **kwargs):
     
         # Pad ends with zeros
         if pad:
-            padx = np.abs(np.int(xshift)) + 5
-            pady = np.abs(np.int(yshift)) + 5
+            padx = np.abs(int(xshift)) + 5
+            pady = np.abs(int(yshift)) + 5
             pad_vals = ([pady]*2,[padx]*2)
             im = np.pad(image,pad_vals,'constant',constant_values=cval)
         else:
             padx = 0; pady = 0
             im = image
-        
-        offset = fourier_shift( np.fft.fft2(im), (yshift,xshift) )
-        offset = np.fft.ifft2(offset).real
-        
+
+        Mtrans = np.array([[1, 0, xshift], [0, 1, yshift]]).astype('float64')
+        if interp=='linear':
+            flags = cv2.INTER_LINEAR
+        elif interp=='cubic':
+            flags = cv2.INTER_CUBIC
+        elif interp=='lanczos':
+            flags = cv2.INTER_LANCZOS4
+        else:
+            raise ValueError(f"interp={interp} does not exist. Valid values are 'linear', 'cubic', or 'lanczos'.")
+
+        offset = cv2.warpAffine(im, Mtrans, im.shape[::-1], flags=flags)
         offset = offset[pady:pady+ny, padx:padx+nx]
+
+        # Ensure the output isn't all NaNs
+        if np.isnan(offset).all():
+            # Report number of NaNs in input and raise error 
+            n_nan = np.sum(np.isnan(image))
+            raise ValueError(f'All NaNs in final shifted image. Found {n_nan} NaNs in input.')
+
     elif ndim==3:
-        kwargs['pad'] = pad
-        kwargs['cval'] = cval
-        offset = np.array([fourier_imshift(im, xshift, yshift, **kwargs) for im in image])
+        kwargs = {'pad': pad, 'cval': cval, 'interp': interp}
+        offset = np.array([cv_shift(im, xshift, yshift, **kwargs) for im in image])
     else:
         raise ValueError(f'Found {ndim} dimensions {shape}. Only up 2 or 3 dimensions allowed.')
     
     return offset
+
+def fractional_image_shift(imarr, xshift, yshift, method='opencv', 
+                           oversample=1, gstd_pix=None, return_oversample=False,
+                           window_func=None, total=True, **kwargs):
+    """Shift image(s) by a fractional amount
+
+    Will first fix any NaNs using astropy convolution.
     
+    Parameters
+    ----------
+    imarr : ndarray
+        2D image or 3D image cube [nz,ny,nx].
+    xshift : float
+        Shift in x direction
+    yshift : float
+        Shift in y direction
+    method : str
+        Method to use for shifting. Options are:
+        - 'fourier' : Shift in Fourier space
+        - 'fshift' : Shift using interpolation
+        - 'opencv' : Shift using OpenCV warpAffine
+
+    oversample : int
+        Factor to oversample the image before sub-pixel shifting. Default is 1.
+        An oversample factor of 2 will increase the image size by 2x in each dimension.
+    gstd_pix : float
+        Standard deviation of Gaussian kernel for smoothing. Default is None.
+    return_oversample : bool
+        Return the oversampled image after shifting. Default is False.
+    window_func : string, float, or tuple
+        Name of window function from `scipy.signal.windows` to use prior to
+        shifting. The idea is to reduce artifacts from high frequency 
+        information during sub-pixel shifting. This effectively acts as a 
+        low-pass filter applied to the Fourier transform of the image prior 
+        to shifting. Uses `skimage.filters.window()` to generate the window.
+        Will apply to oversampled image, so make sure to adjust any function
+        parameters accordingly.
+        For example:
+            .. code-block:: python
+                window_func = 'hann'
+                window_func = ('tukey', 0.25) # alpha=0.25
+                window_func = ('gaussian', 5) # std dev of 5 pixels
+
+        Available options can be found: 
+            https://docs.scipy.org/doc/scipy-1.12.0/reference/signal.windows.html
+    total : bool
+        If True, then the total flux in the image is conserved. Default is True.
+        Would want to set this to false if the image is in units of surface brightness
+        (e.g., MJy/sr) and not flux (e.g., MJy).
+
+    Keyword Args
+    ------------
+    pad : bool
+        Pad the image before shifting, then truncate? Default is False.
+    cval : sequence or float, optional
+        The values to set the padded values for each axis. Default is 0.
+        ((before_1, after_1), ... (before_N, after_N)) unique pad constants for each axis.
+        ((before, after),) yields same before and after constants for each axis.
+        (constant,) or int is a shortcut for before = after = constant for all axes.
+    interp : str
+        Type of interpolation to use during the sub-pixel shift. Valid values are
+        'linear', 'cubic', and 'quintic' for `fshift` method (default: 'linear').
+        For `opencv` method, valid values are 'linear', 'cubic', and 'lanczos' 
+        (default: 'lanczos').
+    """
+    from astropy.convolution import Gaussian2DKernel
+    from astropy.convolution import convolve
+
+    # Replace NaNs with astropy convolved image values
+    ind_nan_all = np.isnan(imarr)
+    if ind_nan_all.any():
+        kernel = Gaussian2DKernel(x_stddev=2)
+        if len(imarr.shape)==3:
+            imarr_conv = imarr.copy()
+            im_mean = np.nanmean(imarr, axis=0)
+            # First replace NaNs with mean of all images
+            for i in range(imarr_conv.shape[0]):
+                ind_nan = np.isnan(imarr[i])
+                imarr_conv[i][ind_nan] = im_mean[ind_nan]
+            # Use astropy convolve to fix remaining NaNs
+            imarr_conv = np.array([convolve(im, kernel) for im in imarr])
+            for i in range(imarr.shape[0]):
+                ind_nan = np.isnan(imarr[i])
+                imarr[i][ind_nan] = imarr_conv[i][ind_nan]
+        else:
+            imarr_conv = convolve(imarr, kernel)
+            ind_nan = np.isnan(imarr)
+            imarr[ind_nan] = imarr_conv[ind_nan]
+
+        del imarr_conv
+
+    # Rebin pixels
+    if oversample>1:
+        imarr = frebin(imarr, scale=oversample, total=total)
+        xsh = xshift * oversample
+        ysh = yshift * oversample
+    else:
+        xsh = xshift
+        ysh = yshift
+
+    # Apply Gaussian smoothing
+    if (gstd_pix is not None) and (gstd_pix>0):
+        gstd = gstd_pix * oversample
+        kernel = Gaussian2DKernel(x_stddev=gstd)
+        if len(imarr.shape)==3:
+            imarr = np.array([convolve(im, kernel) for im in imarr])
+        else:
+            imarr = convolve(imarr, kernel)
+
+    # Apply window function (low-pass filter)
+    if (window_func is not None) and (method=='fourier'):
+        kwargs['window_func'] = window_func
+    elif window_func is not None:
+        from skimage.filters import window as winfunc
+        if len(imarr.shape)==3:
+            for i, im in enumerate(imarr):
+                im_otf = np.fft.fftshift(np.fft.fft2(im))
+                im_otf *= winfunc(window_func, im_otf.shape)
+                im = np.fft.ifft2(np.fft.ifftshift(im_otf)).real
+                imarr[i] = im
+        else:
+            im_otf = np.fft.fftshift(np.fft.fft2(imarr))
+            im_otf *= winfunc(window_func, im_otf.shape)
+            imarr = np.fft.ifft2(np.fft.ifftshift(im_otf)).real
+
+    # Shift the image
+    if method=='fourier':
+        imarr_shift = fourier_imshift(imarr, xsh, ysh, **kwargs)
+    elif method=='fshift':
+        imarr_shift = fshift(imarr, xsh, ysh, **kwargs)
+    elif method=='opencv':
+        imarr_shift = cv_shift(imarr, xsh, ysh, **kwargs)
+    else:
+        raise ValueError(f"Unrecognized method: {method}")
+
+    # Add NaNs back to the image
+    # if ind_nan_all.any():
+    #     nan_mask_shift = fshift(ind_nan_all.astype('float'), xsh, ysh, pad=True, cval=1.0)
+    #     imarr_shift[nan_mask_shift>0] = np.nan
+    
+    if return_oversample or oversample==1:
+        # No need to resample back to original size
+        return imarr_shift
+    else:
+        return frebin(imarr_shift, scale=1/oversample, total=total)
+
+
+###########################################################################
+#    Image Cropping
+###########################################################################
+
 def pad_or_cut_to_size(array, new_shape, fill_val=0.0, offset_vals=None,
     shift_func=fshift, **kwargs):
     """
@@ -258,6 +540,9 @@ def pad_or_cut_to_size(array, new_shape, fill_val=0.0, offset_vals=None,
         or (ypix,xpix) direction for 2D/3D prior to cropping or expansion.
     shift_func : function
         Function to use for shifting. Usually either `fshift` or `fourier_imshift`.
+    interp : str
+        Type of interpolation to use during the sub-pixel shift for `fshift`. 
+        Valid values are 'linear', 'cubic', and 'quintic'.
 
     Returns
     -------
@@ -273,16 +558,15 @@ def pad_or_cut_to_size(array, new_shape, fill_val=0.0, offset_vals=None,
         # Reshape array to a 2D array with nx=1
         array = array.reshape((1,1,-1))
         nz, ny, nx = array.shape
-        if isinstance(new_shape, (float,int,np.int,np.int64)):
+        if isinstance(new_shape, (float,int,np.int64)):
             nx_new = int(new_shape+0.5)
             ny_new = 1
-            new_shape = (ny_new, nx_new)
         elif len(new_shape) < 2:
             nx_new = new_shape[0]
             ny_new = 1
-            new_shape = (ny_new, nx_new)
         else:
             ny_new, nx_new = new_shape
+        new_shape = (ny_new, nx_new)
         output = np.zeros(shape=(nz,ny_new,nx_new), dtype=array.dtype)
     elif (ndim == 2) or (ndim == 3):
         if ndim==2:
@@ -292,33 +576,36 @@ def pad_or_cut_to_size(array, new_shape, fill_val=0.0, offset_vals=None,
         else:
             nz, ny, nx = array.shape
 
-        if isinstance(new_shape, (float,int,np.int,np.int64)):
+        if isinstance(new_shape, (float,int,np.int64)):
             ny_new = nx_new = int(new_shape+0.5)
-            new_shape = (ny_new, nx_new)
         elif len(new_shape) < 2:
             ny_new = nx_new = new_shape[0]
-            new_shape = (ny_new, nx_new)
         else:
             ny_new, nx_new = new_shape
+        new_shape = (ny_new, nx_new)
         output = np.zeros(shape=(nz,ny_new,nx_new), dtype=array.dtype)
     else:
-        raise ValueError(f'Found {ndim} dimensions {shape_orig}. Only up to 3 dimensions allowed.')
+        raise ValueError(f'Found {ndim} dimensions (shape={shape_orig}). Only up to 3 dimensions allowed.')
                       
     # Return if no difference in shapes
     # This needs to occur after the above so that new_shape is verified to be a tuple
     # If offset_vals is set, then continue to perform shift function
-    if (array.shape == new_shape) and (offset_vals is None):
+    if (shape_orig == new_shape) and (offset_vals is None):
         return array
 
     # Input the fill values
     if fill_val != 0:
-        output += fill_val
+        try:
+            output += fill_val
+        except:
+            # If castings are different, then don't add fill_val
+            pass
         
     # Pixel shift values
     if offset_vals is not None:
         if ndim == 1:
             ny_off = 0
-            if isinstance(offset_vals, (float,int,np.int,np.int64)):
+            if isinstance(offset_vals, (float,int,np.int64)):
                 nx_off = offset_vals
             elif len(offset_vals) < 2:
                 nx_off = offset_vals[0]
@@ -399,12 +686,239 @@ def pad_or_cut_to_size(array, new_shape, fill_val=0.0, offset_vals=None,
 
     return output
 
+def crop_observation(im_full, ap, xysub, xyloc=None, delx=0, dely=0, 
+                     shift_func=fourier_imshift, interp='cubic',
+                     return_xy=False, fill_val=np.nan, **kwargs):
+    """Crop around aperture reference location
+
+    `xysub` specifies the desired crop size.
+    if `xysub` is an array, dimension order should be [nysub,nxsub].
+    Crops at pixel boundaries (no interpolation) unless delx and dely
+    are specified for pixel shifting.
+
+    `xyloc` provides a way to manually supply the central position. 
+    Set `ap` to None will crop around `xyloc` or center of array.
+
+    delx and delx will shift array by some offset before cropping
+    to allow for sub-pixel shifting. To change integer crop positions,
+    recommend using `xyloc` instead.
+
+    Shift function can be fourier_imshfit, fshift, or cv_shift.
+    The interp keyword only works for the latter two options.
+    Consider 'lanczos' for cv_shift.
+
+    Setting `return_xy` to True will also return the indices 
+    used to perform the crop.
+
+    Parameters
+    ----------
+    im_full : ndarray
+        Input image.
+    ap : pysiaf aperture
+        Aperture to use for cropping. Will crop around the aperture
+        reference point by default. Will be overridden by `xyloc`.
+    xysub : int, tuple, or list
+        Size of subarray to extract. If a single integer is provided,
+        then a square subarray is extracted. If a tuple or list is
+        provided, then it should be of the form (ny, nx).
+    xyloc : tuple or list
+        (x,y) pixel location around which to crop the image. If None,
+        then the image aperture refernece point is used.
+    
+    Keyword Args
+    ------------
+    delx : int or float
+        Pixel offset in x-direction. This shifts the image by
+        some number of pixels in the x-direction. Positive values shift
+        the image to the right.
+    dely : int or float
+        Pixel offset in y-direction. This shifts the image by
+        some number of pixels in the y-direction. Positive values shift
+        the image up.
+    shift_func : function
+        Function to use for shifting. Default is `fourier_imshift`.
+        If delx and dely are both integers, then `fshift` is used.
+    interp : str
+        Interpolation method to use for shifting. Default is 'cubic'.
+        Options are 'nearest', 'linear', 'cubic', and 'quadratic'
+        for `fshift`.
+    return_xy : bool
+        If True, then return the x and y indices used to crop the
+        image prior to any shifting from `delx` and `dely`; 
+        (x1, x2, y1, y2). Default is False.
+    fill_val : float
+        Value to use for filling in the empty pixels after shifting.
+        Default = np.nan.
+    """
+        
+    from .maths import round_int
+
+    # xcorn_sci, ycorn_sci = ap.corners('sci')
+    # xcmin, ycmin = (int(xcorn_sci.min()+0.5), int(ycorn_sci.min()+0.5))
+    # xsci_arr = np.arange(1, im_full.shape[1]+1)
+    # ysci_arr = np.arange(1, im_full.shape[0]+1)
+
+    
+    # Cut out postage stamp from full frame image
+    if isinstance(xysub, (list, tuple, np.ndarray)):
+        ny_sub, nx_sub = xysub
+    else:
+        ny_sub = nx_sub = xysub
+    
+    # Get centroid position
+    if ap is None:
+        xc, yc = get_im_cen(im_full) if xyloc is None else xyloc
+    else: 
+        # Subtract 1 from sci coords to get indices
+        xc, yc = (ap.XSciRef-1, ap.YSciRef-1) if xyloc is None else xyloc
+
+    x1 = round_int(xc - nx_sub/2 + 0.5)
+    x2 = x1 + nx_sub
+    y1 = round_int(yc - ny_sub/2 + 0.5)
+    y2 = y1 + ny_sub
+
+    # Save initial values in case they get modified below
+    x1_init, x2_init = (x1, x2)
+    y1_init, y2_init = (y1, y2)
+    xy_ind = np.array([x1_init, x2_init, y1_init, y2_init])
+
+    sh_orig = im_full.shape
+    if (x2>=sh_orig[1]) or (y2>=sh_orig[0]) or (x1<0) or (y1<0):
+        ny, nx = sh_orig
+
+        # Get expansion size along x-axis
+        dxp = x2 - nx + 1
+        dxp = 0 if dxp<0 else dxp
+        dxn = -1*x1 if x1<0 else 0
+        dx = dxp + dxn
+
+        # Get expansion size along y-axis
+        dyp = y2 - ny + 1
+        dyp = 0 if dyp<0 else dyp
+        dyn = -1*y1 if y1<0 else 0
+        dy = dyp + dyn
+
+        # Expand image
+        # TODO: This can probelmatic for some existing functions because it
+        # places NaNs in the output image.
+        shape_new = (2*dy+ny, 2*dx+nx)
+        im_full = pad_or_cut_to_size(im_full, shape_new, fill_val=fill_val)
+
+        xc_new, yc_new = (xc+dx, yc+dy)
+        x1 = round_int(xc_new - nx_sub/2 + 0.5)
+        x2 = x1 + nx_sub
+        y1 = round_int(yc_new - ny_sub/2 + 0.5)
+        y2 = y1 + ny_sub
+    # else:
+    #     xc_new, yc_new = (xc, yc)
+    #     shape_new = sh_orig
+
+    # if (x1<0) or (y1<0):
+    #     dx = -1*x1 if x1<0 else 0
+    #     dy = -1*y1 if y1<0 else 0
+
+    #     # Expand image
+    #     shape_new = (2*dy+shape_new[0], 2*dx+shape_new[1])
+    #     im_full = pad_or_cut_to_size(im_full, shape_new)
+
+    #     xc_new, yc_new = (xc_new+dx, yc_new+dy)
+    #     x1 = round_int(xc_new - nx_sub/2 + 0.5)
+    #     x2 = x1 + nx_sub
+    #     y1 = round_int(yc_new - ny_sub/2 + 0.5)
+    #     y2 = y1 + ny_sub
+
+    # Perform pixel shifting
+    if delx!=0 or dely!=0:
+        kwargs['interp'] = interp
+        # Use fshift function if only performing integer shifts
+        if float(delx).is_integer() and float(dely).is_integer():
+            shift_func = fshift
+
+        # If NaNs are present, print warning and fill with zeros
+        ind_nan = np.isnan(im_full)
+        if np.any(ind_nan):
+            # _log.warning('NaNs present in image. Filling with zeros.')
+            im_full = im_full.copy()
+            im_full[ind_nan] = 0
+
+        kwargs['pad'] = True
+        im_full = shift_func(im_full, delx, dely, **kwargs)
+        # shift NaNs and add back in
+        if np.any(ind_nan):
+            ind_nan = fshift(ind_nan, delx, dely, pad=True) > 0  # Maybe >0.5?
+            im_full[ind_nan] = np.nan
+    
+    im = im_full[y1:y2, x1:x2]
+    
+    if return_xy:
+        return im, xy_ind
+    else:
+        return im
+
+
+def crop_image(imarr, xysub, xyloc=None, **kwargs):
+    """Crop input image around center using integer offsets only
+
+    If size is exceeded, then the image is expanded and filled with NaNs.
+
+    Parameters
+    ----------
+    im : ndarray
+        Input image or image cube [nz,ny,nx].
+    xysub : int, tuple, or list
+        Size of subarray to extract. If a single integer is provided,
+        then a square subarray is extracted. If a tuple or list is
+        provided, then it should be of the form (ny, nx).
+    xyloc : tuple or list
+        (x,y) pixel location around which to crop the image. If None,
+        then the image center is used.
+    
+    Keyword Args
+    ------------
+    delx : int or float
+        Integer pixel offset in x-direction. This shifts the image by
+        some number of pixels in the x-direction. Positive values shift
+        the image to the right.
+    dely : int or float
+        Integer pixel offset in y-direction. This shifts the image by
+        some number of pixels in the y-direction. Positive values shift
+        the image up.
+    shift_func : function
+        Function to use for shifting. Default is `fourier_imshift`.
+        If delx and dely are both integers, then `fshift` is used.
+    interp : str
+        Interpolation method to use for shifting. Default is 'cubic'.
+        Options are 'nearest', 'linear', 'cubic', and 'quadratic'
+        for `fshift`.
+    return_xy : bool
+        If True, then return the x and y indices used to crop the
+        image prior to any shifting from `delx` and `dely`; 
+        (x1, x2, y1, y2). Default is False.
+    fill_val : float
+        Value to use for filling in the empty pixels after shifting.
+        Default = np.nan.
+    """
+    
+    sh = imarr.shape
+    if len(sh) == 2:
+        return crop_observation(imarr, None, xysub, xyloc=xyloc, **kwargs)
+    elif len(sh) == 3:
+        return_xy = kwargs.pop('return_xy', False)
+        res = np.asarray([crop_observation(im, None, xysub, xyloc=xyloc, **kwargs) for im in imarr])
+        if return_xy:
+            _, xy = crop_observation(imarr[0], None, xysub, xyloc=xyloc, return_xy=True, **kwargs)
+            return (res, xy)
+        else:
+            return res 
+    else:
+        raise ValueError(f'Found {len(sh)} dimensions {sh}. Only 2 or 3 dimensions allowed.')
+
 
 def rotate_offset(data, angle, cen=None, cval=0.0, order=1, 
     reshape=True, recenter=True, shift_func=fshift, **kwargs):
     """Rotate and offset an array.
 
-    Same as `rotate` in `scipy.ndimage.interpolation` except that it
+    Same as `rotate` in `scipy.ndimage` except that it
     rotates around a center point given by `cen` keyword.
     The array is rotated in the plane defined by the two axes given by the
     `axes` parameter using spline interpolation of the requested order.
@@ -431,7 +945,8 @@ def rotate_offset(data, angle, cen=None, cval=0.0, order=1,
         two axes.
     reshape : bool, optional
         If `reshape` is True, the output shape is adapted so that the input
-        array is contained completely in the output. Default is True.
+        array is contained completely in the output. The `cen` coordinate
+        is now the center of the array. Default is True.
     order : int, optional
         The order of the spline interpolation, default is 1.
         The order has to be in the range 0-5.
@@ -455,6 +970,8 @@ def rotate_offset(data, angle, cen=None, cval=0.0, order=1,
 
     """
 
+    from .imreg_tools import crop_image
+
     # Return input data if angle is set to None or 0
     # and if 
     if ((angle is None) or (angle==0)) and (cen is None):
@@ -475,7 +992,8 @@ def rotate_offset(data, angle, cen=None, cval=0.0, order=1,
     kwargs['order'] = order
     kwargs['cval'] = cval
 
-    xcen, ycen = (nx/2, ny/2)
+    # xcen, ycen = (nx/2, ny/2)
+    xcen, ycen = get_im_cen(data)
     if cen is None:
         cen = (xcen, ycen)
     xcen_new, ycen_new = cen
@@ -496,41 +1014,44 @@ def rotate_offset(data, angle, cen=None, cval=0.0, order=1,
         interp='quintic'
 
     # Pad and then shift array
+    # Places `cen` position at center of image
     new_shape = (int(ny+2*abs(dely)), int(nx+2*abs(delx)))
     images_shift = []
     for im in data:
-        im_pad = pad_or_cut_to_size(im, new_shape, fill_val=cval)
+        # im_pad = pad_or_cut_to_size(im, new_shape, fill_val=cval)
+        im_pad = crop_image(im, new_shape, fill_val=cval)
         im_new = shift_func(im_pad, delx, dely, cval=cval, interp=interp)
         images_shift.append(im_new)
     images_shift = np.asarray(images_shift)
     
-    # Remove additional dimension in the case of single image
-    #images_shift = images_shift.squeeze()
-    
-    # Rotate images
-    # TODO: Should reshape=True or reshape=reshape?
-    images_shrot = rotate(images_shift, angle, reshape=True, **kwargs)
-    
     if reshape:
-        return images_shrot.squeeze()
+        # Rotate around current center and expand to full size
+        images_fin = rotate(images_shift, angle, reshape=True, **kwargs)
     else:
-        # Shift back to it's location
+        # Perform cropping
         if recenter:
-            images_rot = images_shrot
+            # Keeping 'cen' position in center; no need to reshape to larger size
+            images_rot = rotate(images_shift, angle, reshape=False, **kwargs)
         else:
+            # Reshape to larger size due to image shifting
+            images_shrot = rotate(images_shift, angle, reshape=True, **kwargs)
             images_rot = []
+            # Shift 'cen' back to original location
             for im in images_shrot:
                 im_new = shift_func(im, -1*delx, -1*dely, pad=True, cval=cval, interp=interp)
                 images_rot.append(im_new)
             images_rot = np.asarray(images_rot)
     
+        # Perform cropping
         images_fin = []
         for im in images_rot:
-            im_new = pad_or_cut_to_size(im, (ny,nx))
+            # im_new = pad_or_cut_to_size(im, (ny,nx))
+            im_new = crop_image(im, (ny,nx), fill_val=0)
             images_fin.append(im_new)
         images_fin = np.asarray(images_fin)
     
-        return images_fin.squeeze()
+    # Drop out single-valued dimensions
+    return images_fin.squeeze()
 
 def frebin(image, dimensions=None, scale=None, total=True):
     """Fractional rebin
@@ -562,6 +1083,20 @@ def frebin(image, dimensions=None, scale=None, total=True):
         The binned ndarray
     """
 
+    def dtype_check(result, input_dtype):
+        """Check if resultis same as input dtype
+        
+        If total is True, then prints a warning, otherwise 
+        changes back to input dtype.
+        """
+        # Because we're preserving total, may be unable to preserver input dtype
+        if result.dtype != input_dtype:
+            if total:
+                _log.warning(f'dtype was updated from {input_dtype} to {result.dtype}')
+            else:
+                result = result.astype(input_dtype)
+        return result
+
     shape = image.shape
     ndim = len(shape)
     if ndim>2:
@@ -588,6 +1123,9 @@ def frebin(image, dimensions=None, scale=None, total=True):
     else:
         raise RuntimeError('Incorrect parameters to rebin.\n\frebin(image, dimensions=(x,y))\n\frebin(image, scale=a')
     #print(dimensions)
+
+    # Check if dtype is preserved
+    input_dtype = image.dtype
 
     if ndim==1:
         nlout = 1
@@ -622,7 +1160,9 @@ def frebin(image, dimensions=None, scale=None, total=True):
         image = image.reshape((nl,ns))
         result = krebin(image, (nlout,nsout))
         if not total: 
-            result /= (sbox*lbox)
+            result = result / (sbox*lbox)
+
+        result = dtype_check(result, input_dtype)
         if nl == 1:
             return result[0,:]
         else:
@@ -652,15 +1192,19 @@ def frebin(image, dimensions=None, scale=None, total=True):
             #from istart to rstart and fraction pixel from rstop to istop
             result[i] = np.sum(image[istart:istop + 1]) - frac1 * image[istart] - frac2 * image[istop]
 
-        if total:
-            return result
-        else:
-            return result / (float(sbox) * lbox)
+        if not total:
+            result = result / (float(sbox) * lbox)
+        return dtype_check(result, input_dtype)
+
     else:
         _log.debug("Rebinning to Dimensions: %s, %s" % tuple(dimensions))
         #2D case, first bin in second dimension
         temp = np.zeros((nlout, ns))
         result = np.zeros((nsout, nlout))
+
+        if (result.dtype != input_dtype) and ('float' in input_dtype.name) and ('float' in result.dtype.name):
+            result = result.astype(input_dtype)
+            temp = temp.astype(input_dtype)
 
         #first lines
         for i in range(nlout):
@@ -682,7 +1226,7 @@ def frebin(image, dimensions=None, scale=None, total=True):
                 temp[i, :] = np.sum(image[istart:istop + 1, :], axis=0) -\
                              frac1 * image[istart, :] - frac2 * image[istop, :]
 
-        temp = np.transpose(temp)
+        temp = temp.T
 
         #then samples
         for i in range(nsout):
@@ -701,13 +1245,14 @@ def frebin(image, dimensions=None, scale=None, total=True):
             if istart == istop:
                 result[i, :] = (1. - frac1 - frac2) * temp[istart, :]
             else:
-                result[i, :] = np.sum(temp[istart:istop + 1, :], axis=0) -\
-                               frac1 * temp[istart, :] - frac2 * temp[istop, :]
+                result[i, :] = np.sum(temp[istart:istop + 1, :], axis=0) - \
+                                      frac1 * temp[istart, :] - frac2 * temp[istop, :]
 
-        if total:
-            return np.transpose(result)
-        else:
-            return np.transpose(result) / (sbox * lbox)
+        result = result.T
+
+        if not total:
+            result = result / (float(sbox) * lbox)
+        return dtype_check(result, input_dtype)
 
 
 def image_rescale(HDUlist_or_filename, pixscale_out, pixscale_in=None, 
@@ -750,6 +1295,8 @@ def image_rescale(HDUlist_or_filename, pixscale_out, pixscale_in=None,
     =======
         HDUlist of the new image.
     """
+
+    from .imreg_tools import crop_image
 
     if isinstance(HDUlist_or_filename, six.string_types):
         hdulist = fits.open(HDUlist_or_filename)
@@ -811,7 +1358,8 @@ def image_rescale(HDUlist_or_filename, pixscale_out, pixscale_in=None,
         image_new[ny//2, nx//2] += star_flux
 
     if shape_out is not None:
-        image_new = pad_or_cut_to_size(image_new, shape_out)
+        # image_new = pad_or_cut_to_size(image_new, shape_out)
+        image_new = crop_image(image_new, shape_out, fill_val=0)
 
     hdu_new = fits.PrimaryHDU(image_new)
     hdu_new.header = hdulist[0].header.copy()
@@ -842,18 +1390,21 @@ def model_to_hdulist(args_model, sp_star, bandpass):
             - dist0   : Assumed model distance
             - wave_um : Wavelength of observation
             - units0  : Assumed flux units (e.g., MJy/arcsec^2 or muJy/pixel)
-    sp_star : :mod:`pysynphot.spectrum`
-        A pysynphot spectrum of central star. Used to adjust observed
+    sp_star : :class:`webbpsf_ext.synphot_ext.Spectrum`
+        A synphot spectrum of central star. Used to adjust observed
         photon flux if filter differs from model input
-    bandpass : :mod:`pysynphot.obsbandpass`
-        Output `Pysynphot` bandpass from instrument class. This corresponds 
+    bandpass : :mod:`webbpsf_ext.synphot_ext.Bandpass`
+        Output synphot bandpass from instrument class. This corresponds 
         to the flux at the entrance pupil for the particular filter.
     """
+
+    from .synphot_ext import stsyn, validate_unit
+    from synphot.units import convert_flux, validate_wave_unit
+    import astropy.units as u
 
     #filt, mask, pupil = args_inst
     fname, scale0, dist0, wave_um, units0 = args_model
     wave0 = wave_um * 1e4
-
 
     #### Read in the image, then convert from mJy/arcsec^2 to photons/sec/pixel
 
@@ -874,23 +1425,10 @@ def model_to_hdulist(args_model, sp_star, bandpass):
 
     # Break apart units0
     units_list = units0.split('/')
-    if 'mJy' in units_list[0]:
-        units_pysyn = S.units.mJy()
-    elif 'uJy' in units_list[0]:
-        units_pysyn = S.units.muJy()
-    elif 'nJy' in units_list[0]:
-        units_pysyn = S.units.nJy()
-    elif 'MJy' in units_list[0]:
-        hdulist[0].data *= 1000 # Convert to Jy
-        units_pysyn = S.units.Jy()
-    elif 'Jy' in units_list[0]: # Jy should be last
-        units_pysyn = S.units.Jy()
-    else:
-        errstr = "Do not recognize units0='{}'".format(units0)
-        raise ValueError(errstr)
-
-    # Convert from input units to photlam (photons/sec/cm^2/A/angular size)
-    im = units_pysyn.ToPhotlam(wave0, hdulist[0].data)
+    unit_type = validate_unit(units_list[0])
+    im = convert_flux(wave0, hdulist[0].data*unit_type, 'photlam',
+                      area=stsyn.conf.area, vegaspec=stsyn.Vega)
+    im = im.value
 
     # We assume scattering is flat in photons/sec/A
     # This means everything scales with stellar continuum
@@ -898,7 +1436,7 @@ def model_to_hdulist(args_model, sp_star, bandpass):
     wstar, fstar = (sp_star.wave/1e4, sp_star.flux)
 
     # Compare observed wavelength to image wavelength
-    wobs_um = bandpass.avgwave() / 1e4 # Current bandpass wavelength
+    wobs_um = bandpass.avgwave().to_value('um') # Current bandpass wavelength
 
     wdel = np.linspace(-0.1,0.1)
     f_obs = np.interp(wobs_um+wdel, wstar, fstar)
@@ -906,13 +1444,17 @@ def model_to_hdulist(args_model, sp_star, bandpass):
     im *= np.mean(f_obs / f0)
 
     # Convert to photons/sec/pixel
-    im *= bandpass.equivwidth() * S.refs.PRIMARY_AREA
+    im *= bandpass.equivwidth().to_value(u.AA) * stsyn.conf.area
     # If input units are per arcsec^2 then scale by pixel scale
-    # This will be ph/sec for each oversampled pixel
+    # This will give ph/sec for each pixel
     if ('arcsec' in units_list[1]) or ('asec' in units_list[1]):
         im *= scale0**2
     elif 'mas' in units_list[1]:
         im *= (scale0*1000)**2
+    elif 'sr' in units_list[1].lower():
+        # Steradians to arcsec^2
+        sr_to_asec2 = (3600*180/np.pi)**2 # [asec^2 / sr]
+        im *= (scale0**2 / sr_to_asec2) 
 
     # Save into HDUList
     hdulist[0].data = im
@@ -996,17 +1538,16 @@ def distort_image(hdulist_or_filename, ext=0, to_frame='sci', fill_value=0,
     from scipy.interpolate import RegularGridInterpolator
 
     def _get_default_siaf(instrument, aper_name):
-
-        # Create new naming because SIAF requires special capitalization
-        if instrument == "NIRCAM":
-            siaf_name = "NIRCam"
-        elif instrument == "NIRSPEC":
-            siaf_name = "NIRSpec"
-        else:
-            siaf_name = instrument
+        si_match = {
+            'NIRCAM' : siaf_nrc, 
+            'NIRSPEC': siaf_nis, 
+            'MIRI'   : siaf_mir, 
+            'NIRISS' : siaf_nrs, 
+            'FGS'    : siaf_fgs,
+            }
 
         # Select a single SIAF aperture
-        siaf = pysiaf.Siaf(siaf_name)
+        siaf = si_match[instrument.upper()]
         aper = siaf.apertures[aper_name]
 
         return aper
@@ -1308,7 +1849,17 @@ def convolve_image(hdul_sci_image, hdul_psfs, return_hdul=False,
 
     # Get SIAF aperture info
     hdr_psf = hdul_psfs[0].header
-    siaf = pysiaf.siaf.Siaf(hdr_psf['INSTRUME'])
+
+    si_match = {
+        'NIRCAM' : siaf_nrc, 
+        'NIRSPEC': siaf_nis, 
+        'MIRI'   : siaf_mir, 
+        'NIRISS' : siaf_nrs, 
+        'FGS'    : siaf_fgs,
+        }
+
+    # Select a single SIAF aperture
+    siaf = si_match[hdr_psf['INSTRUME'].upper()]
     siaf_ap_psfs = siaf[hdr_psf['APERNAME']]
 
     if crop_zeros:
@@ -1340,7 +1891,7 @@ def convolve_image(hdul_sci_image, hdul_psfs, return_hdul=False,
             xcen_im = hdr_im['XCEN']
             ycen_im = hdr_im['YCEN']
         except:
-            ycen_im, xcen_im = np.array(im_input.shape) / 2
+            ycen_im, xcen_im = get_im_cen(im_input)
 
     try:
         pixscale = hdr_im['PIXELSCL']
@@ -1391,7 +1942,9 @@ def convolve_image(hdul_sci_image, hdul_psfs, return_hdul=False,
     # Split into workers
     im_conv = np.zeros_like(im_input)
     worker_args = [(im_input, hdul_psfs[i].data, mask_arr[i]) for i in range(npsf)]
-    for wa in tqdm(worker_args, desc='Convolution', leave=False):
+    # itervals = tqdm(worker_args, desc='Convolution', leave=False)
+    itervals = worker_args
+    for wa in itervals:
         im_conv += _convolve_psfs_for_mp(wa)
 
     # Ensure there are no negative values from convolve_fft
@@ -1413,8 +1966,11 @@ def convolve_image(hdul_sci_image, hdul_psfs, return_hdul=False,
         im_conv[iy1:iy2,ix1:ix2] = im_conv_crop
 
     # Scale to specified output sampling
-    output_sampling = 1 if output_sampling is None else output_sampling
-    scale = output_sampling / hdr_im['OSAMP']
+    if output_sampling is None:
+        scale = 1
+        output_sampling = hdr_im['OSAMP']
+    else:
+        scale = output_sampling / hdr_im['OSAMP']
     im_conv = frebin(im_conv, scale=scale)
 
     if return_hdul:
@@ -1425,105 +1981,6 @@ def convolve_image(hdul_sci_image, hdul_psfs, return_hdul=False,
     else:
         return im_conv
 
-
-def _convolve_image_old(hdul_sci_image, hdul_psfs, aper=None, nsplit=None):
-    """ Convolve image with various PSFs
-
-    Takes an extended image, breaks it up into subsections, then
-    convolves each subsection with the nearest neighbor PSF. The
-    subsection sizes and locations are determined from PSF 'sci'
-    positions.
-
-    Parameters
-    ==========
-    hdul_sci_image : HDUList
-        Disk model. Requires header keyword 'PIXELSCL'.
-    hdul_psfs : HDUList
-        Multi-extension FITS. Each HDU element is a different PSF for
-        some location within some field of view. 
-    aper : :mod:`pysiaf.aperture.JwstAperture`
-        Option to specify the reference SIAF aperture.
-    """
-    
-    import pysiaf
-    
-    # Get SIAF aperture info
-    hdr = hdul_psfs[0].header
-    if aper is None:
-        siaf = pysiaf.siaf.Siaf(hdr['INSTRUME'])
-        siaf_ap = siaf[hdr['APERNAME']]
-    else:
-        siaf_ap = aper
-    
-    # Get xsci and ysci coordinates
-    xvals = np.array([hdu.header['XVAL'] for hdu in hdul_psfs])
-    yvals = np.array([hdu.header['YVAL'] for hdu in hdul_psfs])
-    if 'sci' in hdr['CFRAME']:
-        xsci, ysci = (xvals, yvals)
-    else:
-        xsci, ysci = siaf_ap.convert(xvals, yvals, hdr['CFRAME'], 'sci')
-    
-    xoff_sci_asec_psfs = (xsci - siaf_ap.XSciRef) * siaf_ap.XSciScale
-    yoff_sci_asec_psfs = (ysci - siaf_ap.YSciRef) * siaf_ap.YSciScale
-    
-    # Size of input image in arcsec
-    im_input = hdul_sci_image[0].data
-    pixscale = hdul_sci_image[0].header['PIXELSCL']
-    ysize, xsize = im_input.shape
-    ysize_asec = ysize * pixscale
-    xsize_asec = xsize * pixscale
-    
-    # Create mask for input image for each PSF to convolve
-    rho_arr = []
-    coords_asec = (xoff_sci_asec_psfs, yoff_sci_asec_psfs)
-    for xv, yv in np.transpose(coords_asec):
-        cen = (xsize_asec/2 + xv, ysize_asec/2 + yv)
-        yarr, xarr = np.indices((ysize,xsize))
-        xarr = xarr*pixscale - cen[0]
-        yarr = yarr*pixscale - cen[1]
-        rho = np.sqrt(xarr**2 + yarr**2)
-        rho_arr.append(rho)
-    rho_arr = np.asarray(rho_arr)
-
-    # Calculate indices corresponding to closest PSF
-    im_indices = np.argmin(rho_arr, axis=0)
-    del rho_arr
-
-    # Create an image mask for each PSF
-    npsf = len(hdul_psfs)
-    mask_arr = np.asarray([im_indices==i for i in range(npsf)])
-    
-    # Split into workers
-    worker_args = [(im_input, hdul_psfs[i].data, mask_arr[i]) for i in range(npsf)]
-
-    # nsplit = 4
-    nsplit = 1 if nsplit is None else nsplit
-    if nsplit>1:
-        im_conv = []
-        try:
-            with mp.Pool(nsplit) as pool:
-                for res in tqdm(pool.imap_unordered(_convolve_psfs_for_mp_old, worker_args), total=npsf):
-                    im_conv.append(res)
-                pool.close()
-            if im_conv[0] is None:
-                raise RuntimeError('Returned None values. Issue with multiprocess??')
-        except Exception as e:
-            print('Caught an exception during multiprocess.')
-            print('Closing multiprocess pool.')
-            pool.terminate()
-            pool.close()
-            raise e
-        else:
-            print('Closing multiprocess pool.')
-
-        im_conv = np.asarray(im_conv).sum(axis=0)
-    else:
-        im_conv = np.zeros_like(im_input)
-        for wa in tqdm(worker_args):
-            im_conv += _convolve_psfs_for_mp(wa)
-        # im_conv = np.sum(np.asarray([_convolve_psfs_for_mp(wa) for wa in tqdm(worker_args)]), axis=0)
-
-    return im_conv
 
 def make_disk_image(inst, disk_params, sp_star=None, pixscale_out=None, dist_out=None,
                     shape_out=None):
@@ -1550,8 +2007,8 @@ def make_disk_image(inst, disk_params, sp_star=None, pixscale_out=None, dist_out
 
     Keyword Args
     ============
-    sp_star : :mod:`pysynphot.spectrum`
-        A pysynphot spectrum of central star. Used to adjust observed
+    sp_star : :class:`webbpsf_ext.synphot_ext.Spectrum`
+        A synphot spectrum of central star. Used to adjust observed
         photon flux if filter differs from model input
     pixscale_out : float
         Desired pixelscale of returned image. If None, then use instrument's
@@ -1746,3 +2203,355 @@ def crop_zero_rows_cols(image, symmetric=True, return_indices=False):
     else:
         return im_new
 
+def expand_mask(bpmask, npix, grow_diagonal=False):
+    """Expand bad pixel mask by npix pixels
+    
+    Parameters
+    ==========
+    bpmask : 2D, 3D+ array
+        Boolean bad pixel mask
+    npix : int
+        Number of pixels to expand mask by
+    diagonal : bool
+        Expand mask by npix pixels in all directions, including diagonals
+    in_place : bool
+        Modify the original mask (True) or return a copy (False)
+
+    Returns
+    =======
+    bpmask : 2D array of booleans
+        Expanded bad pixel mask
+    """
+    from scipy.ndimage import binary_dilation, generate_binary_structure
+
+    if npix==0:
+        return bpmask
+    
+    # Check dimensions
+    ndim = bpmask.ndim
+    # If 3D or more, then apply recursively
+    if ndim>2:
+        # Reshape into cube and expand image by image
+        sh_orig = bpmask.shape
+        ny, nx = bpmask.shape[-2:]
+        bpmask.reshape([-1,ny,nx])
+
+        res = np.array([expand_mask(im, npix, grow_diagonal=grow_diagonal) for im in bpmask])
+        return res.reshape(sh_orig)
+
+    # Expand mask by npix pixels, including corners
+    if grow_diagonal:
+        # Perform normal dilation without corners (just left, right, up, down)
+        if npix>1:
+            bpmask = binary_dilation(bpmask, iterations=npix-1)
+        # Add corners in final iteration
+        struct2 = generate_binary_structure(2, 2)
+        bpmask = binary_dilation(bpmask, structure=struct2)
+    else: # No corners
+        bpmask = binary_dilation(bpmask, iterations=npix)
+
+    return bpmask
+
+def bp_fix(im, sigclip=5, niter=1, pix_shift=1, rows=True, cols=True, corners=True,
+           bpmask=None, return_mask=False, verbose=False, in_place=True):
+    """ Find and fix bad pixels in image with median of surrounding values
+    
+    Paramters
+    ---------
+    im : ndarray
+        Single image
+    sigclip : int
+        How many sigma from mean doe we fix?
+    niter : int
+        How many iterations for sigma clipping? 
+        Ignored if bpmask is set.
+    pix_shift : int
+        We find bad pixels by comparing to neighbors and replacing.
+        E.g., if set to 1, use immediate adjacents neighbors.
+        Replaces with a median of surrounding pixels.
+    rows : bool
+        Compare to row pixels? Setting to False will ignore pixels
+        along rows during comparison. Recommended to increase
+        ``pix_shift`` parameter if using only rows or cols.
+    cols : bool
+        Compare to column pixels? Setting to False will ignore pixels
+        along columns during comparison. Recommended to increase
+        ``pix_shift`` parameter if using only rows or cols.
+    corners : bool
+        Include corners in neighbors? If False, then only use
+        pixels that are directly adjacent for comparison.
+    bpmask : boolean array
+        Use a pre-determined bad pixel mask for fixing.
+    return_mask : bool
+        If True, then also return a masked array of bad
+        pixels where a value of 1 is "bad".
+    verbose : bool
+        Print number of fixed pixels per iteration
+    in_place : bool
+        Do in-place corrections of input array.
+        Otherwise, return a copy.
+    """
+
+    from . import robust
+    
+    def shift_array(arr_out, pix_shift, rows=True, cols=True, corners=True):
+        '''Create an array of shifted values'''
+
+        shift_arr = []
+        sh_vals = np.arange(pix_shift*2+1) - pix_shift
+        # Set shifting of columns and rows
+        xsh_vals = sh_vals if rows else [0]
+        ysh_vals = sh_vals if cols else [0]
+        for i in xsh_vals:
+            for j in ysh_vals:
+                is_center = (i==0) & (j==0)
+                is_corner = (np.abs(i)==pix_shift) & (np.abs(j)==pix_shift)
+                skip = (is_center) or (is_corner and not corners)
+                if not skip:
+                    shift_arr.append(fshift(arr_out, delx=i, dely=j, 
+                                            pad=True, cval=0))
+        shift_arr = np.asarray(shift_arr)
+        return shift_arr
+        
+    if in_place:
+        arr_out = im
+    else:
+        arr_out = im.copy()
+    maskout = np.zeros(im.shape, dtype='bool')
+    
+    for ii in range(niter):
+        # Create an array of shifted values
+        shift_arr = shift_array(arr_out, pix_shift, corners=corners,
+                                rows=rows, cols=cols)
+    
+        if bpmask is None:
+            # Take median of shifted values
+            shift_med = np.nanmedian(shift_arr, axis=0)
+            # Standard deviation of shifted values
+            shift_std = robust.medabsdev(shift_arr, axis=0)
+
+            # Difference of median and reject outliers
+            diff = np.abs(arr_out - shift_med)
+            indbad = diff > (sigclip*shift_std)
+
+            # Mark anything that is a NaN
+            indbad[np.isnan(arr_out)] = True
+        elif ii==0:
+            indbad = bpmask.copy()
+        else:
+            indbad = np.zeros_like(arr_out, dtype='bool')
+
+        # Mark anything that is a NaN
+        indbad[np.isnan(arr_out)] = True
+
+        # Update median shifted values to those with good pixels only
+        ibad_arr = shift_array(indbad, pix_shift, corners=corners,
+                               rows=rows, cols=cols)
+        shift_arr[ibad_arr] = np.nan
+        shift_med = np.nanmean(shift_arr, axis=0)
+        
+        # Set output array and mask values 
+        arr_out[indbad] = shift_med[indbad]
+        maskout[indbad] = True
+        
+        if verbose:
+            print(f'Bad Pixels fixed: {indbad.sum()}')
+
+        # Break if no bad pixels remaining
+        if (indbad.sum()==0) and (np.isnan(arr_out).sum()==0):
+            break
+            
+    if return_mask:
+        return arr_out, maskout
+    else:
+        return arr_out
+
+
+def add_ipc(im, alpha_min=0.0065, alpha_max=None, kernel=None):
+    """Convolve image with IPC kernel
+    
+    Given an image in electrons, apply IPC convolution.
+    NIRCam average IPC values (alpha) reported 0.005 - 0.006.
+    
+    Parameters
+    ==========
+    im : ndarray
+        Input image or array of images.
+    alpha_min : float
+        Minimum coupling coefficient between neighboring pixels.
+        If alpha_max is None, then this is taken to be constant
+        with respect to signal levels.
+    alpha_max : float or None
+        Maximum value of coupling coefficent. If specificed, then
+        coupling between pixel pairs is assumed to vary depending
+        on signal values. See Donlon et al., 2019, PASP 130.
+    kernel : ndarry or None
+        Option to directly specify the convolution kernel. 
+        `alpha_min` and `alpha_max` are ignored.
+    
+    Examples
+    ========
+    Constant Kernel
+
+        >>> im_ipc = add_ipc(im, alpha_min=0.0065)
+
+    Constant Kernel (manual)
+
+        >>> alpha = 0.0065
+        >>> k = np.array([[0,alpha,0], [alpha,1-4*alpha,alpha], [0,alpha,0]])
+        >>> im_ipc = add_ipc(im, kernel=k)
+
+    Signal-dependent Kernel
+
+        >>> im_ipc = add_ipc(im, alpha_min=0.0065, alpha_max=0.0145)
+
+    """
+    
+    sh = im.shape
+    ndim = len(sh)
+    if ndim==2:
+        im = im.reshape([1,sh[0],sh[1]])
+        sh = im.shape
+    
+    if kernel is None:
+        xp = yp = 1
+    else:
+        yp, xp = np.array(kernel.shape) / 2
+        yp, xp = int(yp), int(xp)
+
+    # Pad images to have a pixel border of zeros
+    im_pad = np.pad(im, ((0,0), (yp,yp), (xp,xp)), 'symmetric')
+    
+    # Check for custom kernel (overrides alpha values)
+    if (kernel is not None) or (alpha_max is None):
+        # Reshape to stack all images along horizontal axes
+        im_reshape = im_pad.reshape([-1, im_pad.shape[-1]])
+    
+        if kernel is None:
+            kernel = np.array([[0.0, alpha_min, 0.0],
+                               [alpha_min, 1.-4*alpha_min, alpha_min],
+                               [0.0, alpha_min, 0.0]])
+    
+        # Convolve IPC kernel with images
+        im_ipc = convolve(im_reshape, kernel).reshape(im_pad.shape)
+    
+    # Exponential coupling strength
+    # Equation 7 of Donlon et al. (2018)
+    else:
+        arrsqr = im_pad**2
+
+        amin = alpha_min
+        amax = alpha_max
+        ascl = (amax-amin) / 2
+        
+        alpha_arr = []
+        for ax in [1,2]:
+            # Shift by -1
+            diff = np.abs(im_pad - np.roll(im_pad, -1, axis=ax))
+            sumsqr = arrsqr + np.roll(arrsqr, -1, axis=ax)
+            
+            imtemp = amin + ascl * np.exp(-diff/20000) + \
+                     ascl * np.exp(-np.sqrt(sumsqr / 2) / 10000)
+            alpha_arr.append(imtemp)
+            # Take advantage of symmetries to shift in other direction
+            alpha_arr.append(np.roll(imtemp, 1, axis=ax))
+            
+        alpha_arr = np.array(alpha_arr)
+
+        # Flux remaining in parent pixel
+        im_ipc = im_pad * (1 - alpha_arr.sum(axis=0))
+        # Flux shifted to adjoining pixels
+        for i, (shft, ax) in enumerate(zip([-1,+1,-1,+1], [1,1,2,2])):
+            im_ipc += alpha_arr[i]*np.roll(im_pad, shft, axis=ax)
+        del alpha_arr
+
+    # Trim excess
+    im_ipc = im_ipc[:,yp:-yp,xp:-xp]
+    if ndim==2:
+        im_ipc = im_ipc.squeeze()
+    return im_ipc
+    
+    
+def add_ppc(im, ppc_frac=0.002, nchans=4, kernel=None,
+    same_scan_direction=False, reverse_scan_direction=False,
+    in_place=False):
+    """ Add Post-Pixel Coupling (PPC)
+    
+    This effect is due to the incomplete settling of the analog
+    signal when the ADC sample-and-hold pulse occurs. The measured
+    signals for a given pixel will have a value that has not fully
+    transitioned to the real analog signal. Mathematically, this
+    can be treated in the same way as IPC, but with a different
+    convolution kernel.
+    
+    Parameters
+    ==========
+    im : ndarray
+        Image or array of images
+    ppc_frac : float
+        Fraction of signal contaminating next pixel in readout. 
+    kernel : ndarry or None
+        Option to directly specify the convolution kernel, in
+        which case `ppc_frac` is ignored.
+    nchans : int
+        Number of readout output channel amplifiers.
+    same_scan_direction : bool
+        Are all the output channels read in the same direction?
+        By default fast-scan readout direction is ``[-->,<--,-->,<--]``
+        If ``same_scan_direction``, then all ``-->``
+    reverse_scan_direction : bool
+        If ``reverse_scan_direction``, then ``[<--,-->,<--,-->]`` or all ``<--``
+    in_place : bool
+        Apply in place to input image.
+    """
+
+                       
+    sh = im.shape
+    ndim = len(sh)
+    if ndim==2:
+        im = im.reshape([1,sh[0],sh[1]])
+        sh = im.shape
+
+    nz, ny, nx = im.shape
+    chsize = nx // nchans
+    
+    # Do each channel separately
+    if kernel is None:
+        kernel = np.array([[0.0, 0.0, 0.0],
+                           [0.0, 1.0-ppc_frac, ppc_frac],
+                           [0.0, 0.0, 0.0]])
+
+    res = im if in_place else im.copy()
+    for ch in np.arange(nchans):
+        if same_scan_direction:
+            k = kernel[:,::-1] if reverse_scan_direction else kernel
+        elif np.mod(ch,2)==0:
+            k = kernel[:,::-1] if reverse_scan_direction else kernel
+        else:
+            k = kernel if reverse_scan_direction else kernel[:,::-1]
+
+        x1 = chsize*ch
+        x2 = x1 + chsize
+        res[:,:,x1:x2] = add_ipc(im[:,:,x1:x2], kernel=k)
+    
+    if ndim==2:
+        res = res.squeeze()
+    return res
+
+def apply_pixel_diffusion(im, pixel_sigma):
+    """Apply charge diffusion kernel to image
+    
+    Approximates the effect of charge diffusion as a Gaussian.
+
+    Parameters
+    ----------
+    im : ndarray
+        Input image.
+    pixel_sigma : float
+        Sigma of Gaussian kernel in units of image pixels.
+    """
+    from scipy.ndimage import gaussian_filter
+    if pixel_sigma > 0:
+        return gaussian_filter(im, pixel_sigma)
+    else:
+        return im
