@@ -80,7 +80,7 @@ install_requires = [
     'tqdm>4',
     'synphot>=1.2.1',
     'poppy>=1.1.0',
-    'webbpsf>=1.3.0',
+    'stpsf>=2.0.0',
     'pysiaf>=0.22.0',
 ]
 

@@ -54,7 +54,7 @@ class Conf(_config.ConfigNamespace):
         data_path = os.getenv('WEBBPSF_EXT_PATH')
         if (data_path is None) or (data_path == ''):
             print("WARNING: Environment variable $WEBBPSF_EXT_PATH is not set!")
-            import webbpsf
+            import stpsf as webbpsf
             data_path = webbpsf.utils.get_webbpsf_data_path()
             print("  Setting WEBBPSF_EXT_PATH to WEBBPSF_PATH directory:")
             print(f"  {data_path}")

@@ -15,7 +15,7 @@ from astropy.io import fits
 import astropy.units as u
 
 # WebbPSF
-import webbpsf
+import stpsf as webbpsf
 from webbpsf.opds import OTE_Linear_Model_WSS
 from webbpsf.utils import get_webbpsf_data_path
 

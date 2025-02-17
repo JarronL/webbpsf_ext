@@ -11,7 +11,8 @@ except ImportError:
 
 import os
 import pytest
-import webbpsf, webbpsf_ext
+import stpsf as webbpsf
+import webbpsf_ext
 
 from webbpsf_ext.logging_utils import setup_logging
 setup_logging(level='ERROR', verbose=False)

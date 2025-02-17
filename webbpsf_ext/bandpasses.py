@@ -56,7 +56,7 @@ def miri_filter(filter, **kwargs):
     transmission throughput as indicated on JDOCS.
     """
 
-    import webbpsf
+    import stpsf as webbpsf
     
     filter = filter.upper()
     filt_dir = Path(webbpsf.utils.get_webbpsf_data_path()) / 'MIRI/filters/'

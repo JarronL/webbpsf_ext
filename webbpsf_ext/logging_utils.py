@@ -1,6 +1,7 @@
 import sys
 
-import webbpsf, poppy
+import stpsf as webbpsf
+import poppy
 from . import conf
 
 import logging

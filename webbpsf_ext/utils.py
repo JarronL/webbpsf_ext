@@ -7,7 +7,8 @@ import matplotlib.pyplot as plt
 import os, sys
 import six
 
-import webbpsf, poppy, pysiaf
+import stpsf as webbpsf
+import poppy, pysiaf
 
 try:
     from webbpsf.webbpsf_core import get_siaf_with_caching
