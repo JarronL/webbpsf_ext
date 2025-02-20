@@ -17,7 +17,7 @@ import astropy.units as u
 # WebbPSF
 import stpsf as webbpsf
 from webbpsf.opds import OTE_Linear_Model_WSS
-from webbpsf.utils import get_webbpsf_data_path
+from webbpsf.utils import get_stpsf_data_path
 
 # Logging
 from . import conf
@@ -53,9 +53,9 @@ def OPDFile_to_HDUList(file, slice=0):
 
         if 'JWST_OTE_OPD' in file:
             # Location of JWST_OTE_OPD*.fits.gz
-            opd_dir = get_webbpsf_data_path()
+            opd_dir = get_stpsf_data_path()
         else:
-            opd_dir = os.path.join(get_webbpsf_data_path(),inst,'OPD')
+            opd_dir = os.path.join(get_stpsf_data_path(),inst,'OPD')
         hdul = fits.open(os.path.join(opd_dir, file))
     ndim = len(hdul[0].data.shape)
 
@@ -117,7 +117,7 @@ class OTE_WFE_Drift_Model(OTE_Linear_Model_WSS):
         transmission = kwargs.pop('transmission', None)
         import six
         if isinstance(transmission, six.string_types) and (not os.path.exists(transmission)):
-            wdir = webbpsf.utils.get_webbpsf_data_path()
+            wdir = webbpsf.utils.get_stpsf_data_path()
             transmission = os.path.join(wdir, transmission)
             kwargs['transmission'] = transmission
         

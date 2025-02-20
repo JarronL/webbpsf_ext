@@ -61,7 +61,7 @@ def check_fitsgz(opd_file, inst_str=None):
         string to determine if to look in instrument OPD directory,
         otherwise assume file name is in webbpsf data base directory.
     """
-    from webbpsf.utils import get_webbpsf_data_path
+    from webbpsf.utils import get_stpsf_data_path
 
     # Check if instrument name is in OPD file name
     # If so, then this is in instrument OPD directory
@@ -76,9 +76,9 @@ def check_fitsgz(opd_file, inst_str=None):
     # Get file directory
     if inst_str is None:
         # Location of JWST_OTE_OPD_*.fits.gz
-        opd_dir = get_webbpsf_data_path()
+        opd_dir = get_stpsf_data_path()
     else:
-        opd_dir = os.path.join(get_webbpsf_data_path(),inst_str,'OPD')
+        opd_dir = os.path.join(get_stpsf_data_path(),inst_str,'OPD')
     opd_fullpath = os.path.join(opd_dir, opd_file)
 
     # Check if file exists 

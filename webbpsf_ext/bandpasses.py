@@ -59,7 +59,7 @@ def miri_filter(filter, **kwargs):
     import stpsf as webbpsf
     
     filter = filter.upper()
-    filt_dir = Path(webbpsf.utils.get_webbpsf_data_path()) / 'MIRI/filters/'
+    filt_dir = Path(webbpsf.utils.get_stpsf_data_path()) / 'MIRI/filters/'
     fname = f'{filter}_throughput.fits'
 
     bp_name = filter
