@@ -4599,28 +4599,31 @@ def _coeff_mod_wfe_mask(self, coord_vals, coord_frame, siaf_ap=None):
 
     # Information for bar offsetting (in arcsec)
     siaf_ap = self.siaf_ap if siaf_ap is None else siaf_ap
-    if (siaf_ap.AperName != self.siaf_ap.AperName):
-        apname = siaf_ap.AperName
-        if ('_F1' in apname) or ('_F2' in apname) or ('_F3' in apname) or ('_F4' in apname):
-            filter = apname.split('_')[-1]
-            narrow = False
-            do_bar = True
-        elif 'NARROW' in apname:
-            filter = None
-            narrow = True
-            do_bar = True
-        else:
-            do_bar = False
-
-        # Add in any bar offset
-        if do_bar:
-            bar_offset = self.get_bar_offset(filter=filter, narrow=narrow, ignore_options=True)
-            bar_offset = 0 if bar_offset is None else bar_offset
-        else:
-            bar_offset = 0
+    if 'MIRI' in siaf_ap.AperName:
+        bar_offset = 0
     else:
-        bar_offset = self.get_bar_offset(ignore_options=True)
-        bar_offset = 0 if bar_offset is None else bar_offset
+        if (siaf_ap.AperName != self.siaf_ap.AperName):
+            apname = siaf_ap.AperName
+            if ('_F1' in apname) or ('_F2' in apname) or ('_F3' in apname) or ('_F4' in apname):
+                filter = apname.split('_')[-1]
+                narrow = False
+                do_bar = True
+            elif 'NARROW' in apname:
+                filter = None
+                narrow = True
+                do_bar = True
+            else:
+                do_bar = False
+
+            # Add in any bar offset
+            if do_bar:
+                bar_offset = self.get_bar_offset(filter=filter, narrow=narrow, ignore_options=True)
+                bar_offset = 0 if bar_offset is None else bar_offset
+            else:
+                bar_offset = 0
+        else:
+            bar_offset = self.get_bar_offset(ignore_options=True)
+            bar_offset = 0 if bar_offset is None else bar_offset
 
     # Coord values are set, but no coefficients supplied
     if (coord_vals is not None) and (cf_fit is None):
