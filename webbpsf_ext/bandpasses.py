@@ -102,6 +102,25 @@ def miri_filter(filter, **kwargs):
         
     return bp
 
+def nircam_com_spare(wave_out=None):
+
+    fname = 'COM_spare_measured.txt'
+    path_com = _bp_dir / 'NRC_COM' / fname
+    data = ascii.read(path_com, format='basic')
+
+    wvals = data[data.colnames[0]].data.astype('float') # Wavelength (nm)
+    tvals = data[data.colnames[1]].data.astype('float') # Throughput
+
+    # Convert to microns
+    wvals /= 1e3
+
+    if wave_out is None:
+        return wvals, tvals
+    else:
+        if isinstance(wave_out, u.Quantity):
+            wave_out = wave_out.to_value(u.um)
+        return np.interp(wave_out, wvals, tvals, left=0, right=0)
+
 def nircam_com_th(wave_out=None, ND_acq=False):
 
     # Sapphire mask transmission values for coronagraphic substrate
@@ -112,8 +131,13 @@ def nircam_com_th(wave_out=None, ND_acq=False):
     wvals = hdulist[1].data['WAVELENGTH']
     tvals = hdulist[1].data['THROUGHPUT']
     # Estimates for w<1.5um
-    wvals = np.insert(wvals, 0, [0.5, 0.7, 1.2, 1.40])
-    tvals = np.insert(tvals, 0, [0.2, 0.2, 0.5, 0.15])
+    # wvals = np.insert(wvals, 0, [0.5, 0.7, 1.2, 1.40])
+    # tvals = np.insert(tvals, 0, [0.2, 0.2, 0.5, 0.15])
+    wvals = np.insert(wvals, 0, [1.2, 1.40])
+    tvals = np.insert(tvals, 0, [0.5, 0.15])
+    wvals_temp, tvals_temp = nircam_com_spare()
+    wvals = np.append(wvals_temp, wvals)
+    tvals = np.append(tvals_temp, tvals)
     # Estimates for w>5.0um
     wvals = np.append(wvals, [6.00])
     tvals = np.append(tvals, [0.22])
