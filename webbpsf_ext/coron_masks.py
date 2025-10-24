@@ -332,7 +332,7 @@ def build_mask_detid(detid, oversample=1, ref_mask=None, pupil=None, filter=None
     # Also ensure region outside of COM has throughput=1
     if mask_holder:
         if detid=='A2':
-            if 'CIRCLYOT' in pupil:
+            if pupil in ['CIRCLYOT', 'MASKRND']:
                 i1, i2 = [int(920*oversample), int(390*oversample)]
                 cmask[0:i1,0:i2] = 0
                 cmask[i1:,0:i2]  = 1
@@ -350,7 +350,7 @@ def build_mask_detid(detid, oversample=1, ref_mask=None, pupil=None, filter=None
                 cmask[i2:,:] = 1
                 
         elif detid=='A4':
-            if 'CIRCLYOT' in pupil:
+            if pupil in ['CIRCLYOT', 'MASKRND']:
                 i1, i2 = [int(920*oversample), int(1463*oversample)]
                 cmask[0:i1,i2:] = 0
                 cmask[i1:, i2:] = 1
@@ -368,7 +368,7 @@ def build_mask_detid(detid, oversample=1, ref_mask=None, pupil=None, filter=None
                 cmask[i2:,:] = 1
                 
         elif detid=='A5':
-            if 'CIRCLYOT' in pupil:
+            if pupil in ['CIRCLYOT', 'MASKRND']:
                 i1, i2 = [int(1480*oversample), int(270*oversample)]
                 cmask[i1:,0:i2]  = 0
                 cmask[0:i1,0:i2] = 1
@@ -392,7 +392,7 @@ def build_mask_detid(detid, oversample=1, ref_mask=None, pupil=None, filter=None
                 cmask[0:i2,:] = 1
                 
         elif detid=='B1':
-            if 'CIRCLYOT' in pupil:
+            if pupil in ['CIRCLYOT', 'MASKRND']:
                 i1, i2 = [int(910*oversample), int(1615*oversample)]
                 cmask[0:i1,i2:] = 0
                 cmask[i1:,i2:]  = 1
@@ -410,7 +410,7 @@ def build_mask_detid(detid, oversample=1, ref_mask=None, pupil=None, filter=None
                 cmask[i2:,:] = 1
 
         elif detid=='B3':
-            if 'CIRCLYOT' in pupil:
+            if pupil in ['CIRCLYOT', 'MASKRND']:
                 i1, i2 = [int(920*oversample), int(551*oversample)]
                 cmask[0:i1,0:i2] = 0
                 cmask[i1:,0:i2]  = 1
@@ -428,7 +428,7 @@ def build_mask_detid(detid, oversample=1, ref_mask=None, pupil=None, filter=None
                 cmask[i2:,:] = 1
 
         elif detid=='B5':
-            if 'CIRCLYOT' in pupil:
+            if pupil in ['CIRCLYOT', 'MASKRND']:
                 i1, i2 = [int(555*oversample), int(207*oversample)]
                 cmask[0:i1,0:i2] = 0
                 cmask[i1:, 0:i2] = 1
@@ -454,7 +454,7 @@ def build_mask_detid(detid, oversample=1, ref_mask=None, pupil=None, filter=None
     ############################################
     # Fix SW/LW wedge abuttment
     if detid=='A4':
-        if 'CIRCLYOT' in pupil:
+        if pupil in ['CIRCLYOT', 'MASKRND']:
             x0 = 819
             x1 = 809
             x2 = x1 + 10
@@ -468,7 +468,7 @@ def build_mask_detid(detid, oversample=1, ref_mask=None, pupil=None, filter=None
         ix1, ix2 = int(x1*oversample), int(x2*oversample)
         cmask[iy1:iy2,ix1:ix2] = cmask[iy1:iy2,ix0].reshape([-1,1])
     elif detid=='A5':
-        if 'CIRCLYOT' in pupil:
+        if pupil in ['CIRCLYOT', 'MASKRND']:
             x0 = 587
             x1 = x0 + 1
             x2 = x1 + 5
@@ -483,7 +483,7 @@ def build_mask_detid(detid, oversample=1, ref_mask=None, pupil=None, filter=None
         cmask[iy1:iy2,ix1:ix2] = cmask[iy1:iy2,ix0].reshape([-1,1])
             
     elif detid=='B3':
-        if 'CIRCLYOT' in pupil:
+        if pupil in ['CIRCLYOT', 'MASKRND']:
             x0 = 1210
             x1 = 1196
             x2 = x1 + 14
@@ -497,7 +497,7 @@ def build_mask_detid(detid, oversample=1, ref_mask=None, pupil=None, filter=None
         ix1, ix2 = int(x1*oversample), int(x2*oversample)
         cmask[iy1:iy2,ix1:ix2] = cmask[iy1:iy2,ix0].reshape([-1,1])
     elif detid=='B5':
-        if 'CIRCLYOT' in pupil:
+        if pupil in ['CIRCLYOT', 'MASKRND']:
             x0 = 531
             x1 = 525
             x2 = x1 + 6
