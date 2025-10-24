@@ -17,6 +17,7 @@ from skimage.registration import phase_cross_correlation
 # Create NRC SIAF class
 from .utils import get_one_siaf
 nrc_siaf = get_one_siaf(instrument='NIRCam')
+miri_siaf = get_one_siaf(instrument='MIRI')
 
 import logging
 # Define logging
@@ -81,6 +82,7 @@ def get_coron_apname(input):
 
     if isinstance(input, (fits.header.Header)):
         # Aperture names
+        instrument = input['INSTRUME']
         apname = input['APERNAME']
         apname_pps = input['PPS_APER']
         subarray = input['SUBARRAY']
@@ -89,9 +91,13 @@ def get_coron_apname(input):
         meta = input.meta
 
         # Aperture names
+        instrument = meta.instrument.name
         apname = meta.aperture.name
         apname_pps = meta.aperture.pps_name
         subarray = meta.subarray.name
+
+    if not instrument.upper() == 'NIRCAM':
+        return apname
 
     # print(apname, apname_pps, subarray)
 
@@ -158,7 +164,7 @@ def apname_full_frame_coron(apname):
         return apname_full
 
 def get_files(indir, pid=None, obsid=None, sca=None, filt=None, file_type='uncal.fits', 
-              exp_type=None, vst_grp_act=None, apername=None, apername_pps=None):
+              exp_type=None, vst_grp_act=None, apername=None, apername_pps=None, **kwargs):
     """Get files of interest
     
     Parameters
@@ -282,7 +288,16 @@ def filter_files(files, save_dir):
         fpath = os.path.join(save_dir, f)
         hdul = fits.open(fpath)
         hdr = hdul[0].header
-        ap = nrc_siaf[hdr['APERNAME']]
+
+        instrument = hdr.get('INSTRUME')
+        if instrument.upper() == 'NIRCAM':
+            inst_siaf = nrc_siaf
+        elif instrument.upper() == 'MIRI':
+            inst_siaf = miri_siaf
+        else:
+            _log.warning(f'Instrument {instrument} not supported for filtering files.')
+            continue
+        ap = inst_siaf[hdr['APERNAME']]
 
         if (0<xi<ap.XSciSize) and (0<yi<ap.YSciSize):
             ind_keep.append(i)
@@ -970,10 +985,17 @@ def get_expected_loc(input, return_indices=True, add_sroffset=None):
             xoff_asec += xoff_arr[sgd_pos]
             yoff_asec += yoff_arr[sgd_pos]
 
+    if apname.startswith('NRC'):
+        inst_siaf = nrc_siaf
+    elif apname.startswith('MIRI'):
+        inst_siaf = miri_siaf
+    else:
+        raise ValueError(f'Instrument for aperture {apname} not supported. Must be either NRC or MIRI.')
+
     # Observed aperture
-    ap = nrc_siaf[apname]
+    ap = inst_siaf[apname]
     # Aperture reference for pointing / dithering
-    ap_pps = nrc_siaf[apname_pps]
+    ap_pps = inst_siaf[apname_pps]
     
     # Expected pixel location based on ideal offset
     if apname == apname_pps:
@@ -1128,7 +1150,7 @@ def get_loc_all(files, indir, find_func=get_com,
 
 def load_cropped_files(save_dir, files, xysub=65, bgsub=False, 
                        fix_bad_pixels=True, find_func=get_com, **kwargs):
-    """Load a cropper version of the files
+    """Load a cropped version of the files
     
     Opens the files, crops them, and returns the cropped data, DQ arrays,
     indices of the cropped images, and bad pixel masks. The indices are an
@@ -1934,7 +1956,7 @@ def find_offsets_phase(input, psf, crop=65, rin=0, rout=None, dxy_fine=0.01,
 def find_pix_offsets(imsub_arr, psfs, psf_osamp=1, bpmask_arr=None, 
                      crop=None, kipc=None, kppc=None, diffusion_sigma=None,
                      psf_corr_image=None, phase=False, xcorr=True, lsq_diff=False,
-                     **kwargs):
+                     hpf_filt_size=None, **kwargs):
     """Find number of pixels to offset PSFs to corrsponding images
 
     If multple methods are selected, then will return values for each in a dictionary.
@@ -1948,7 +1970,7 @@ def find_pix_offsets(imsub_arr, psfs, psf_osamp=1, bpmask_arr=None,
         Array of PSFs to align to images. Either same number of images
         or a single PSF to align to all images.
     psf_osamp : int
-        Oversampling factor of PSFs
+        Oversampling factor of PSFs relative to the imsub_arr sampling.
     bpmask_arr : ndarray
         Bad pixel mask array. Should be same shape as imsub_arr.
     diffusion_sigma : float
@@ -1958,17 +1980,22 @@ def find_pix_offsets(imsub_arr, psfs, psf_osamp=1, bpmask_arr=None,
     kppc : ndarray
         PPC kernel. Should already align to readout direction 
         of detector along rows.
-    phase : bool
-        Use phase cross-correlation to find offsets
     psf_corr_image : ndarray
-        Correction factor to multiply PSF after diffussion
-    align_method : str
-        Method to use to align images. Options are 'xcorr', 'phase',
-        or 'lsqdiff'. Default is 'xcorr'. For 'xcorr', peform traditional
-        corr correlation to find offsets. For 'phase', use phase cross
-        correlation to find offsets. For 'lsqdiff', use least squares
-        difference to find offsets.
-    
+        Correction factor to multiply PSF after diffusion
+    phase : bool
+        Use phase cross-correlation to find best offsets. Default is False.
+        If combined with xcorr or lsq_diff, will return a dictionary of results.
+    xcorr : bool
+        Use cross-correlation to find best offsets. Default is True.
+        If combined with phase or lsq_diff, will return a dictionary of results.
+    lsq_diff : bool
+        Use least squares difference to find best offsets. Default is False.
+        If combined with phase or xcorr, will return a dictionary of results.
+    hpf_filt_size : int
+        Size of high-pass filter to apply to images before alignment.
+        In terms of detector-sampled pixels. If `psf_osamp` not equal to 1,
+        then this value will be adjusted accordingly. Default is None (no filtering).
+
     Keyword Args
     ============
     rin : float
@@ -2047,6 +2074,45 @@ def find_pix_offsets(imsub_arr, psfs, psf_osamp=1, bpmask_arr=None,
             return res, res_coarse
         else:
             return res
+        
+    # Perform high-pass filtering if request
+    if (hpf_filt_size is not None) and (hpf_filt_size > 0):
+        from astropy.convolution import Gaussian2DKernel, convolve
+        from .image_manip import image_convolution
+
+        imsub_arr = imsub_arr.copy()
+        psfs = psfs.copy()
+
+        imsub_arr_nans = np.isnan(imsub_arr)
+        psfs_nans = np.isnan(psfs)
+
+        # Replace any NaNs
+        for imarr in [imsub_arr, psfs]:
+            if np.any(np.isnan(imarr)):
+                ktemp = Gaussian2DKernel(x_stddev=2)
+                if len(imarr.shape)==3:
+                    imarr_conv = np.array([convolve(im, ktemp) for im in imarr])
+                    for i in range(imarr.shape[0]):
+                        ind_nan = np.isnan(imarr[i])
+                        imarr[i][ind_nan] = imarr_conv[i][ind_nan]
+                else:
+                    imarr_conv = convolve(imarr, ktemp)
+                    ind_nan = np.isnan(imarr)
+                    imarr[ind_nan] = imarr_conv[ind_nan]
+
+            if np.any(np.isnan(imarr)):
+                _log.warning('NaNs still present in image array after NaN replacement.')
+
+        # Apply high-pass filter
+        kernel = Gaussian2DKernel(x_stddev=hpf_filt_size)
+        kernel_osamp = Gaussian2DKernel(x_stddev=hpf_filt_size*psf_osamp) if psf_osamp != 1 else kernel
+
+        imsub_arr = imsub_arr - image_convolution(imsub_arr, kernel)
+        psfs = psfs - image_convolution(psfs, kernel_osamp)
+
+        # Add NaNs back in
+        imsub_arr[imsub_arr_nans] = np.nan
+        psfs[psfs_nans] = np.nan
 
     sh_orig = imsub_arr.shape
     sh_orig_psfs = psfs.shape
