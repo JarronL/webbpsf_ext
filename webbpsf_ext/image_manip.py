@@ -439,6 +439,10 @@ def fractional_image_shift(imarr, xshift, yshift, method='fourier',
         'linear', 'cubic', and 'quintic' for `fshift` method (default: 'linear').
         For `opencv` method, valid values are 'linear', 'cubic', and 'lanczos' 
         (default: 'lanczos').
+    rescale_pix : bool
+        If True, then the pixel values are rescaled to ensure that
+        the total flux is conserved. This is only used if oversample>1.
+        Zoom does not preserve flux within a set of oversampled pixels.
     """
     from astropy.convolution import Gaussian2DKernel, convolve
 
@@ -469,10 +473,11 @@ def fractional_image_shift(imarr, xshift, yshift, method='fourier',
     if (gstd_pix is not None) and (gstd_pix>0) and (oversample<=1):
         gstd = gstd_pix
         kernel = Gaussian2DKernel(x_stddev=gstd)
-        if len(imarr.shape)==3:
-            imarr = np.array([image_convolution(im, kernel) for im in imarr])
-        else:
-            imarr = image_convolution(imarr, kernel)
+        imarr = image_convolution(imarr, kernel)
+        # if len(imarr.shape)==3:
+        #     imarr = np.array([image_convolution(im, kernel) for im in imarr])
+        # else:
+        #     imarr = image_convolution(imarr, kernel)
 
         # print('gaussian:', imarr.shape, xsh, ysh, np.nansum(imarr))
 
@@ -489,14 +494,15 @@ def fractional_image_shift(imarr, xshift, yshift, method='fourier',
 
     # print('rebin:', imarr.shape, xsh, ysh, np.nansum(imarr))
 
-    # Apply Gaussian smoothing (after rebinning)
+    # Apply Gaussian smoothing (after rebinning) if oversample>1
     if (gstd_pix is not None) and (gstd_pix>0) and (oversample>1):
         gstd = gstd_pix * oversample
         kernel = Gaussian2DKernel(x_stddev=gstd)
-        if len(imarr.shape)==3:
-            imarr = np.array([image_convolution(im, kernel) for im in imarr])
-        else:
-            imarr = image_convolution(imarr, kernel)
+        imarr = image_convolution(imarr, kernel)
+        # if len(imarr.shape)==3:
+        #     imarr = np.array([image_convolution(im, kernel) for im in imarr])
+        # else:
+        #     imarr = image_convolution(imarr, kernel)
 
         # print('gaussian:', imarr.shape, xsh, ysh, np.nansum(imarr))
 
@@ -725,6 +731,8 @@ def image_shift_with_nans(image, xshift, yshift, shift_method='fourier', interp=
     oversample : int
         Factor to oversample the image before sub-pixel shifting. Default is 1.
         An oversample factor of 2 will increase the image size by 2x in each dimension.
+    gstd_pix : float
+        Standard deviation of Gaussian kernel for smoothing. Default is None.
     return_oversample : bool
         Return the oversampled image after shifting. Default is False.
     total : bool
@@ -744,8 +752,6 @@ def image_shift_with_nans(image, xshift, yshift, shift_method='fourier', interp=
         Add NaNs back to the image after shifting. Default is False.
     return_padded : bool
         Return the padded image after shifting. Default is False.
-    gstd_pix : float
-        Standard deviation of Gaussian kernel for smoothing. Default is None.
     window_func : string, float, or tuple
         Name of window function from `scipy.signal.windows` to use prior to
         shifting. The idea is to reduce artifacts from high frequency 
@@ -760,6 +766,12 @@ def image_shift_with_nans(image, xshift, yshift, shift_method='fourier', interp=
                 window_func = ('tukey', 0.25) # alpha=0.25
                 window_func = ('gaussian', 5) # std dev of 5 pixels
 
+    Keyword Args
+    ------------
+    rescale_pix : bool
+        If True, then the pixel values are rescaled to ensure that
+        the total flux is conserved. This is only used if oversample>1.
+        Zoom does not preserve flux within a set of oversampled pixels.
     """
 
 
@@ -1406,6 +1418,10 @@ def zrebin(image, oversample, order=3, mode='reflect', total=True,
         Conserves the surface flux. If True, the output pixels 
         will be the sum of pixels within the appropriate box of 
         the input image. Otherwise, they will be the average.
+    rescale_pix : bool
+        If True, then the pixel values are rescaled to ensure that
+        the total flux is conserved. This is only used if oversample>1.
+        Zoom does not preserve flux within a set of oversampled pixels.
     """
 
 
@@ -2079,6 +2095,8 @@ def image_convolution(image, psf, method='scipy', use_fft=None, **kwargs):
     
     Can use either scipy or astropy convolution methods. 
     Both should produce the same results.
+
+    Input `image` can be a single 2D image or a cube (3D array).
     """
 
     if len(image.shape)==3:
