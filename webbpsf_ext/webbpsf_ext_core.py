@@ -959,6 +959,8 @@ class NIRCam_ext(stpsf_NIRCam):
         Parameters
         ----------
         source : synphot.spectrum.SourceSpectrum or dict
+            Passes to STPSF's calc_psf() function. If a dict, then should have keys
+            'wavelengths' (in meters) and 'weights'.
         nlambda : int
             How many wavelengths to model for broadband?
             The default depends on how wide the filter is: (5,3,1) for types (W,M,N) respectively
@@ -999,7 +1001,8 @@ class NIRCam_ext(stpsf_NIRCam):
         ------------
         sp : :class:`webbpsf_ext.synphot_ext.Spectrum`
             Source input spectrum. If not specified, the default is flat in phot lam.
-            (equal number of photons per spectral bin).
+            (equal number of photons per spectral bin). Can be used as a replacement
+            for the `source` keyword in STPSF's calc_psf function.
         coord_vals : tuple or None
             Coordinates (in arcsec or pixels) to calculate field-dependent PSF.
             If multiple values, then this should be an array ([xvals], [yvals]).
@@ -1686,6 +1689,8 @@ class MIRI_ext(stpsf_MIRI):
         Parameters
         ----------
         source : synphot.spectrum.SourceSpectrum or dict
+            Passes to STPSF's calc_psf() function. If a dict, then should have keys
+            'wavelengths' (in meters) and 'weights'.
         nlambda : int
             How many wavelengths to model for broadband?
             The default depends on how wide the filter is: (5,3,1) for types (W,M,N) respectively
@@ -1726,7 +1731,8 @@ class MIRI_ext(stpsf_MIRI):
         ------------
         sp : :class:`webbpsf_ext.synphot_ext.Spectrum`
             Source input spectrum. If not specified, the default is flat in phot lam.
-            (equal number of photons per spectral bin).
+            (equal number of photons per spectral bin). Can be used as a replacement
+            for the `source` keyword in STPSF's calc_psf function.
         coord_vals : tuple or None
             Coordinates (in arcsec or pixels) to calculate field-dependent PSF.
             If multiple values, then this should be an array ([xvals], [yvals]).
@@ -1868,9 +1874,9 @@ def _init_inst(self, filter=None, pupil_mask=None, image_mask=None,
 
     # Ensure CIRCLYOT or WEDGELYOT in case occulting masks were specified for NIRCam coronagraphy
     if self.name=='NIRCam' and (pupil_mask is not None) and ('MASK' in pupil_mask):
-        if pupil_mask.upper() in ['MASK210R', 'MASK335R', 'MASK430R']:
+        if pupil_mask.upper() in ['MASK210R', 'MASK335R', 'MASK430R', 'MASKRND']:
             pupil_mask = 'CIRCLYOT'
-        elif pupil_mask.upper() in ['MASKSWB', 'MASKLWB']:
+        elif pupil_mask.upper() in ['MASKSWB', 'MASKLWB', 'MASKBAR']:
             pupil_mask = 'WEDGELYOT'
         else:
             raise ValueError(f"Unknown pupil mask: {pupil_mask}")
@@ -5043,11 +5049,13 @@ def _transmission_map(self, coord_vals, coord_frame, siaf_ap=None):
     return trans, cx_idl, cy_idl
 
 
-def _nrc_coron_psf_sums(self, coord_vals, coord_frame, siaf_ap=None, return_max=False, trans=None):
+def _nrc_coron_psf_sums(self, coord_vals, coord_frame, siaf_ap=None, 
+                        return_max=False, trans=None, use_coeff=True):
     """
     Function to analytically determine the sum and max value 
     of a NIRCam off-axis coronagraphic PSF while partially
-    occulted by the coronagrpahic mask.
+    occulted by the coronagrpahic mask. Saves to `self._psf_sums`
+    dictionary for later retrieval.
 
     Keyword Args
     ============
@@ -5092,8 +5100,12 @@ def _nrc_coron_psf_sums(self, coord_vals, coord_frame, siaf_ap=None, return_max=
     psf_off_max = psf_sums_dict.get('psf_off_max', None)
     if (psf_off_sum is None) or (psf_off_max is None):
         cv_offaxis = (10-bar_offset, 10)
-        psf = _calc_psf_from_coeff(self, return_oversample=False, return_hdul=False, 
-                                   coord_vals=cv_offaxis, coord_frame='idl')
+        if use_coeff:
+            psf = _calc_psf_from_coeff(self, return_oversample=False, return_hdul=False, 
+                                       coord_vals=cv_offaxis, coord_frame='idl')
+        else:
+            psf = self.calc_psf(return_oversample=False, return_hdul=False, 
+                                coord_vals=cv_offaxis, coord_frame='idl')
         psf_off_sum = psf.sum()
         psf_off_max = np.max(pad_or_cut_to_size(psf,10))
         psf_sums_dict['psf_off'] = psf_off_sum
@@ -5104,7 +5116,10 @@ def _nrc_coron_psf_sums(self, coord_vals, coord_frame, siaf_ap=None, return_max=
         psf_cen_sum = psf_sums_dict.get('psf_cen', None)
         psf_cen_max = psf_sums_dict.get('psf_cen_max', None)
         if (psf_cen_sum is None) or (psf_cen_max is None):
-            psf = _calc_psf_from_coeff(self, return_oversample=False, return_hdul=False)
+            if use_coeff:
+                psf = _calc_psf_from_coeff(self, return_oversample=False, return_hdul=False)
+            else:
+                psf = self.calc_psf(return_oversample=False, return_hdul=False)
             psf_cen_sum = psf.sum()
             psf_sums_dict['psf_cen'] = psf_cen_sum
             psf_sums_dict['psf_cen_max'] = np.max(pad_or_cut_to_size(psf,10))
@@ -5121,8 +5136,12 @@ def _nrc_coron_psf_sums(self, coord_vals, coord_frame, siaf_ap=None, return_max=
             psf_cen_sum_arr = []
             psf_cen_max_arr = []
             for xv in xvals:
-                psf= _calc_psf_from_coeff(self, return_oversample=False, return_hdul=False, 
-                                          coord_vals=(xv,0), coord_frame='idl')
+                if use_coeff:
+                    psf= _calc_psf_from_coeff(self, return_oversample=False, return_hdul=False, 
+                                              coord_vals=(xv,0), coord_frame='idl')
+                else:
+                    psf = self.calc_psf(return_oversample=False, return_hdul=False, 
+                                        coord_vals=(xv,0), coord_frame='idl')
                 psf_cen_sum_arr.append(psf.sum())
                 psf_cen_max_arr.append(np.max(pad_or_cut_to_size(psf,10)))
             psf_cen_sum_arr = np.array(psf_cen_sum_arr)
