@@ -663,6 +663,41 @@ def BOSZ_2024_spectrum(Teff, log_g, metallicity, res=2000,
 #      M0I       3650     -0.10       ckp00_3750[g00]
 #      M2I       3600     -0.10       ckp00_3500[g00]
 
+# BOSZ2017 templates (https://spextra.readthedocs.io/en/latest/spectral_libraries.html)
+# o8v   :    T=35000,    log(g)=4.00      
+# b0v   :    T=30000,    log(g)=4.00      
+# b3v   :    T=18500,    log(g)=4.00      
+# b5v   :    T=15500,    log(g)=4.00      
+# b8v   :    T=12000,    log(g)=4.00      
+# a0v   :    T=9500,     log(g)=4.00      
+# a5v   :    T=8250,     log(g)=4.50      
+# f0v   :    T=7250,     log(g)=4.50      
+# f5v   :    T=6500,     log(g)=4.50      
+# g0v   :    T=6000,     log(g)=4.50      
+# g2v   :    T=5750,     log(g)=4.50      
+# k0v   :    T=5250,     log(g)=4.50      
+# k5v   :    T=4250,     log(g)=4.50      
+# m0v   :    T=3750,     log(g)=4.50      
+# m2v   :    T=3500,     log(g)=4.40      
+# b0iii :    T=29000,    log(g)=3.50      
+# b5iii :    T=15000,    log(g)=3.50      
+# g0iii :    T=5750,     log(g)=3.00      
+# g5iii :    T=5250,     log(g)=2.50      
+# k0iii :    T=4750,     log(g)=2.00      
+# k5iii :    T=4000,     log(g)=1.50      
+# m0iii :    T=3750,     log(g)=1.50      
+# b0i   :    T=26000,    log(g)=3.00      
+# a0i   :    T=9750,     log(g)=2.00      
+# a5i   :    T=8500,     log(g)=2.00      
+# f0i   :    T=7750,     log(g)=1.50      
+# f5i   :    T=7000,     log(g)=1.50      
+# g0i   :    T=5550,     log(g)=1.50      
+# g5i   :    T=4750,     log(g)=1.00      
+# k0i   :    T=4500,     log(g)=1.00      
+# k5i   :    T=3750,     log(g)=0.00      
+# m2i   :    T=3500,     log(g)=0.00 
+
+
 def stellar_spectrum(sptype, *renorm_args, **kwargs):
     """Stellar spectrum
 
@@ -1902,7 +1937,7 @@ def linder_filter(table, filt, age, dist=10, cond_file=None,
     table : astropy table
         Astropy table output from `linder_table`.
     filt : string
-        Name of NIRCam filter.
+        Name of NIRCam or MIRI filter.
     age : float
         Age in Myr of planet.
 
@@ -2194,7 +2229,7 @@ def cond_table(age=None, file=None, **kwargs):
 
 def cond_filter(table, filt, module='A', dist=None, **kwargs):
     """
-    Given a COND table and NIRCam filter, return arrays of MJup and Vega mags.
+    Given a COND table and NIRCam or MIRI filter, return arrays of MJup and Vega mags.
     If distance (pc) is provided, then return the apparent magnitude,
     otherwise absolute magnitude at 10pc. Input table has already been filtered
     by age.
