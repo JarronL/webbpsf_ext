@@ -299,6 +299,7 @@ def ObsBandpass(filtername):
         Filter name. Choose from 'bessel_j', 'bessel_h', 'bessel_k',
         'cousins_r', 'cousins_i', 'johnson_u', 'johnson_b', 'johnson_v',
         'johnson_r', 'johnson_i', 'johnson_j', or 'johnson_k'.
+        Can also specify stsynphot filter names, such as 'acs,wfc1,f555w'.
 
     kwargs : dict
         Keywords acceptable by :func:`~synphot.specio.read_remote_spec`.
@@ -322,7 +323,12 @@ def ObsBandpass(filtername):
     elif filtername_lower in 'ubvrijk':
         return Bandpass.from_filter('johnson_' + filtername_lower)
     else:
-        raise ValueError(f'{filtername} not a valid bandpass. If using HST filters, use stsynphot package.')
+        try:
+            bp =  stsyn.band(filtername_lower)
+            th = bp(bp.waveset)
+            return ArrayBandpass(bp.waveset, th, name=filtername)
+        except Exception:
+            raise ValueError(f'Invalid filter name: {filtername}')  
 
 def ArrayBandpass(wave, throughput, name="UnnamedArrayBandpass", keep_neg=False, **kwargs):
     """ Generate a synphot bandpass from arrays
